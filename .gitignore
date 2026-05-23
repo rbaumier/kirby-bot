@@ -1,0 +1,10 @@
+node_modules
+docs/
+.output/
+dist/
+.env
+*.tsbuildinfo
+.DS_Store
+.code-review
+.worktrees
+effect-ref
