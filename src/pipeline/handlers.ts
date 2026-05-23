@@ -48,9 +48,7 @@ type PhaseOutcome =
  * The dispatcher turns this back into a `failed` state at the boundary, so
  * no handler constructs that state by hand.
  */
-type HandlerError = Omit<Extract<State, { kind: "failed" }>, "kind" | "reason"> & {
-  readonly reason: string;
-};
+type HandlerError = Omit<Extract<State, { kind: "failed" }>, "kind">;
 
 /** The five shared pipeline fields, copied off any node that carries them. */
 const pipelineContext = (state: PipelineContext): PipelineContext => ({
