@@ -10,16 +10,15 @@
  * so the next run re-picks them from scratch.
  *
  * Usage: bun ~/.claude/skills/afk/scripts/sweep-stale-claims.ts [--dry-run]
- * Run from inside the target repo. Requires: glab (authenticated), git.
+ * Run from inside the target repo. Requires: a GitLab token (via
+ * `$GITLAB_TOKEN` or `~/.config/glab-cli/config.yml`), git.
  */
 import { $ } from "bun";
 import { BunRuntime } from "@effect/platform-bun";
 import { Console, Effect } from "effect";
-import { z } from "zod";
 import { LABELS } from "../src/config";
+import { listIssuesByLabels, updateIssueLabels } from "../src/gitlab/api";
 import { describeGitLabError } from "../src/gitlab/errors";
-import { parseGlabJson, runGlabRead, runGlabWrite } from "../src/gitlab/glab";
-import { IssueSchema } from "../src/gitlab/schema";
 import type { ClaimedIssue } from "../src/recovery/stale";
 import { selectStale, worktreePathsForIssue } from "../src/recovery/stale";
 import { runShell } from "../src/shell";
@@ -31,19 +30,10 @@ const dryRun = process.argv.slice(2).includes("--dry-run");
 
 /** Fetch every issue currently labelled `picked-by-agent`. */
 const listClaimedIssues = Effect.gen(function* () {
-  const command = [
-    "issue",
-    "list",
-    "--label",
-    LABELS.pickedByAgent,
-    "--output",
-    "json",
-    "--per-page",
-    "100",
-  ];
-  const output = yield* runGlabRead(command);
-  const issues =
-    output.trim() === "" ? [] : yield* parseGlabJson(output, z.array(IssueSchema), command);
+  const issues = yield* listIssuesByLabels({
+    include: [LABELS.pickedByAgent],
+    perPage: 100,
+  });
   return issues.map((issue): ClaimedIssue => ({ iid: issue.iid, updatedAt: issue.updated_at }));
 });
 
@@ -76,13 +66,7 @@ const removeOrphanWorktrees = (iid: number): Effect.Effect<void> =>
 const recoverIssue = (issue: ClaimedIssue): Effect.Effect<void> =>
   Effect.gen(function* () {
     yield* Console.log(`  recovering #${issue.iid} (idle since ${issue.updatedAt})`);
-    yield* runGlabWrite([
-      "issue",
-      "update",
-      String(issue.iid),
-      "--unlabel",
-      LABELS.pickedByAgent,
-    ]).pipe(
+    yield* updateIssueLabels(issue.iid, { remove: [LABELS.pickedByAgent] }).pipe(
       Effect.catchAll((error) =>
         Console.error(`  #${issue.iid} unlabel failed — ${describeGitLabError(error)}`),
       ),

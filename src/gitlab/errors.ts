@@ -14,26 +14,50 @@
  */
 import { Data } from "effect";
 
-/** A `glab` process ran but exited non-zero. */
-export class GlabCommandError extends Data.TaggedError("GlabCommandError")<{
-  readonly command: readonly string[];
-  readonly exitCode: number;
-  readonly stderr: string;
+/** The REST call reached GitLab but the response status was non-2xx. */
+export class GitLabHttpError extends Data.TaggedError("GitLabHttpError")<{
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+  readonly body: string;
 }> {}
 
-/** `glab` exited zero, but its output was not the JSON shape we expected. */
-export class GlabResponseError extends Data.TaggedError("GlabResponseError")<{
-  readonly command: readonly string[];
+/** The REST call did not reach GitLab — DNS, TLS, refused connection, abort. */
+export class GitLabNetworkError extends Data.TaggedError("GitLabNetworkError")<{
+  readonly method: string;
+  readonly path: string;
+  readonly cause: string;
+}> {}
+
+/** A 2xx response came back, but its body was not the JSON shape we expected. */
+export class GitLabResponseError extends Data.TaggedError("GitLabResponseError")<{
+  readonly method: string;
+  readonly path: string;
+  readonly detail: string;
+}> {}
+
+/** Boot-time wiring failure: no token, no remote, or an unparseable remote. */
+export class GitLabConfigError extends Data.TaggedError("GitLabConfigError")<{
   readonly detail: string;
 }> {}
 
 /** Every failure the GitLab boundary can produce. */
-export type GitLabError = GlabCommandError | GlabResponseError;
+export type GitLabError =
+  | GitLabHttpError
+  | GitLabNetworkError
+  | GitLabResponseError
+  | GitLabConfigError;
 
 /** A one-line, human-readable description of a GitLab error. */
 export function describeGitLabError(error: GitLabError): string {
-  if (error._tag === "GlabCommandError") {
-    return `glab ${error.command.join(" ")} exited ${error.exitCode}: ${error.stderr.slice(0, 200)}`;
+  switch (error._tag) {
+    case "GitLabHttpError":
+      return `${error.method} ${error.path} → HTTP ${error.status}: ${error.body.slice(0, 200)}`;
+    case "GitLabNetworkError":
+      return `${error.method} ${error.path} — network error: ${error.cause.slice(0, 200)}`;
+    case "GitLabResponseError":
+      return `${error.method} ${error.path} — unexpected response: ${error.detail.slice(0, 200)}`;
+    case "GitLabConfigError":
+      return `GitLab config error: ${error.detail.slice(0, 200)}`;
   }
-  return `glab ${error.command.join(" ")} returned unexpected output: ${error.detail.slice(0, 200)}`;
 }

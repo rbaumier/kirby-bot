@@ -28,7 +28,7 @@ export type Environment = {
 };
 
 /** External tools the orchestrator shells out to. */
-const REQUIRED_TOOLS = ["jq", "tmux", "claude", "glab", "git"] as const;
+const REQUIRED_TOOLS = ["jq", "tmux", "claude", "git"] as const;
 
 const ORIGIN_PREFIX_RE = /^origin\//;
 

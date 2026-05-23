@@ -1,15 +1,16 @@
 /**
  * Gitlab/schema.ts — zod schemas for the GitLab JSON the pipeline consumes.
  *
- * `glab` output is an external, untrusted boundary: every shape that crosses
+ * The REST API is an external, untrusted boundary: every shape that crosses
  * it is validated here rather than `as`-cast. The defaults absorb fields an
  * endpoint may omit, so one schema serves several call sites.
  */
 import { z } from "zod";
 
 /**
- * An issue from `glab issue list` / `glab issue view`. One schema covers the
- * queue read, the claim-time label check, and the staleness sweep.
+ * An issue from `GET /projects/:id/issues` and `GET /projects/:id/issues/:iid`.
+ * One schema covers the queue read, the claim-time label check, and the
+ * staleness sweep.
  */
 export const IssueSchema = z.object({
   iid: z.number(),
@@ -19,7 +20,7 @@ export const IssueSchema = z.object({
   updated_at: z.string().trim().min(1).default(""),
 });
 
-/** A merge request from `glab mr list` / `glab mr create --output json`. */
+/** A merge request from `GET/POST/PUT /projects/:id/merge_requests`. */
 export const MergeRequestSchema = z.object({
   iid: z.number(),
   web_url: z.string().trim().min(1).default(""),
