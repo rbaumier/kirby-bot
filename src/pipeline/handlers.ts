@@ -11,15 +11,23 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Console, Effect } from "effect";
-import { z } from "zod";
 import type { Phase } from "../config";
 import { ISSUE_BUDGET_MS, LABELS, MAX_FIX_CYCLES, WORKTREES_DIR } from "../config";
 import { runShell } from "../shell";
 import type { GitLabError } from "../gitlab/errors";
 import { describeGitLabError } from "../gitlab/errors";
 import type { GitLabMergeRequest } from "../gitlab/schema";
-import { IssueSchema, MergeRequestSchema } from "../gitlab/schema";
-import { parseGlabJson, runGlabRead, runGlabWrite } from "../gitlab/glab";
+import {
+  addIssueNote,
+  createDraftMergeRequest,
+  findOpenMergeRequestBySource,
+  listIssuesByLabels,
+  markMergeRequestReady,
+  mergeMergeRequest,
+  updateIssueLabels,
+  viewIssue,
+  viewMergeRequest,
+} from "../gitlab/api";
 import type { Environment } from "../preflight";
 import { runDir, runLogPath } from "../run-artifacts";
 import { describePhaseError } from "../session/errors";
@@ -109,19 +117,10 @@ const runShellGit = (worktree: string, args: readonly string[]) =>
   runShell(() => $`git -C ${worktree} ${args}`);
 
 /** Find the open merge request for a branch, if any. Never fails. */
-const findOpenMr = (mergeRequests: readonly GitLabMergeRequest[]) =>
-  mergeRequests.find((mr) => mr.state === "opened");
-
-const findOpenMergeRequest = (branch: string): Effect.Effect<GitLabMergeRequest | undefined> => {
-  const command = ["mr", "list", "--source-branch", branch, "--output", "json"];
-  return runGlabRead(command).pipe(
-    Effect.flatMap((output) =>
-      parseGlabJson(output.trim() === "" ? "[]" : output, z.array(MergeRequestSchema), command),
-    ),
-    Effect.map((mrs) => findOpenMr(mrs)),
+const findOpenMergeRequest = (branch: string): Effect.Effect<GitLabMergeRequest | undefined> =>
+  findOpenMergeRequestBySource(branch).pipe(
     Effect.catchAll(() => Effect.succeed<GitLabMergeRequest | undefined>(void 0)),
   );
-};
 
 /**
  * Exclude `.claude/settings.local.json` from git in a fresh worktree.
@@ -156,23 +155,11 @@ const excludeStopHookConfig = (worktree: string): Effect.Effect<void> =>
 
 /** Fetch_queue — read the ready queue, pick one issue at random, or end. */
 const onFetchQueue: Effect.Effect<State, GitLabError> = Effect.gen(function* () {
-  const command = [
-    "issue",
-    "list",
-    "--label",
-    LABELS.readyForAgent,
-    "--not-label",
-    LABELS.failedByAgent,
-    "--not-label",
-    LABELS.pickedByAgent,
-    "--per-page",
-    "100",
-    "--output",
-    "json",
-  ];
-  const output = yield* runGlabRead(command);
-  const issues =
-    output.trim() === "" ? [] : yield* parseGlabJson(output, z.array(IssueSchema), command);
+  const issues = yield* listIssuesByLabels({
+    include: [LABELS.readyForAgent],
+    exclude: [LABELS.failedByAgent, LABELS.pickedByAgent],
+    perPage: 100,
+  });
   const count = issues.length;
   if (count === 0) {
     return { kind: "end" };
@@ -195,14 +182,7 @@ const onClaimIssue = (issue: IssueRef): Effect.Effect<State, HandlerError> =>
     // Re-read the labels right before claiming. This narrows the window
     // where another instance claims the same issue. A label add is not a
     // compare-and-swap. Worst case both work it; the random pick keeps that rare.
-    const alreadyClaimed = yield* runGlabRead([
-      "issue",
-      "view",
-      String(issue.iid),
-      "--output",
-      "json",
-    ]).pipe(
-      Effect.flatMap((output) => parseGlabJson(output, IssueSchema, ["issue", "view"])),
+    const alreadyClaimed = yield* viewIssue(issue.iid).pipe(
       Effect.map((view) => new Set(view.labels).has(LABELS.pickedByAgent)),
       Effect.catchAll(() => Effect.succeed(false)),
     );
@@ -211,13 +191,7 @@ const onClaimIssue = (issue: IssueRef): Effect.Effect<State, HandlerError> =>
       return { kind: STATE_FETCH_QUEUE };
     }
 
-    yield* runGlabWrite([
-      "issue",
-      "update",
-      String(issue.iid),
-      "--label",
-      LABELS.pickedByAgent,
-    ]).pipe(
+    yield* updateIssueLabels(issue.iid, { add: [LABELS.pickedByAgent] }).pipe(
       Effect.mapError(
         (error): HandlerError => ({
           issue,
@@ -376,21 +350,12 @@ const onOpenDraftMr = (
     const description =
       `Closes #${issue.iid}\n\nImplemented and reviewed autonomously by the AFK orchestrator.\n\n` +
       `Run log: \`${runDir}\``;
-    yield* runGlabWrite([
-      "mr",
-      "create",
-      "--draft",
-      "--source-branch",
-      branch,
-      "--target-branch",
-      env.defaultBranch,
-      "--title",
-      `[AFK] ${issue.title}`,
-      "--description",
+    const opened = yield* createDraftMergeRequest({
+      sourceBranch: branch,
+      targetBranch: env.defaultBranch,
+      title: `[AFK] ${issue.title}`,
       description,
-      "--remove-source-branch",
-      "--squash-before-merge",
-    ]).pipe(
+    }).pipe(
       Effect.mapError(
         (error): HandlerError => ({
           issue,
@@ -402,18 +367,6 @@ const onOpenDraftMr = (
       ),
     );
 
-    // Read the iid back from `mr list` rather than scraping `mr create`'s
-    // stdout — a structured query, not a brittle URL regex.
-    const opened = yield* findOpenMergeRequest(branch);
-    if (opened === undefined) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        mergeRequestIid: null,
-        reason: "open_draft_mr: MR created but could not be found",
-      });
-    }
     yield* Console.log(`  ↳ Draft MR !${opened.iid} created for ${branch}`);
     return {
       kind: "review",
@@ -564,9 +517,8 @@ const onRunDogfood = (
 const onMerge = (state: Extract<State, { kind: "merge" }>): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
     const { issue, branch, worktree, mergeRequestIid } = state;
-    const id = String(mergeRequestIid);
 
-    yield* runGlabWrite(["mr", "update", id, "--ready"]).pipe(
+    yield* markMergeRequestReady(mergeRequestIid).pipe(
       Effect.mapError(
         (error): HandlerError => ({
           issue,
@@ -578,17 +530,19 @@ const onMerge = (state: Extract<State, { kind: "merge" }>): Effect.Effect<State,
       ),
     );
 
-    // `glab mr merge` can exit non-zero while the MR is in fact merged or
-    // queued — verify the state before failing. `closed` ≠ `merged`.
-    return yield* runGlabWrite(["mr", "merge", id, "--yes", "--squash", "--auto-merge"]).pipe(
+    // The merge API can return an error while the MR is in fact merged or
+    // queued (race with auto-merge) — verify the state before failing.
+    // `closed` ≠ `merged`.
+    return yield* mergeMergeRequest({
+      iid: mergeRequestIid,
+      squash: true,
+      autoMerge: true,
+    }).pipe(
       Effect.map((): State => ({ kind: "done", issue, worktree, mergeRequestIid })),
       Effect.catchAll(
         (mergeError): Effect.Effect<State, HandlerError> =>
           Effect.gen(function* () {
-            const isMerged = yield* runGlabRead(["mr", "view", id, "--output", "json"]).pipe(
-              Effect.flatMap((output) =>
-                parseGlabJson(output, MergeRequestSchema, ["mr", "view"]),
-              ),
+            const isMerged = yield* viewMergeRequest(mergeRequestIid).pipe(
               Effect.map((mr) => mr.state === "merged"),
               Effect.catchAll(() => Effect.succeed(false)),
             );
@@ -612,7 +566,7 @@ const onDone = (state: Extract<State, { kind: "done" }>): Effect.Effect<State> =
   Effect.gen(function* () {
     const { issue, worktree, mergeRequestIid } = state;
     const unlabelOne = (label: string) =>
-      runGlabWrite(["issue", "update", String(issue.iid), "--unlabel", label]).pipe(
+      updateIssueLabels(issue.iid, { remove: [label] }).pipe(
         Effect.catchAll((error) =>
           Console.error(
             `  ⚠ #${issue.iid}: unlabel ${label} failed — ${describeGitLabError(error)}`,
@@ -645,22 +599,17 @@ const onFailed = (state: Extract<State, { kind: "failed" }>): Effect.Effect<Stat
       .filter((line): line is string => line !== null)
       .join("\n");
 
-    yield* runGlabWrite(["issue", "note", String(issue.iid), "--message", note]).pipe(
+    yield* addIssueNote(issue.iid, note).pipe(
       Effect.catchAll((error) =>
         Console.error(
           `  ⚠ #${issue.iid}: could not post the failure note — ${describeGitLabError(error)}`,
         ),
       ),
     );
-    yield* runGlabWrite([
-      "issue",
-      "update",
-      String(issue.iid),
-      "--label",
-      LABELS.failedByAgent,
-      "--unlabel",
-      LABELS.pickedByAgent,
-    ]).pipe(
+    yield* updateIssueLabels(issue.iid, {
+      add: [LABELS.failedByAgent],
+      remove: [LABELS.pickedByAgent],
+    }).pipe(
       Effect.catchAll((error) =>
         Console.error(
           `  ⚠ #${issue.iid}: could not set ${LABELS.failedByAgent} — ${describeGitLabError(error)}`,

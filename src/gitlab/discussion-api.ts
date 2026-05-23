@@ -1,5 +1,5 @@
 /**
- * Gitlab/discussion-api.ts — the `glab api` operations over MR discussions.
+ * Gitlab/discussion-api.ts — REST operations over MR discussions.
  *
  * The pipeline uses a merge request's discussions as its review medium:
  * `review` posts findings, `evaluate` replies and resolves, `fix` resolves
@@ -10,48 +10,47 @@ import { Effect } from "effect";
 import { z } from "zod";
 import type { DiscussionSummary } from "./discussion";
 import { toDiscussionSummary } from "./discussion";
-import type { GitLabError } from "./errors";
-import { GlabResponseError } from "./errors";
-import { parseGlabJson, runGlabRead, runGlabWrite } from "./glab";
+import { type GitLabError, GitLabResponseError } from "./errors";
+import { runGitLabRead, runGitLabWrite } from "./http";
 
-const discussionsEndpoint = (mergeRequestIid: number): string =>
+const discussionsPath = (mergeRequestIid: number): string =>
   `projects/:id/merge_requests/${mergeRequestIid}/discussions`;
 
-/** Confirms a mutation took: the glab-api response carries an `id`. */
-const IdStringSchema = z.string().trim().min(1);
-const HasIdSchema = z.object({ id: z.union([IdStringSchema, z.number()]) });
+/** Confirms a mutation took: the API response carries an `id`. */
+const HasIdSchema = z.object({ id: z.union([z.string().min(1), z.number()]) });
+
+/** The discussions list endpoint returns an array of opaque objects. */
+const DiscussionListSchema = z.array(z.looseObject({}));
+
+/** A single discussion comes back as an opaque object (validated by the model). */
+const DiscussionSchema = z.looseObject({});
 
 /** List every discussion on a merge request. */
 export const listDiscussions = (
   mergeRequestIid: number,
-): Effect.Effect<readonly DiscussionSummary[], GitLabError> => {
-  // `?per_page=100` over `--paginate`: `glab api --paginate` concatenates each
-  // page's JSON array (`[…][…]`), which is not valid JSON. One page of 100
-  // covers any realistic discussion count on an AFK merge request.
-  const command = ["api", `${discussionsEndpoint(mergeRequestIid)}?per_page=100`];
-  return runGlabRead(command).pipe(
-    Effect.flatMap((output) =>
-      // An MR with no discussions is a normal state, not an error — and some
-      // glab versions print nothing rather than `[]`.
-      output.trim() === ""
-        ? Effect.succeed<readonly unknown[]>([])
-        : parseGlabJson(output, z.array(z.looseObject({})), command),
-    ),
-    Effect.map((rawDiscussions) => rawDiscussions.map((disc) => toDiscussionSummary(disc))),
-  );
-};
+): Effect.Effect<readonly DiscussionSummary[], GitLabError> =>
+  runGitLabRead(
+    {
+      method: "GET",
+      path: discussionsPath(mergeRequestIid),
+      query: { per_page: 100 },
+    },
+    DiscussionListSchema,
+  ).pipe(Effect.map((raw) => raw.map((disc) => toDiscussionSummary(disc))));
 
 /** Create a new general, resolvable discussion carrying `body`. */
 export const postDiscussion = (
   mergeRequestIid: number,
   body: string,
-): Effect.Effect<void, GitLabError> => {
-  const command = ["api", discussionsEndpoint(mergeRequestIid), "-X", "POST", "-f", `body=${body}`];
-  return runGlabWrite(command).pipe(
-    Effect.flatMap((output) => parseGlabJson(output, HasIdSchema, command)),
-    Effect.asVoid,
-  );
-};
+): Effect.Effect<void, GitLabError> =>
+  runGitLabWrite(
+    {
+      method: "POST",
+      path: discussionsPath(mergeRequestIid),
+      body: { body },
+    },
+    HasIdSchema,
+  ).pipe(Effect.asVoid);
 
 /**
  * Add a note (a reply) to an existing discussion thread. The response is
@@ -62,48 +61,41 @@ export const replyToDiscussion = (
   mergeRequestIid: number,
   discussionId: string,
   body: string,
-): Effect.Effect<void, GitLabError> => {
-  const command = [
-    "api",
-    `${discussionsEndpoint(mergeRequestIid)}/${discussionId}/notes`,
-    "-X",
-    "POST",
-    "-f",
-    `body=${body}`,
-  ];
-  return runGlabWrite(command).pipe(
-    Effect.flatMap((output) => parseGlabJson(output, HasIdSchema, command)),
-    Effect.asVoid,
-  );
-};
+): Effect.Effect<void, GitLabError> =>
+  runGitLabWrite(
+    {
+      method: "POST",
+      path: `${discussionsPath(mergeRequestIid)}/${discussionId}/notes`,
+      body: { body },
+    },
+    HasIdSchema,
+  ).pipe(Effect.asVoid);
 
 /**
  * Resolve a discussion thread, then verify it came back resolved.
- * A `glab` exit 0 that no-ops must not pass for a resolved thread.
+ * A 2xx response that no-ops must not pass for a resolved thread.
  */
 export const resolveDiscussion = (
   mergeRequestIid: number,
   discussionId: string,
 ): Effect.Effect<void, GitLabError> => {
-  const command = [
-    "api",
-    `${discussionsEndpoint(mergeRequestIid)}/${discussionId}`,
-    "-X",
-    "PUT",
-    "-F",
-    "resolved=true",
-  ];
-  // Parse the response, then verify the discussion came back resolved.
-  const DiscussionResponseSchema = z.looseObject({});
-  return runGlabWrite(command).pipe(
-    Effect.flatMap((output) => parseGlabJson(output, DiscussionResponseSchema, command)),
+  const path = `${discussionsPath(mergeRequestIid)}/${discussionId}`;
+  return runGitLabWrite(
+    {
+      method: "PUT",
+      path,
+      body: { resolved: true },
+    },
+    DiscussionSchema,
+  ).pipe(
     Effect.flatMap((raw) => {
       const summary = toDiscussionSummary(raw);
       return summary.resolved
         ? Effect.void
         : Effect.fail(
-            new GlabResponseError({
-              command,
+            new GitLabResponseError({
+              method: "PUT",
+              path,
               detail: `discussion ${discussionId} still unresolved after PUT`,
             }),
           );
