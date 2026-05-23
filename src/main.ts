@@ -16,7 +16,11 @@ import { BunRuntime } from "@effect/platform-bun";
 import { Effect } from "effect";
 import { runMachine } from "./pipeline/machine";
 import { preflight } from "./preflight";
+import { GitLabProviderLive } from "./provider/gitlab";
 
-const program = preflight.pipe(Effect.flatMap((env) => runMachine(env)));
+const program = preflight.pipe(
+  Effect.flatMap((env) => runMachine(env)),
+  Effect.provide(GitLabProviderLive),
+);
 
 BunRuntime.runMain(program);

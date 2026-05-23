@@ -135,8 +135,12 @@ const computeConfig = async (): Promise<GitLabConfig> => {
 /** Process-wide cache of the resolved config. Resolved once on first call. */
 let configPromise: Promise<GitLabConfig> | undefined;
 
-/** Lazily resolve, then cache, the GitLab config. Re-tries on failure. */
-const gitLabConfig: Effect.Effect<GitLabConfig, GitLabConfigError> = Effect.tryPromise({
+/**
+ * Lazily resolve, then cache, the GitLab config. Re-tries on failure.
+ * Exported so the provider Layer can preload it and surface a clean
+ * `ProviderConfigError` at boot rather than at first request.
+ */
+export const gitLabConfig: Effect.Effect<GitLabConfig, GitLabConfigError> = Effect.tryPromise({
   try: () => {
     if (configPromise === undefined) {
       configPromise = computeConfig().catch((error: unknown) => {

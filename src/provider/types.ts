@@ -93,3 +93,25 @@ export type ProviderCallError =
   | ProviderResponseError;
 
 export type ProviderError = ProviderCallError | ProviderConfigError;
+
+/** A one-line, human-readable description of a provider error. */
+export function describeProviderError(error: ProviderError): string {
+  switch (error._tag) {
+    case "ProviderHttpError": {
+      return `${error.method} ${error.path} → HTTP ${error.status}: ${error.body.slice(0, 200)}`;
+    }
+    case "ProviderNetworkError": {
+      return `${error.method} ${error.path} — network error: ${String(error.cause).slice(0, 200)}`;
+    }
+    case "ProviderResponseError": {
+      return `${error.method} ${error.path} — unexpected response: ${error.detail.slice(0, 200)}`;
+    }
+    case "ProviderConfigError": {
+      return `Provider config error: ${error.detail.slice(0, 200)}`;
+    }
+    default: {
+      const unreachable: never = error;
+      throw new Error(`unreachable provider error: ${JSON.stringify(unreachable)}`);
+    }
+  }
+}

@@ -1,5 +1,5 @@
 You run ONE review pass for the AFK pipeline, on the open merge request
-!{mr_iid}. Your job: get a fresh `code-review` over the current diff and post
+!{pr_iid}. Your job: get a fresh `code-review` over the current diff and post
 its findings onto the MR as discussions. You do not triage or fix anything.
 
 ## Preflight
@@ -13,11 +13,11 @@ Every Bash call runs from inside `{worktree}`.
 
 1. **Clear stale threads.** List the MR's existing discussions:
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts list --mr {mr_iid}
+       bun ~/.claude/skills/afk/scripts/mr-discussion.ts list --mr {pr_iid}
 
    Resolve every still-open thread left from a previous iteration:
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts resolve --mr {mr_iid} --discussion <id>
+       bun ~/.claude/skills/afk/scripts/mr-discussion.ts resolve --mr {pr_iid} --discussion <id>
 
    This pass posts the current finding set fresh — old threads must not
    linger and get re-triaged.
@@ -30,7 +30,7 @@ Every Bash call runs from inside `{worktree}`.
 
 3. **Post each finding** as a general MR discussion, one per finding:
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts post --mr {mr_iid} --body "<body>"
+       bun ~/.claude/skills/afk/scripts/mr-discussion.ts post --mr {pr_iid} --body "<body>"
 
    The body's **first line must be a machine-readable header**, exactly:
 

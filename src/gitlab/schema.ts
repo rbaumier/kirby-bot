@@ -20,11 +20,22 @@ export const IssueSchema = z.object({
   updated_at: z.string().trim().min(1).default(""),
 });
 
-/** A merge request from `GET/POST/PUT /projects/:id/merge_requests`. */
+/**
+ * A merge request from `GET/POST/PUT /projects/:id/merge_requests`.
+ *
+ * `draft` (modern API) and `work_in_progress` (legacy) carry the same flag;
+ * we accept either, with the title prefix as the final fallback. The adapter
+ * folds the three into a single `isDraft` boolean.
+ */
 export const MergeRequestSchema = z.object({
   iid: z.number(),
   web_url: z.string().trim().min(1).default(""),
   state: z.string().trim().min(1).default(""),
+  source_branch: z.string().trim().min(1).default(""),
+  target_branch: z.string().trim().min(1).default(""),
+  title: z.string().default(""),
+  draft: z.boolean().default(false),
+  work_in_progress: z.boolean().default(false),
 });
 
 /** A merge request as the orchestrator consumes it. */
