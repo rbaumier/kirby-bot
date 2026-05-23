@@ -193,6 +193,10 @@ const callOnce = <A>(
         ...(request.body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
+      // A hung GitLab server must not block the fiber indefinitely. 30s is
+      // long enough for slow listings, short enough that a retry still fits
+      // inside a phase budget.
+      signal: AbortSignal.timeout(30_000),
     };
 
     const response = yield* Effect.tryPromise({
@@ -263,8 +267,9 @@ const callOnce = <A>(
 
 /**
  * Retry policy for reads: jittered exponential backoff, 3 attempts total.
- * Every failure is retried — telling a transient API error from a permanent
- * one is unreliable, and retrying a genuine 4xx merely wastes ~1 second.
+ * Transient HTTP / network failures retry; a deterministic boot-time
+ * misconfiguration ({@link GitLabConfigError}) does not — retrying that just
+ * delays a clear error message by ~1 second.
  */
 const readRetryPolicy = Schedule.exponential("200 millis").pipe(
   Schedule.jittered,
@@ -278,7 +283,13 @@ const readRetryPolicy = Schedule.exponential("200 millis").pipe(
 export const runGitLabRead = <A>(
   request: GitLabRequest & { readonly method: "GET" },
   schema: z.ZodType<A>,
-): Effect.Effect<A, GitLabError> => callOnce(request, schema).pipe(Effect.retry(readRetryPolicy));
+): Effect.Effect<A, GitLabError> =>
+  callOnce(request, schema).pipe(
+    Effect.retry({
+      schedule: readRetryPolicy,
+      while: (error: GitLabError) => error._tag !== "GitLabConfigError",
+    }),
+  );
 
 /**
  * Run a WRITE request exactly once — no retry.

@@ -35,7 +35,9 @@ export const listIssuesByLabels = (params: {
       query: {
         state: "opened",
         labels: params.include.join(","),
-        not_labels: params.exclude?.join(",") || undefined,
+        // GitLab REST uses bracket-notation `not[labels]` for the negation —
+        // `not_labels` is silently ignored by the server.
+        "not[labels]": params.exclude?.join(",") || undefined,
         per_page: params.perPage ?? 100,
       },
     },
@@ -60,6 +62,11 @@ export const updateIssueLabels = (
   }
   if (changes.remove !== undefined && changes.remove.length > 0) {
     body.remove_labels = changes.remove.join(",");
+  }
+  // No labels to add or remove → don't fire an empty PUT that would no-op
+  // server-side but still bump `updated_at` and waste a write.
+  if (Object.keys(body).length === 0) {
+    return Effect.void;
   }
   return runGitLabWrite(
     { method: "PUT", path: `projects/:id/issues/${iid}`, body },
