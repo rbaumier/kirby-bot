@@ -17,7 +17,8 @@ The interface itself lives in [`src/provider/provider.ts`](../src/provider/provi
 | Issue                          | Issue                        | Issue                          | Same shape.                                                                           |
 | PullRequestRef                 | Merge Request                | Pull Request                   | Always abbreviated `PR` in code; `MR` only appears in GitLab-specific files.          |
 | `iid`                          | `iid`                        | `number`                       | Per-repo numeric id, stable across renames.                                           |
-| Draft PR                       | WIP / Draft MR (`draft:true`)| Draft PR (`draft:true`)        | Both forges flip a boolean. The transition "mark ready" is asymmetric (see §2).        |
+| `sourceBranch` / `targetBranch`| `source_branch` / `target_branch` | `head` / `base`           | The interface keeps `source`/`target` (the GitLab pair) — adapters translate.         |
+| Draft PR                       | title prefix `Draft:` / `WIP:` | `draft:true` boolean         | GitLab's REST signals draft via the title; GitHub via a boolean. Mark-ready (§2.1) and `isDraft` reflect the underlying mechanism. |
 | Issue labels                   | labels (CSV in v4 list, array in show) | labels (array)        | GitLab list filter is comma-joined; GitHub filter is repeatable param.                |
 | Issue note                     | note                         | issue comment                  | Single freeform comment on the issue timeline.                                        |
 | Review thread / Discussion     | discussion (top-level)       | review thread (PR) + issue comments | The two providers differ deeply — see §2.                                       |
@@ -31,7 +32,7 @@ The instinct when building a seam is to hide differences. Two of the differences
 
 ### 2.1 — Marking a PR ready for review
 
-- **GitLab**: `PUT /projects/:id/merge_requests/:iid` with no `wip:` prefix / `draft: false`. REST.
+- **GitLab**: `PUT /projects/:id/merge_requests/:iid` setting `title` with the `Draft:` / `WIP:` prefix stripped — the draft state is encoded in the title itself, not in a dedicated field. REST.
 - **GitHub**: GraphQL mutation `markPullRequestReadyForReview`. The REST `PATCH /pulls/:number` accepts most fields but **not** flipping `draft`.
 
 Adapter contract: `markPullRequestReady` returns `void` on success. GitHub adapter MUST use GraphQL; documenting this here keeps a future engineer from chasing the REST path.
@@ -48,14 +49,28 @@ Adapter contract: `resolveDiscussion` returns `void` on success. The `discussion
 - **GitLab**: `POST /merge_requests/:iid/discussions` creates a top-level discussion (resolvable).
 - **GitHub**: `POST /issues/:number/comments` creates an issue comment that lives in the PR timeline — but it is **not** a resolvable review thread. To create a *resolvable* thread the bot would have to attach to a diff position (line + commit sha + path) via the reviews API.
 
-Adapter contract: `postDiscussion(prIid, body)` posts a top-level, line-detached note. On GitLab that note is resolvable; on GitHub it lands as an issue-comment-on-PR and is NOT resolvable. The bot's reviewer flow currently only resolves discussions it received from the other side, not the ones it created — so the asymmetry is tolerable. If we later need the bot to post resolvable threads, the interface gains a second method `postReviewThread(prIid, position, body)`; we don't pre-build it.
+Adapter contract: `postDiscussion(pullRequestIid, body)` posts a top-level, line-detached note. On GitLab that note is resolvable; on GitHub it lands as an issue-comment-on-PR and is NOT resolvable. The bot's reviewer flow currently only resolves discussions it received from the other side, not the ones it created — so the asymmetry is tolerable. If we later need the bot to post resolvable threads, the interface gains a second method `postReviewThread(pullRequestIid, position, body)`; we don't pre-build it.
 
 ### 2.4 — Auto-merge
 
 - **GitLab**: `PUT /merge_requests/:iid/merge` accepts `merge_when_pipeline_succeeds: true`.
 - **GitHub**: REST merge has no auto-merge field. The GraphQL mutation `enablePullRequestAutoMerge` does, but the repo needs auto-merge enabled in settings.
 
-Adapter contract: `mergePullRequest({ iid, squash, autoMerge })` either merges synchronously or schedules an auto-merge — the caller treats the returned `PullRequestRef` as the source of truth (state stays `opened` if it was queued, flips to `merged` if it went through).
+Adapter contract: `mergePullRequest({ iid, shouldSquash, shouldAutoMerge })` either merges synchronously or schedules an auto-merge — the caller treats the returned `PullRequestRef` as the source of truth (state stays `opened` if it was queued, flips to `merged` if it went through). The GitHub adapter MUST re-fetch the PR after the GraphQL `enablePullRequestAutoMerge` mutation, which doesn't return the updated MR shape; GitLab's REST merge endpoint already returns the post-merge MR.
+
+### 2.5 — Updating labels
+
+- **GitLab**: `PUT /projects/:id/issues/:iid` accepts `add_labels` and `remove_labels` as deltas — the API resolves them server-side.
+- **GitHub**: `POST/DELETE /repos/:o/:r/issues/:n/labels` operate on the full label set, not deltas. The adapter computes deltas client-side; concurrent updates can race.
+
+Adapter contract: `updateIssueLabels(iid, { add, remove })` is delta-shaped. Both arrays may be empty (no-op). The GitHub adapter implements the delta with a read-modify-write — callers who care about atomicity should know.
+
+### 2.6 — Listing discussions
+
+- **GitLab**: `GET /merge_requests/:iid/discussions` returns *all* discussions on the MR — top-level notes, review threads, system notes. Each carries `resolvable`/`resolved` flags.
+- **GitHub**: review threads (resolvable) live behind GraphQL `pullRequestReviewThreads`; PR-level comments (not resolvable) live behind REST `GET /issues/:n/comments`. The two surfaces don't merge cleanly.
+
+Adapter contract: `listDiscussions(pullRequestIid)` returns the union — every conversation pinned to the PR, with `isResolved` reflecting whether the underlying surface supports resolution AND has been resolved. GitHub adapter MUST fan out to both surfaces.
 
 ## 3. ADR — interface shape
 
@@ -98,7 +113,7 @@ Cons: every operation grows an `if/switch` on `kind`. With 13 operations × 2 pr
 ```ts
 export class GitProvider extends Context.Tag("GitProvider")<
   GitProvider,
-  { readonly listIssuesByLabels: (q: ListIssuesQuery) => Effect.Effect<readonly Issue[], ProviderError>; /* … */ }
+  { readonly listIssuesByLabels: (q: ListIssuesQuery) => Effect.Effect<readonly Issue[], ProviderCallError>; /* … */ }
 >() {}
 
 // caller:
@@ -128,8 +143,9 @@ That property — adapter swap as a single Layer — is what we're paying the Ef
 
 ### 3.3 — What this MR ships
 
-- The `GitProvider` `Context.Tag` with 13 operation signatures.
-- The shared `ProviderError` tagged-union + value types.
+- The `GitProvider` `Context.Tag` with 13 operation signatures (the 11 the spec called for plus `viewIssue` and `viewPullRequest`, used by the maintainer loop to refresh state after side effects).
+- The shared error union: `ProviderCallError` (HTTP / network / response — the per-operation error channel) plus `ProviderConfigError` for boot-time wiring failures. `ProviderError = ProviderCallError | ProviderConfigError` stays exported as the umbrella; per-call signatures only fail with `ProviderCallError`.
+- The value types (`Issue`, `PullRequestRef`, `DiscussionSummary`, `DiscussionId`, etc.).
 - This document (vocabulary + asymmetries + ADR).
 
 What this MR does **not** ship: any adapter, any `Layer`, any change to the existing GitLab client. The next two issues (#4 GitLab, #5 GitHub) wire the seam to actual code.

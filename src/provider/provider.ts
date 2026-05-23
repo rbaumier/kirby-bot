@@ -1,12 +1,13 @@
-import { Context, type Effect } from "effect";
+import { Context, type Effect, type Option } from "effect";
 import type {
-  CreateDraftPrInput,
+  CreateDraftPullRequestInput,
+  DiscussionId,
   DiscussionSummary,
   Issue,
   IssueLabelChange,
   ListIssuesQuery,
   MergeInput,
-  ProviderError,
+  ProviderCallError,
   PullRequestRef,
 } from "./types";
 
@@ -15,60 +16,59 @@ export class GitProvider extends Context.Tag("GitProvider")<
   {
     readonly listIssuesByLabels: (
       query: ListIssuesQuery,
-    ) => Effect.Effect<readonly Issue[], ProviderError>;
+    ) => Effect.Effect<readonly Issue[], ProviderCallError>;
 
     readonly viewIssue: (
       iid: number,
-    ) => Effect.Effect<Issue, ProviderError>;
+    ) => Effect.Effect<Issue, ProviderCallError>;
 
     readonly updateIssueLabels: (
       iid: number,
       changes: IssueLabelChange,
-    ) => Effect.Effect<void, ProviderError>;
+    ) => Effect.Effect<void, ProviderCallError>;
 
     readonly addIssueNote: (
       iid: number,
       body: string,
-    ) => Effect.Effect<void, ProviderError>;
+    ) => Effect.Effect<void, ProviderCallError>;
 
     readonly findOpenPullRequestBySource: (
       sourceBranch: string,
-    ) => Effect.Effect<PullRequestRef | undefined, ProviderError>;
+    ) => Effect.Effect<Option.Option<PullRequestRef>, ProviderCallError>;
 
     readonly createDraftPullRequest: (
-      input: CreateDraftPrInput,
-    ) => Effect.Effect<PullRequestRef, ProviderError>;
+      input: CreateDraftPullRequestInput,
+    ) => Effect.Effect<PullRequestRef, ProviderCallError>;
 
     readonly viewPullRequest: (
       iid: number,
-    ) => Effect.Effect<PullRequestRef, ProviderError>;
+    ) => Effect.Effect<PullRequestRef, ProviderCallError>;
 
     readonly markPullRequestReady: (
       iid: number,
-    ) => Effect.Effect<void, ProviderError>;
+    ) => Effect.Effect<void, ProviderCallError>;
 
     readonly mergePullRequest: (
       input: MergeInput,
-    ) => Effect.Effect<PullRequestRef, ProviderError>;
+    ) => Effect.Effect<PullRequestRef, ProviderCallError>;
 
     readonly listDiscussions: (
-      prIid: number,
-    ) => Effect.Effect<readonly DiscussionSummary[], ProviderError>;
+      pullRequestIid: number,
+    ) => Effect.Effect<readonly DiscussionSummary[], ProviderCallError>;
 
     readonly postDiscussion: (
-      prIid: number,
+      pullRequestIid: number,
       body: string,
-    ) => Effect.Effect<void, ProviderError>;
+    ) => Effect.Effect<void, ProviderCallError>;
 
     readonly replyToDiscussion: (
-      prIid: number,
-      discussionId: string,
-      body: string,
-    ) => Effect.Effect<void, ProviderError>;
+      pullRequestIid: number,
+      opts: { readonly discussionId: DiscussionId; readonly body: string },
+    ) => Effect.Effect<void, ProviderCallError>;
 
     readonly resolveDiscussion: (
-      prIid: number,
-      discussionId: string,
-    ) => Effect.Effect<void, ProviderError>;
+      pullRequestIid: number,
+      discussionId: DiscussionId,
+    ) => Effect.Effect<void, ProviderCallError>;
   }
 >() {}
