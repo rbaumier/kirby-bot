@@ -56,7 +56,7 @@ Adapter contract: `postDiscussion(pullRequestIid, body)` posts a top-level, line
 - **GitLab**: `PUT /merge_requests/:iid/merge` accepts `merge_when_pipeline_succeeds: true`.
 - **GitHub**: REST merge has no auto-merge field. The GraphQL mutation `enablePullRequestAutoMerge` does, but the repo needs auto-merge enabled in settings.
 
-Adapter contract: `mergePullRequest({ iid, shouldSquash, shouldAutoMerge })` either merges synchronously or schedules an auto-merge — the caller treats the returned `PullRequestRef` as the source of truth (state stays `opened` if it was queued, flips to `merged` if it went through). The GitHub adapter MUST re-fetch the PR after the GraphQL `enablePullRequestAutoMerge` mutation, which doesn't return the updated MR shape; GitLab's REST merge endpoint already returns the post-merge MR.
+Adapter contract: `mergePullRequest(iid, { shouldSquash, shouldAutoMerge })` either merges synchronously or schedules an auto-merge — the caller treats the returned `PullRequestRef` as the source of truth (state stays `opened` if it was queued, flips to `merged` if it went through). The GitHub adapter MUST re-fetch the PR after the GraphQL `enablePullRequestAutoMerge` mutation, which doesn't return the updated MR shape; GitLab's REST merge endpoint already returns the post-merge MR.
 
 ### 2.5 — Updating labels
 
@@ -82,7 +82,7 @@ We explored three concrete shapes before committing. All three move the same 13 
 
 ```ts
 export interface GitProvider {
-  listIssuesByLabels(q: ListIssuesQuery): Effect.Effect<readonly Issue[], ProviderError>;
+  listIssuesByLabels(q: ListIssuesQuery): Effect.Effect<readonly Issue[], ProviderCallError>;
   // … 12 more
 }
 

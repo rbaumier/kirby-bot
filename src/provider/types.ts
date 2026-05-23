@@ -1,8 +1,9 @@
-import { Data } from "effect";
+import { Brand, Data } from "effect";
 
 export type Labels = readonly string[];
 
-export type DiscussionId = string & { readonly __brand: "DiscussionId" };
+export type DiscussionId = string & Brand.Brand<"DiscussionId">;
+export const DiscussionId = Brand.nominal<DiscussionId>();
 
 export type Issue = {
   readonly iid: number;
@@ -32,7 +33,6 @@ export type CreateDraftPullRequestInput = {
 };
 
 export type MergeInput = {
-  readonly iid: number;
   readonly shouldSquash: boolean;
   readonly shouldAutoMerge: boolean;
 };

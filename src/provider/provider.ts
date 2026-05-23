@@ -49,6 +49,7 @@ export class GitProvider extends Context.Tag("GitProvider")<
     ) => Effect.Effect<void, ProviderCallError>;
 
     readonly mergePullRequest: (
+      iid: number,
       input: MergeInput,
     ) => Effect.Effect<PullRequestRef, ProviderCallError>;
 
@@ -63,7 +64,8 @@ export class GitProvider extends Context.Tag("GitProvider")<
 
     readonly replyToDiscussion: (
       pullRequestIid: number,
-      opts: { readonly discussionId: DiscussionId; readonly body: string },
+      discussionId: DiscussionId,
+      body: string,
     ) => Effect.Effect<void, ProviderCallError>;
 
     readonly resolveDiscussion: (
