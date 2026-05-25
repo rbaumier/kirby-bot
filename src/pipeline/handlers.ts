@@ -4,7 +4,9 @@
  * Each handler takes its narrowed state variant and returns the next state.
  * Only `fetch_queue` fails fatally — a `ProviderCallError` reading the queue is.
  * Every other handler exposes a `HandlerError` channel; the dispatcher
- * converts these into a `failed` state at the seam.
+ * converts these into a `failed` state at the seam by pulling the pipeline
+ * context off `current`. Handlers therefore never spread `{issue, branch,
+ * worktree, pullRequestIid}` themselves.
  */
 import { $ } from "bun";
 import { existsSync } from "node:fs";
@@ -19,9 +21,10 @@ import { describeProviderError } from "../provider/types";
 import type { ProviderCallError, PullRequestRef } from "../provider/types";
 import type { Environment } from "../preflight";
 import { runDir, runLogPath } from "../run-artifacts";
-import { describePhaseError } from "../session/errors";
 import { phaseTimeoutMs, runPhaseSession } from "../session/phase";
 import type { VerdictToken } from "../session/verdict";
+import type { PhaseRunError } from "./errors";
+import { HandlerError, UnexpectedVerdictError, describePhaseRunError } from "./errors";
 import { branchName, worktreePath } from "./naming";
 import type { IssueRef, PipelineContext, State } from "./state";
 
@@ -29,23 +32,9 @@ import type { IssueRef, PipelineContext, State } from "./state";
 
 const STATE_FETCH_QUEUE = "fetch_queue" as const;
 const STATE_RUN_DOGFOOD = "run_dogfood" as const;
+const STATE_OPEN_DRAFT_MR = "open_draft_mr" as const;
 
 // ─── Handler helpers ───────────────────────────────────────────────────────
-
-/** The outcome of a phase, flattened for routing: a verdict, or a fail reason. */
-type PhaseOutcome =
-  | { readonly ok: true; readonly verdict: VerdictToken }
-  | { readonly ok: false; readonly reason: string };
-
-/**
- * The failure channel of every non-`fetch_queue` handler.
- *
- * Derived from the `failed` State variant so adding a context field to that
- * variant propagates here automatically — handlers and the seam stay in sync.
- * The dispatcher turns this back into a `failed` state at the boundary, so
- * no handler constructs that state by hand.
- */
-type HandlerError = Omit<Extract<State, { kind: "failed" }>, "kind">;
 
 /** The five shared pipeline fields, copied off any node that carries them. */
 const pipelineContext = (state: PipelineContext): PipelineContext => ({
@@ -66,13 +55,20 @@ type RunPhaseOptions = {
 };
 
 /**
- * Run one phase and flatten its outcome.
+ * Run one phase and narrow the verdict to the expected set.
  *
- * This is the single adapter from the typed phase-error channel to a
- * routable {@link PhaseOutcome}. Used by every phase handler.
+ * Keeps the typed `PhaseError` channel of `runPhaseSession`; an out-of-set
+ * verdict surfaces as `UnexpectedVerdictError` so callers route on tagged
+ * data rather than re-pattern-matching a string reason.
  */
-const runPhase = (phase: Phase, options: RunPhaseOptions): Effect.Effect<PhaseOutcome> =>
-  runPhaseSession({
+const runPhase = <const V extends VerdictToken>(
+  phase: Phase,
+  options: RunPhaseOptions,
+  expected: readonly V[],
+): Effect.Effect<V, PhaseRunError> => {
+  const expectedSet: ReadonlySet<string> = new Set(expected);
+  const isExpected = (verdict: VerdictToken): verdict is V => expectedSet.has(verdict);
+  return runPhaseSession({
     phase,
     issueIid: options.issueIid,
     worktree: options.worktree,
@@ -80,26 +76,32 @@ const runPhase = (phase: Phase, options: RunPhaseOptions): Effect.Effect<PhaseOu
     timeoutMs: phaseTimeoutMs(phase, options.deadline),
     replacements: options.replacements,
   }).pipe(
-    Effect.map((verdict): PhaseOutcome => ({ ok: true, verdict })),
-    Effect.catchAll(
-      (error): Effect.Effect<PhaseOutcome> =>
-        Effect.succeed({ ok: false, reason: describePhaseError(error) }),
+    Effect.flatMap((verdict) =>
+      isExpected(verdict)
+        ? Effect.succeed(verdict)
+        : Effect.fail(new UnexpectedVerdictError({ phase, verdict, expected })),
     ),
   );
+};
 
-/** Run a PR-bound phase — the four phases that share the `{worktree} {mr_iid}` prompt. */
-const runMrPhase = (
-  phase: Phase,
-  context: PipelineContext,
-  iteration: number,
-): Effect.Effect<PhaseOutcome> =>
-  runPhase(phase, {
-    issueIid: context.issue.iid,
-    worktree: context.worktree,
-    deadline: context.deadline,
-    iteration,
-    replacements: { worktree: context.worktree, mr_iid: String(context.pullRequestIid) },
-  });
+/** Build the `RunPhaseOptions` for a PR-bound phase — the `{worktree, mr_iid}` template. */
+const mrPhaseOptions = (context: PipelineContext, iteration: number): RunPhaseOptions => ({
+  issueIid: context.issue.iid,
+  worktree: context.worktree,
+  deadline: context.deadline,
+  iteration,
+  replacements: { worktree: context.worktree, mr_iid: String(context.pullRequestIid) },
+});
+
+/** Map a phase-running error into a `HandlerError` with a phase-prefixed reason. */
+const phaseRunHandlerError = (prefix: string) =>
+  (error: PhaseRunError): HandlerError =>
+    new HandlerError({ reason: `${prefix}: ${describePhaseRunError(error)}` });
+
+/** Map a `ProviderCallError` into a `HandlerError` with a phase-prefixed reason. */
+const providerHandlerError = (prefix: string) =>
+  (error: ProviderCallError): HandlerError =>
+    new HandlerError({ reason: `${prefix}: ${describeProviderError(error)}` });
 
 /** Run `git -C <worktree> <args>` and capture the result. */
 const runShellGit = (worktree: string, args: readonly string[]) =>
@@ -192,17 +194,7 @@ const onClaimIssue = (
 
     yield* provider
       .updateIssueLabels(issue.iid, { add: [LABELS.pickedByAgent], remove: [] })
-      .pipe(
-        Effect.mapError(
-          (error): HandlerError => ({
-            issue,
-            branch: null,
-            worktree: null,
-            pullRequestIid: null,
-            reason: `claim_issue: ${describeProviderError(error)}`,
-          }),
-        ),
-      );
+      .pipe(Effect.mapError(providerHandlerError("claim_issue")));
 
     const banner = "─".repeat(80);
     yield* Console.log(
@@ -224,13 +216,10 @@ const onBranchWorktree = (
       mkdir(join(WORKTREES_DIR, env.repoName), { recursive: true }),
     ).pipe(
       Effect.mapError(
-        (): HandlerError => ({
-          issue,
-          branch: null,
-          worktree: null,
-          pullRequestIid: null,
-          reason: "branch_worktree: could not create the worktree parent directory",
-        }),
+        (): HandlerError =>
+          new HandlerError({
+            reason: "branch_worktree: could not create the worktree parent directory",
+          }),
       ),
     );
 
@@ -251,26 +240,20 @@ const onBranchWorktree = (
       () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,
     );
     if (added.exitCode !== 0) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch: null,
-        worktree: null,
-        pullRequestIid: null,
-        reason: `branch_worktree: worktree add failed — ${added.stderr.trim()}`,
-      });
+      return yield* Effect.fail(
+        new HandlerError({
+          reason: `branch_worktree: worktree add failed — ${added.stderr.trim()}`,
+        }),
+      );
     }
 
     yield* excludeStopHookConfig(worktree);
 
     const pushed = yield* runShellGit(worktree, ["push", "-u", "origin", branch]);
     if (pushed.exitCode !== 0) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid: null,
-        reason: `branch_worktree: push failed — ${pushed.stderr.trim()}`,
-      });
+      return yield* Effect.fail(
+        new HandlerError({ reason: `branch_worktree: push failed — ${pushed.stderr.trim()}` }),
+      );
     }
     return { kind: "run_impl", issue, branch, worktree };
   });
@@ -283,47 +266,30 @@ const onRunImpl = (
     const { issue, branch, worktree } = state;
     const deadline = Date.now() + ISSUE_BUDGET_MS;
 
-    const outcome = yield* runPhase("run_impl", {
-      issueIid: issue.iid,
-      worktree,
-      deadline,
-      iteration: 0,
-      replacements: {
-        iid: String(issue.iid),
-        title: issue.title,
-        branch,
+    const verdict = yield* runPhase(
+      "run_impl",
+      {
+        issueIid: issue.iid,
         worktree,
-        body: issue.body === "" ? "(no description)" : issue.body,
+        deadline,
+        iteration: 0,
+        replacements: {
+          iid: String(issue.iid),
+          title: issue.title,
+          branch,
+          worktree,
+          body: issue.body === "" ? "(no description)" : issue.body,
+        },
       },
-    });
-    if (!outcome.ok) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid: null,
-        reason: `run_impl: ${outcome.reason}`,
-      });
+      ["READY_FOR_REVIEW", "BLOCKER_SUSPECTED"],
+    ).pipe(Effect.mapError(phaseRunHandlerError("run_impl")));
+
+    if (verdict === "READY_FOR_REVIEW") {
+      return { kind: STATE_OPEN_DRAFT_MR, issue, branch, worktree, deadline };
     }
-    if (outcome.verdict === "READY_FOR_REVIEW") {
-      return { kind: "open_draft_mr", issue, branch, worktree, deadline };
-    }
-    if (outcome.verdict === "BLOCKER_SUSPECTED") {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid: null,
-        reason: "run_impl: the implementer reported a blocker",
-      });
-    }
-    return yield* Effect.fail<HandlerError>({
-      issue,
-      branch,
-      worktree,
-      pullRequestIid: null,
-      reason: `run_impl: unexpected verdict ${outcome.verdict}`,
-    });
+    return yield* Effect.fail(
+      new HandlerError({ reason: "run_impl: the implementer reported a blocker" }),
+    );
   });
 
 /** Open_draft_mr — open the Draft PR (idempotent), recording its iid. */
@@ -359,17 +325,7 @@ const onOpenDraftMr = (
         title: `[AFK] ${issue.title}`,
         description,
       })
-      .pipe(
-        Effect.mapError(
-          (error): HandlerError => ({
-            issue,
-            branch,
-            worktree,
-            pullRequestIid: null,
-            reason: `open_draft_mr: ${describeProviderError(error)}`,
-          }),
-        ),
-      );
+      .pipe(Effect.mapError(providerHandlerError(STATE_OPEN_DRAFT_MR)));
 
     yield* Console.log(`  ↳ Draft MR !${opened.iid} created for ${branch}`);
     return {
@@ -388,27 +344,11 @@ const onReview = (
   state: Extract<State, { kind: "review" }>,
 ): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, pullRequestIid, fixCycles } = state;
-    const outcome = yield* runMrPhase("review", state, fixCycles);
-    if (!outcome.ok) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid,
-        reason: `review[${fixCycles}]: ${outcome.reason}`,
-      });
-    }
-    if (outcome.verdict === "REVIEW_DONE") {
-      return { kind: "evaluate", ...pipelineContext(state), fixCycles };
-    }
-    return yield* Effect.fail<HandlerError>({
-      issue,
-      branch,
-      worktree,
-      pullRequestIid,
-      reason: `review[${fixCycles}]: unexpected verdict ${outcome.verdict}`,
-    });
+    const { fixCycles } = state;
+    yield* runPhase("review", mrPhaseOptions(state, fixCycles), ["REVIEW_DONE"]).pipe(
+      Effect.mapError(phaseRunHandlerError(`review[${fixCycles}]`)),
+    );
+    return { kind: "evaluate", ...pipelineContext(state), fixCycles };
   });
 
 /** Evaluate — the convergence authority; `CONVERGED` leads to dogfood, `NEEDS_FIX` leads to fix. */
@@ -416,68 +356,37 @@ const onEvaluate = (
   state: Extract<State, { kind: "evaluate" }>,
 ): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, pullRequestIid, fixCycles } = state;
-    const outcome = yield* runMrPhase("evaluate", state, fixCycles);
-    if (!outcome.ok) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid,
-        reason: `evaluate[${fixCycles}]: ${outcome.reason}`,
-      });
-    }
-    if (outcome.verdict === "CONVERGED") {
+    const { fixCycles } = state;
+    const verdict = yield* runPhase(
+      "evaluate",
+      mrPhaseOptions(state, fixCycles),
+      ["CONVERGED", "NEEDS_FIX"],
+    ).pipe(Effect.mapError(phaseRunHandlerError(`evaluate[${fixCycles}]`)));
+
+    if (verdict === "CONVERGED") {
       return { kind: STATE_RUN_DOGFOOD, ...pipelineContext(state) };
     }
-    if (outcome.verdict === "NEEDS_FIX") {
-      // The cap is on the number of fix sessions. A 4th NEEDS_FIX is a
-      // structural disagreement, not a slow fix — end the issue for a human.
-      if (MAX_FIX_CYCLES <= fixCycles) {
-        return yield* Effect.fail<HandlerError>({
-          issue,
-          branch,
-          worktree,
-          pullRequestIid,
+    // NEEDS_FIX — cap is on the number of fix sessions. A 4th NEEDS_FIX is a
+    // structural disagreement, not a slow fix — end the issue for a human.
+    if (MAX_FIX_CYCLES <= fixCycles) {
+      return yield* Effect.fail(
+        new HandlerError({
           reason: `fix_cycle_cap: ${MAX_FIX_CYCLES} fix cycles without convergence`,
-        });
-      }
-      return { kind: "fix", ...pipelineContext(state), fixCycles };
+        }),
+      );
     }
-    return yield* Effect.fail<HandlerError>({
-      issue,
-      branch,
-      worktree,
-      pullRequestIid,
-      reason: `evaluate[${fixCycles}]: unexpected verdict ${outcome.verdict}`,
-    });
+    return { kind: "fix", ...pipelineContext(state), fixCycles };
   });
 
 /** Fix — apply the verified fix instructions; `FIX_DONE` leads back to review. */
 const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, pullRequestIid, fixCycles } = state;
-    const outcome = yield* runMrPhase("fix", state, fixCycles);
-    if (!outcome.ok) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid,
-        reason: `fix[${fixCycles}]: ${outcome.reason}`,
-      });
-    }
-    if (outcome.verdict === "FIX_DONE") {
-      // The cycle is spent — carry the incremented count back into the loop.
-      return { kind: "review", ...pipelineContext(state), fixCycles: fixCycles + 1 };
-    }
-    return yield* Effect.fail<HandlerError>({
-      issue,
-      branch,
-      worktree,
-      pullRequestIid,
-      reason: `fix[${fixCycles}]: unexpected verdict ${outcome.verdict}`,
-    });
+    const { fixCycles } = state;
+    yield* runPhase("fix", mrPhaseOptions(state, fixCycles), ["FIX_DONE"]).pipe(
+      Effect.mapError(phaseRunHandlerError(`fix[${fixCycles}]`)),
+    );
+    // The cycle is spent — carry the incremented count back into the loop.
+    return { kind: "review", ...pipelineContext(state), fixCycles: fixCycles + 1 };
   });
 
 /** Run_dogfood — the runtime gate; `DOGFOOD_PASS` leads to merge. */
@@ -485,36 +394,20 @@ const onRunDogfood = (
   state: Extract<State, { kind: "run_dogfood" }>,
 ): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, pullRequestIid } = state;
-    const outcome = yield* runMrPhase(STATE_RUN_DOGFOOD, state, 0);
-    if (!outcome.ok) {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid,
-        reason: `${STATE_RUN_DOGFOOD}: ${outcome.reason}`,
-      });
-    }
-    if (outcome.verdict === "DOGFOOD_PASS") {
+    const verdict = yield* runPhase(
+      STATE_RUN_DOGFOOD,
+      mrPhaseOptions(state, 0),
+      ["DOGFOOD_PASS", "DOGFOOD_FAIL"],
+    ).pipe(Effect.mapError(phaseRunHandlerError(STATE_RUN_DOGFOOD)));
+
+    if (verdict === "DOGFOOD_PASS") {
       return { kind: "merge", ...pipelineContext(state) };
     }
-    if (outcome.verdict === "DOGFOOD_FAIL") {
-      return yield* Effect.fail<HandlerError>({
-        issue,
-        branch,
-        worktree,
-        pullRequestIid,
+    return yield* Effect.fail(
+      new HandlerError({
         reason: `${STATE_RUN_DOGFOOD}: the runtime dogfood gate found an in-scope bug`,
-      });
-    }
-    return yield* Effect.fail<HandlerError>({
-      issue,
-      branch,
-      worktree,
-      pullRequestIid,
-      reason: `${STATE_RUN_DOGFOOD}: unexpected verdict ${outcome.verdict}`,
-    });
+      }),
+    );
   });
 
 /** Merge — un-draft the PR and merge it, verifying on a non-zero exit. */
@@ -523,19 +416,11 @@ const onMerge = (
 ): Effect.Effect<State, HandlerError, GitProvider> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
-    const { issue, branch, worktree, pullRequestIid } = state;
+    const { issue, worktree, pullRequestIid } = state;
 
-    yield* provider.markPullRequestReady(pullRequestIid).pipe(
-      Effect.mapError(
-        (error): HandlerError => ({
-          issue,
-          branch,
-          worktree,
-          pullRequestIid,
-          reason: `merge: could not un-draft — ${describeProviderError(error)}`,
-        }),
-      ),
-    );
+    yield* provider
+      .markPullRequestReady(pullRequestIid)
+      .pipe(Effect.mapError(providerHandlerError("merge: could not un-draft")));
 
     // The merge API can return an error while the PR is in fact merged or
     // queued (race with auto-merge) — verify the state before failing.
@@ -554,13 +439,9 @@ const onMerge = (
               if (isMerged) {
                 return { kind: "done", issue, worktree, pullRequestIid };
               }
-              return yield* Effect.fail<HandlerError>({
-                issue,
-                branch,
-                worktree,
-                pullRequestIid,
-                reason: `merge: ${describeProviderError(mergeError)}`,
-              });
+              return yield* Effect.fail(
+                new HandlerError({ reason: `merge: ${describeProviderError(mergeError)}` }),
+              );
             }),
         ),
       );
@@ -692,11 +573,31 @@ const dispatchHandler = (
 };
 
 /**
+ * Extract pipeline fields off the current state to enrich a `failed` state.
+ *
+ * The `in` operator gives a static narrowing: any variant carrying the
+ * field returns the value, others return `null`. A new State variant
+ * adding new fields propagates here without any seam edit.
+ */
+export const failedFieldsOf = (
+  state: Exclude<State, { kind: "fetch_queue" | "end" | "failed" }>,
+): Omit<Extract<State, { kind: "failed" }>, "kind" | "reason"> => {
+  const { issue } = state;
+  return {
+    issue,
+    branch: "branch" in state ? state.branch : null,
+    worktree: "worktree" in state ? state.worktree : null,
+    pullRequestIid: "pullRequestIid" in state ? state.pullRequestIid : null,
+  };
+};
+
+/**
  * Advance the machine by one state.
  *
  * Only `fetch_queue` can fail — its `ProviderCallError` is fatal.
  * Every other handler exposes a `HandlerError`. This seam catches it once
- * and turns it into a `failed` state. The caller only sees `ProviderCallError`.
+ * and rebuilds a `failed` state from `current`'s fields. The caller only
+ * sees `ProviderCallError`.
  */
 export const step = (
   current: State,
@@ -706,8 +607,16 @@ export const step = (
     return onFetchQueue;
   }
   return dispatchHandler(current, env).pipe(
-    Effect.catchAll(
-      (error): Effect.Effect<State> => Effect.succeed({ kind: "failed", ...error }),
-    ),
+    Effect.catchAll((error: HandlerError): Effect.Effect<State> => {
+      if (current.kind === "end" || current.kind === "failed") {
+        // Unreachable: end dies inside dispatchHandler, failed has no failure mode.
+        return Effect.die(`unexpected handler failure for ${current.kind}: ${error.reason}`);
+      }
+      return Effect.succeed({
+        kind: "failed",
+        ...failedFieldsOf(current),
+        reason: error.reason,
+      });
+    }),
   );
 };
