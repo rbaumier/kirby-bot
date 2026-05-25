@@ -10,19 +10,11 @@ export type Issue = {
   readonly title: string;
   readonly description: string | null;
   readonly labels: Labels;
-  readonly updatedAt: string;
-  readonly webUrl: string;
 };
-
-export type PullRequestState = "opened" | "merged" | "closed";
 
 export type PullRequestRef = {
   readonly iid: number;
-  readonly webUrl: string;
-  readonly state: PullRequestState;
-  readonly isDraft: boolean;
-  readonly sourceBranch: string;
-  readonly targetBranch: string;
+  readonly isMerged: boolean;
 };
 
 export type CreateDraftPullRequestInput = {
@@ -93,3 +85,27 @@ export type ProviderCallError =
   | ProviderResponseError;
 
 export type ProviderError = ProviderCallError | ProviderConfigError;
+
+const MAX_DESCRIBE_CHARS = 200;
+
+/** A one-line, human-readable description of a provider error. */
+export const describeProviderError = (error: ProviderError): string => {
+  switch (error._tag) {
+    case "ProviderHttpError": {
+      return `${error.method} ${error.path} → HTTP ${error.status}: ${error.body.slice(0, MAX_DESCRIBE_CHARS)}`;
+    }
+    case "ProviderNetworkError": {
+      return `${error.method} ${error.path} — network error: ${String(error.cause).slice(0, MAX_DESCRIBE_CHARS)}`;
+    }
+    case "ProviderResponseError": {
+      return `${error.method} ${error.path} — unexpected response: ${error.detail.slice(0, MAX_DESCRIBE_CHARS)}`;
+    }
+    case "ProviderConfigError": {
+      return `Provider config error: ${error.detail.slice(0, MAX_DESCRIBE_CHARS)}`;
+    }
+    default: {
+      const _exhaustive: never = error;
+      return `unknown provider error: ${String(_exhaustive)}`;
+    }
+  }
+};

@@ -84,6 +84,17 @@ disabled = true
 # Same as api-branded-id-types — Effect's own branding covers this.
 disabled = true
 
+[rules.import-export]
+# Effect's `Brand.nominal<T>()` pattern declares a type and a same-named
+# constructor const (the TS companion-object idiom). This is the canonical
+# branded-type shape — see `DiscussionId` in src/provider/types.ts.
+disabled = true
+
+[rules.ts-no-redeclare]
+# Same as import-export — the type+const pair sharing a name is the Effect
+# Brand convention, not a redeclaration bug.
+disabled = true
+
 [rules.no-unsafe-shell-exec]
 # shell.ts is deliberately a shell executor — the tool's entire purpose.
 disabled = true

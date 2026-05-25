@@ -5,7 +5,8 @@
  * transition, repeat until the machine reaches `end`.
  */
 import { Console, Effect } from "effect";
-import type { GitLabError } from "../gitlab/errors";
+import type { GitProvider } from "../provider/provider";
+import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
 import { logEvent, runDir } from "../run-artifacts";
 import { step } from "./handlers";
@@ -52,7 +53,10 @@ const formatTransition = (transition: TransitionSummary): string => {
 const issueOf = (state: State): IssueRef | null => ("issue" in state ? state.issue : null);
 
 /** Run one handler, then print and log the transition it produced. */
-const advance = (state: State, env: Environment): Effect.Effect<State, GitLabError> =>
+const advance = (
+  state: State,
+  env: Environment,
+): Effect.Effect<State, ProviderCallError, GitProvider> =>
   Effect.gen(function* () {
     const startedAt = Date.now();
     const next = yield* step(state, env);
@@ -76,11 +80,13 @@ const advance = (state: State, env: Environment): Effect.Effect<State, GitLabErr
   });
 
 /**
- * Drive the machine from `fetch_queue` to `end`. A `GitLabError` (the fatal
- * queue-read failure) is the only way this fails; every other failure is a
- * `failed` state the loop walks through.
+ * Drive the machine from `fetch_queue` to `end`. A `ProviderCallError` (the
+ * fatal queue-read failure) is the only way this fails; every other failure
+ * is a `failed` state the loop walks through.
  */
-export const runMachine = (env: Environment): Effect.Effect<void, GitLabError> =>
+export const runMachine = (
+  env: Environment,
+): Effect.Effect<void, ProviderCallError, GitProvider> =>
   Effect.gen(function* () {
     yield* Console.log(
       `AFK orchestrator starting. Repo: ${env.repoName}, default branch: ${env.defaultBranch}`,

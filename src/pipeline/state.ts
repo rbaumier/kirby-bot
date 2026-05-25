@@ -4,14 +4,14 @@
  * `State` is a discriminated union with one variant per pipeline node.
  * Each variant carries exactly the data that node needs, nothing more.
  * The type system proves a handler can never read a field that is not
- * there yet (no `mergeRequestIid` before the MR is opened, for instance).
+ * there yet (no `pullRequestIid` before the PR is opened, for instance).
  *
  * Pure type declarations — no logic, no imports.
  */
 
-/** A GitLab issue, reduced to what the pipeline actually uses. */
+/** A provider issue, reduced to what the pipeline actually uses. */
 export type IssueRef = {
-  /** The project-scoped issue number (GitLab's `iid`, shown as `#42`). */
+  /** The project-scoped issue number (shown as `#42`). */
   readonly iid: number;
   readonly title: string;
   /** The issue description, or the empty string if it had none. */
@@ -23,14 +23,14 @@ export type Deadline = number;
 
 /**
  * The data every node from `open_draft_mr` onward shares.
- * Includes the issue, branch, worktree, budget deadline, and MR iid.
+ * Includes the issue, branch, worktree, budget deadline, and PR iid.
  */
 export type PipelineContext = {
   readonly issue: IssueRef;
   readonly branch: string;
   readonly worktree: string;
   readonly deadline: Deadline;
-  readonly mergeRequestIid: number;
+  readonly pullRequestIid: number;
 };
 
 /**
@@ -66,14 +66,14 @@ export type State =
       readonly kind: "done";
       readonly issue: IssueRef;
       readonly worktree: string;
-      readonly mergeRequestIid: number;
+      readonly pullRequestIid: number;
     }
   | {
       readonly kind: "failed";
       readonly issue: IssueRef;
       readonly branch: string | null;
       readonly worktree: string | null;
-      readonly mergeRequestIid: number | null;
+      readonly pullRequestIid: number | null;
       readonly reason: string;
     }
   | { readonly kind: "end" };

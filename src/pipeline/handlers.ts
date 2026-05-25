@@ -2,7 +2,7 @@
  * One handler per state, plus the `step` dispatcher.
  *
  * Each handler takes its narrowed state variant and returns the next state.
- * Only `fetch_queue` fails fatally — a `GitLabError` reading the queue is.
+ * Only `fetch_queue` fails fatally — a `ProviderCallError` reading the queue is.
  * Every other handler exposes a `HandlerError` channel; the dispatcher
  * converts these into a `failed` state at the seam.
  */
@@ -10,24 +10,13 @@ import { $ } from "bun";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Console, Effect } from "effect";
+import { Console, Effect, Option } from "effect";
 import type { Phase } from "../config";
 import { ISSUE_BUDGET_MS, LABELS, MAX_FIX_CYCLES, WORKTREES_DIR } from "../config";
 import { runShell } from "../shell";
-import type { GitLabError } from "../gitlab/errors";
-import { describeGitLabError } from "../gitlab/errors";
-import type { GitLabMergeRequest } from "../gitlab/schema";
-import {
-  addIssueNote,
-  createDraftMergeRequest,
-  findOpenMergeRequestBySource,
-  listIssuesByLabels,
-  markMergeRequestReady,
-  mergeMergeRequest,
-  updateIssueLabels,
-  viewIssue,
-  viewMergeRequest,
-} from "../gitlab/api";
+import { GitProvider } from "../provider/provider";
+import { describeProviderError } from "../provider/types";
+import type { ProviderCallError, PullRequestRef } from "../provider/types";
 import type { Environment } from "../preflight";
 import { runDir, runLogPath } from "../run-artifacts";
 import { describePhaseError } from "../session/errors";
@@ -64,7 +53,7 @@ const pipelineContext = (state: PipelineContext): PipelineContext => ({
   branch: state.branch,
   worktree: state.worktree,
   deadline: state.deadline,
-  mergeRequestIid: state.mergeRequestIid,
+  pullRequestIid: state.pullRequestIid,
 });
 
 /** Options for running a single phase session. */
@@ -98,7 +87,7 @@ const runPhase = (phase: Phase, options: RunPhaseOptions): Effect.Effect<PhaseOu
     ),
   );
 
-/** Run an MR-bound phase — the four phases that share the `{worktree} {mr_iid}` prompt. */
+/** Run a PR-bound phase — the four phases that share the `{worktree} {mr_iid}` prompt. */
 const runMrPhase = (
   phase: Phase,
   context: PipelineContext,
@@ -109,18 +98,23 @@ const runMrPhase = (
     worktree: context.worktree,
     deadline: context.deadline,
     iteration,
-    replacements: { worktree: context.worktree, mr_iid: String(context.mergeRequestIid) },
+    replacements: { worktree: context.worktree, mr_iid: String(context.pullRequestIid) },
   });
 
 /** Run `git -C <worktree> <args>` and capture the result. */
 const runShellGit = (worktree: string, args: readonly string[]) =>
   runShell(() => $`git -C ${worktree} ${args}`);
 
-/** Find the open merge request for a branch, if any. Never fails. */
-const findOpenMergeRequest = (branch: string): Effect.Effect<GitLabMergeRequest | undefined> =>
-  findOpenMergeRequestBySource(branch).pipe(
-    Effect.catchAll(() => Effect.succeed<GitLabMergeRequest | undefined>(void 0)),
-  );
+/** Find the open pull request for a branch, if any. Never fails. */
+const findOpenPullRequest = (
+  branch: string,
+): Effect.Effect<Option.Option<PullRequestRef>, never, GitProvider> =>
+  Effect.gen(function* () {
+    const provider = yield* GitProvider;
+    return yield* provider.findOpenPullRequestBySource(branch).pipe(
+      Effect.catchAll(() => Effect.succeed(Option.none<PullRequestRef>())),
+    );
+  });
 
 /**
  * Exclude `.claude/settings.local.json` from git in a fresh worktree.
@@ -154,35 +148,40 @@ const excludeStopHookConfig = (worktree: string): Effect.Effect<void> =>
 // ─── State handlers ────────────────────────────────────────────────────────
 
 /** Fetch_queue — read the ready queue, pick one issue at random, or end. */
-const onFetchQueue: Effect.Effect<State, GitLabError> = Effect.gen(function* () {
-  const issues = yield* listIssuesByLabels({
-    include: [LABELS.readyForAgent],
-    exclude: [LABELS.failedByAgent, LABELS.pickedByAgent],
-    perPage: 100,
-  });
-  const count = issues.length;
-  if (count === 0) {
-    return { kind: "end" };
-  }
+const onFetchQueue: Effect.Effect<State, ProviderCallError, GitProvider> = Effect.gen(
+  function* () {
+    const provider = yield* GitProvider;
+    const issues = yield* provider.listIssuesByLabels({
+      include: [LABELS.readyForAgent],
+      exclude: [LABELS.failedByAgent, LABELS.pickedByAgent],
+    });
+    const count = issues.length;
+    if (count === 0) {
+      return { kind: "end" };
+    }
 
-  // Random pick keeps multi-instance collisions probabilistically rare.
-  const picked = issues.at(Math.floor(Math.random() * count));
-  if (picked === undefined) {
-    return { kind: "end" };
-  }
-  return {
-    kind: "claim_issue",
-    issue: { iid: picked.iid, title: picked.title, body: picked.description ?? "" },
-  };
-});
+    // Random pick keeps multi-instance collisions probabilistically rare.
+    const picked = issues.at(Math.floor(Math.random() * count));
+    if (picked === undefined) {
+      return { kind: "end" };
+    }
+    return {
+      kind: "claim_issue",
+      issue: { iid: picked.iid, title: picked.title, body: picked.description ?? "" },
+    };
+  },
+);
 
 /** Claim_issue — re-check the labels, then claim by adding `picked-by-agent`. */
-const onClaimIssue = (issue: IssueRef): Effect.Effect<State, HandlerError> =>
+const onClaimIssue = (
+  issue: IssueRef,
+): Effect.Effect<State, HandlerError, GitProvider> =>
   Effect.gen(function* () {
+    const provider = yield* GitProvider;
     // Re-read the labels right before claiming. This narrows the window
     // where another instance claims the same issue. A label add is not a
     // compare-and-swap. Worst case both work it; the random pick keeps that rare.
-    const alreadyClaimed = yield* viewIssue(issue.iid).pipe(
+    const alreadyClaimed = yield* provider.viewIssue(issue.iid).pipe(
       Effect.map((view) => new Set(view.labels).has(LABELS.pickedByAgent)),
       Effect.catchAll(() => Effect.succeed(false)),
     );
@@ -191,17 +190,19 @@ const onClaimIssue = (issue: IssueRef): Effect.Effect<State, HandlerError> =>
       return { kind: STATE_FETCH_QUEUE };
     }
 
-    yield* updateIssueLabels(issue.iid, { add: [LABELS.pickedByAgent] }).pipe(
-      Effect.mapError(
-        (error): HandlerError => ({
-          issue,
-          branch: null,
-          worktree: null,
-          mergeRequestIid: null,
-          reason: `claim_issue: ${describeGitLabError(error)}`,
-        }),
-      ),
-    );
+    yield* provider
+      .updateIssueLabels(issue.iid, { add: [LABELS.pickedByAgent], remove: [] })
+      .pipe(
+        Effect.mapError(
+          (error): HandlerError => ({
+            issue,
+            branch: null,
+            worktree: null,
+            pullRequestIid: null,
+            reason: `claim_issue: ${describeProviderError(error)}`,
+          }),
+        ),
+      );
 
     const banner = "─".repeat(80);
     yield* Console.log(
@@ -227,7 +228,7 @@ const onBranchWorktree = (
           issue,
           branch: null,
           worktree: null,
-          mergeRequestIid: null,
+          pullRequestIid: null,
           reason: "branch_worktree: could not create the worktree parent directory",
         }),
       ),
@@ -254,7 +255,7 @@ const onBranchWorktree = (
         issue,
         branch: null,
         worktree: null,
-        mergeRequestIid: null,
+        pullRequestIid: null,
         reason: `branch_worktree: worktree add failed — ${added.stderr.trim()}`,
       });
     }
@@ -267,7 +268,7 @@ const onBranchWorktree = (
         issue,
         branch,
         worktree,
-        mergeRequestIid: null,
+        pullRequestIid: null,
         reason: `branch_worktree: push failed — ${pushed.stderr.trim()}`,
       });
     }
@@ -300,7 +301,7 @@ const onRunImpl = (
         issue,
         branch,
         worktree,
-        mergeRequestIid: null,
+        pullRequestIid: null,
         reason: `run_impl: ${outcome.reason}`,
       });
     }
@@ -312,7 +313,7 @@ const onRunImpl = (
         issue,
         branch,
         worktree,
-        mergeRequestIid: null,
+        pullRequestIid: null,
         reason: "run_impl: the implementer reported a blocker",
       });
     }
@@ -320,29 +321,30 @@ const onRunImpl = (
       issue,
       branch,
       worktree,
-      mergeRequestIid: null,
+      pullRequestIid: null,
       reason: `run_impl: unexpected verdict ${outcome.verdict}`,
     });
   });
 
-/** Open_draft_mr — open the Draft MR (idempotent), recording its iid. */
+/** Open_draft_mr — open the Draft PR (idempotent), recording its iid. */
 const onOpenDraftMr = (
   state: Extract<State, { kind: "open_draft_mr" }>,
   env: Environment,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, GitProvider> =>
   Effect.gen(function* () {
+    const provider = yield* GitProvider;
     const { issue, branch, worktree, deadline } = state;
 
-    const existing = yield* findOpenMergeRequest(branch);
-    if (existing !== undefined) {
-      yield* Console.log(`  ↳ reusing open MR !${existing.iid} for ${branch}`);
+    const existing = yield* findOpenPullRequest(branch);
+    if (Option.isSome(existing)) {
+      yield* Console.log(`  ↳ reusing open MR !${existing.value.iid} for ${branch}`);
       return {
         kind: "review",
         issue,
         branch,
         worktree,
         deadline,
-        mergeRequestIid: existing.iid,
+        pullRequestIid: existing.value.iid,
         fixCycles: 0,
       };
     }
@@ -350,22 +352,24 @@ const onOpenDraftMr = (
     const description =
       `Closes #${issue.iid}\n\nImplemented and reviewed autonomously by the AFK orchestrator.\n\n` +
       `Run log: \`${runDir}\``;
-    const opened = yield* createDraftMergeRequest({
-      sourceBranch: branch,
-      targetBranch: env.defaultBranch,
-      title: `[AFK] ${issue.title}`,
-      description,
-    }).pipe(
-      Effect.mapError(
-        (error): HandlerError => ({
-          issue,
-          branch,
-          worktree,
-          mergeRequestIid: null,
-          reason: `open_draft_mr: ${describeGitLabError(error)}`,
-        }),
-      ),
-    );
+    const opened = yield* provider
+      .createDraftPullRequest({
+        sourceBranch: branch,
+        targetBranch: env.defaultBranch,
+        title: `[AFK] ${issue.title}`,
+        description,
+      })
+      .pipe(
+        Effect.mapError(
+          (error): HandlerError => ({
+            issue,
+            branch,
+            worktree,
+            pullRequestIid: null,
+            reason: `open_draft_mr: ${describeProviderError(error)}`,
+          }),
+        ),
+      );
 
     yield* Console.log(`  ↳ Draft MR !${opened.iid} created for ${branch}`);
     return {
@@ -374,7 +378,7 @@ const onOpenDraftMr = (
       branch,
       worktree,
       deadline,
-      mergeRequestIid: opened.iid,
+      pullRequestIid: opened.iid,
       fixCycles: 0,
     };
   });
@@ -384,14 +388,14 @@ const onReview = (
   state: Extract<State, { kind: "review" }>,
 ): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, mergeRequestIid, fixCycles } = state;
+    const { issue, branch, worktree, pullRequestIid, fixCycles } = state;
     const outcome = yield* runMrPhase("review", state, fixCycles);
     if (!outcome.ok) {
       return yield* Effect.fail<HandlerError>({
         issue,
         branch,
         worktree,
-        mergeRequestIid,
+        pullRequestIid,
         reason: `review[${fixCycles}]: ${outcome.reason}`,
       });
     }
@@ -402,7 +406,7 @@ const onReview = (
       issue,
       branch,
       worktree,
-      mergeRequestIid,
+      pullRequestIid,
       reason: `review[${fixCycles}]: unexpected verdict ${outcome.verdict}`,
     });
   });
@@ -412,14 +416,14 @@ const onEvaluate = (
   state: Extract<State, { kind: "evaluate" }>,
 ): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, mergeRequestIid, fixCycles } = state;
+    const { issue, branch, worktree, pullRequestIid, fixCycles } = state;
     const outcome = yield* runMrPhase("evaluate", state, fixCycles);
     if (!outcome.ok) {
       return yield* Effect.fail<HandlerError>({
         issue,
         branch,
         worktree,
-        mergeRequestIid,
+        pullRequestIid,
         reason: `evaluate[${fixCycles}]: ${outcome.reason}`,
       });
     }
@@ -434,7 +438,7 @@ const onEvaluate = (
           issue,
           branch,
           worktree,
-          mergeRequestIid,
+          pullRequestIid,
           reason: `fix_cycle_cap: ${MAX_FIX_CYCLES} fix cycles without convergence`,
         });
       }
@@ -444,7 +448,7 @@ const onEvaluate = (
       issue,
       branch,
       worktree,
-      mergeRequestIid,
+      pullRequestIid,
       reason: `evaluate[${fixCycles}]: unexpected verdict ${outcome.verdict}`,
     });
   });
@@ -452,14 +456,14 @@ const onEvaluate = (
 /** Fix — apply the verified fix instructions; `FIX_DONE` leads back to review. */
 const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, mergeRequestIid, fixCycles } = state;
+    const { issue, branch, worktree, pullRequestIid, fixCycles } = state;
     const outcome = yield* runMrPhase("fix", state, fixCycles);
     if (!outcome.ok) {
       return yield* Effect.fail<HandlerError>({
         issue,
         branch,
         worktree,
-        mergeRequestIid,
+        pullRequestIid,
         reason: `fix[${fixCycles}]: ${outcome.reason}`,
       });
     }
@@ -471,7 +475,7 @@ const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, Han
       issue,
       branch,
       worktree,
-      mergeRequestIid,
+      pullRequestIid,
       reason: `fix[${fixCycles}]: unexpected verdict ${outcome.verdict}`,
     });
   });
@@ -481,14 +485,14 @@ const onRunDogfood = (
   state: Extract<State, { kind: "run_dogfood" }>,
 ): Effect.Effect<State, HandlerError> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, mergeRequestIid } = state;
+    const { issue, branch, worktree, pullRequestIid } = state;
     const outcome = yield* runMrPhase(STATE_RUN_DOGFOOD, state, 0);
     if (!outcome.ok) {
       return yield* Effect.fail<HandlerError>({
         issue,
         branch,
         worktree,
-        mergeRequestIid,
+        pullRequestIid,
         reason: `${STATE_RUN_DOGFOOD}: ${outcome.reason}`,
       });
     }
@@ -500,7 +504,7 @@ const onRunDogfood = (
         issue,
         branch,
         worktree,
-        mergeRequestIid,
+        pullRequestIid,
         reason: `${STATE_RUN_DOGFOOD}: the runtime dogfood gate found an in-scope bug`,
       });
     }
@@ -508,68 +512,72 @@ const onRunDogfood = (
       issue,
       branch,
       worktree,
-      mergeRequestIid,
+      pullRequestIid,
       reason: `${STATE_RUN_DOGFOOD}: unexpected verdict ${outcome.verdict}`,
     });
   });
 
-/** Merge — un-draft the MR and merge it, verifying on a non-zero exit. */
-const onMerge = (state: Extract<State, { kind: "merge" }>): Effect.Effect<State, HandlerError> =>
+/** Merge — un-draft the PR and merge it, verifying on a non-zero exit. */
+const onMerge = (
+  state: Extract<State, { kind: "merge" }>,
+): Effect.Effect<State, HandlerError, GitProvider> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree, mergeRequestIid } = state;
+    const provider = yield* GitProvider;
+    const { issue, branch, worktree, pullRequestIid } = state;
 
-    yield* markMergeRequestReady(mergeRequestIid).pipe(
+    yield* provider.markPullRequestReady(pullRequestIid).pipe(
       Effect.mapError(
         (error): HandlerError => ({
           issue,
           branch,
           worktree,
-          mergeRequestIid,
-          reason: `merge: could not un-draft — ${describeGitLabError(error)}`,
+          pullRequestIid,
+          reason: `merge: could not un-draft — ${describeProviderError(error)}`,
         }),
       ),
     );
 
-    // The merge API can return an error while the MR is in fact merged or
+    // The merge API can return an error while the PR is in fact merged or
     // queued (race with auto-merge) — verify the state before failing.
     // `closed` ≠ `merged`.
-    return yield* mergeMergeRequest({
-      iid: mergeRequestIid,
-      squash: true,
-      autoMerge: true,
-    }).pipe(
-      Effect.map((): State => ({ kind: "done", issue, worktree, mergeRequestIid })),
-      Effect.catchAll(
-        (mergeError): Effect.Effect<State, HandlerError> =>
-          Effect.gen(function* () {
-            const isMerged = yield* viewMergeRequest(mergeRequestIid).pipe(
-              Effect.map((mr) => mr.state === "merged"),
-              Effect.catchAll(() => Effect.succeed(false)),
-            );
-            if (isMerged) {
-              return { kind: "done", issue, worktree, mergeRequestIid };
-            }
-            return yield* Effect.fail<HandlerError>({
-              issue,
-              branch,
-              worktree,
-              mergeRequestIid,
-              reason: `merge: ${describeGitLabError(mergeError)}`,
-            });
-          }),
-      ),
-    );
+    return yield* provider
+      .mergePullRequest(pullRequestIid, { shouldSquash: true, shouldAutoMerge: true })
+      .pipe(
+        Effect.map((): State => ({ kind: "done", issue, worktree, pullRequestIid })),
+        Effect.catchAll(
+          (mergeError): Effect.Effect<State, HandlerError, GitProvider> =>
+            Effect.gen(function* () {
+              const isMerged = yield* provider.viewPullRequest(pullRequestIid).pipe(
+                Effect.map((pr) => pr.isMerged),
+                Effect.catchAll(() => Effect.succeed(false)),
+              );
+              if (isMerged) {
+                return { kind: "done", issue, worktree, pullRequestIid };
+              }
+              return yield* Effect.fail<HandlerError>({
+                issue,
+                branch,
+                worktree,
+                pullRequestIid,
+                reason: `merge: ${describeProviderError(mergeError)}`,
+              });
+            }),
+        ),
+      );
   });
 
 /** Done — unlabel the issue, remove the worktree, loop back to the queue. */
-const onDone = (state: Extract<State, { kind: "done" }>): Effect.Effect<State> =>
+const onDone = (
+  state: Extract<State, { kind: "done" }>,
+): Effect.Effect<State, never, GitProvider> =>
   Effect.gen(function* () {
-    const { issue, worktree, mergeRequestIid } = state;
+    const provider = yield* GitProvider;
+    const { issue, worktree, pullRequestIid } = state;
     const unlabelOne = (label: string) =>
-      updateIssueLabels(issue.iid, { remove: [label] }).pipe(
+      provider.updateIssueLabels(issue.iid, { add: [], remove: [label] }).pipe(
         Effect.catchAll((error) =>
           Console.error(
-            `  ⚠ #${issue.iid}: unlabel ${label} failed — ${describeGitLabError(error)}`,
+            `  ⚠ #${issue.iid}: unlabel ${label} failed — ${describeProviderError(error)}`,
           ),
         ),
       );
@@ -581,41 +589,46 @@ const onDone = (state: Extract<State, { kind: "done" }>): Effect.Effect<State> =
       yield* Console.error(`  ⚠ worktree removal failed: ${removed.stderr.trim().slice(0, 160)}`);
     }
     yield* runShell(() => $`git worktree prune`);
-    yield* Console.log(`  ✓ #${issue.iid} merged (!${mergeRequestIid})`);
+    yield* Console.log(`  ✓ #${issue.iid} merged (!${pullRequestIid})`);
     return { kind: STATE_FETCH_QUEUE };
   });
 
 /** Failed — note the failure on the issue, label it, loop back to the queue. */
-const onFailed = (state: Extract<State, { kind: "failed" }>): Effect.Effect<State> =>
+const onFailed = (
+  state: Extract<State, { kind: "failed" }>,
+): Effect.Effect<State, never, GitProvider> =>
   Effect.gen(function* () {
-    const { reason, mergeRequestIid, worktree, issue } = state;
+    const provider = yield* GitProvider;
+    const { reason, pullRequestIid, worktree, issue } = state;
     const note = [
       `**AFK failed** — ${reason}`,
       "",
       `- Run log: \`${runLogPath}\``,
-      mergeRequestIid === null ? null : `- Draft MR (left for inspection): !${mergeRequestIid}`,
+      pullRequestIid === null ? null : `- Draft MR (left for inspection): !${pullRequestIid}`,
       worktree === null ? null : `- Worktree (left for inspection): \`${worktree}\``,
     ]
       .filter((line): line is string => line !== null)
       .join("\n");
 
-    yield* addIssueNote(issue.iid, note).pipe(
+    yield* provider.addIssueNote(issue.iid, note).pipe(
       Effect.catchAll((error) =>
         Console.error(
-          `  ⚠ #${issue.iid}: could not post the failure note — ${describeGitLabError(error)}`,
+          `  ⚠ #${issue.iid}: could not post the failure note — ${describeProviderError(error)}`,
         ),
       ),
     );
-    yield* updateIssueLabels(issue.iid, {
-      add: [LABELS.failedByAgent],
-      remove: [LABELS.pickedByAgent],
-    }).pipe(
-      Effect.catchAll((error) =>
-        Console.error(
-          `  ⚠ #${issue.iid}: could not set ${LABELS.failedByAgent} — ${describeGitLabError(error)}`,
+    yield* provider
+      .updateIssueLabels(issue.iid, {
+        add: [LABELS.failedByAgent],
+        remove: [LABELS.pickedByAgent],
+      })
+      .pipe(
+        Effect.catchAll((error) =>
+          Console.error(
+            `  ⚠ #${issue.iid}: could not set ${LABELS.failedByAgent} — ${describeProviderError(error)}`,
+          ),
         ),
-      ),
-    );
+      );
     return { kind: STATE_FETCH_QUEUE };
   });
 
@@ -632,7 +645,7 @@ const onFailed = (state: Extract<State, { kind: "failed" }>): Effect.Effect<Stat
 const dispatchHandler = (
   current: Exclude<State, { kind: "fetch_queue" }>,
   env: Environment,
-): Effect.Effect<State, HandlerError> => {
+): Effect.Effect<State, HandlerError, GitProvider> => {
   switch (current.kind) {
     case "claim_issue": {
       return onClaimIssue(current.issue);
@@ -681,11 +694,14 @@ const dispatchHandler = (
 /**
  * Advance the machine by one state.
  *
- * Only `fetch_queue` can fail — its `GitLabError` is fatal.
+ * Only `fetch_queue` can fail — its `ProviderCallError` is fatal.
  * Every other handler exposes a `HandlerError`. This seam catches it once
- * and turns it into a `failed` state. The caller only sees `GitLabError`.
+ * and turns it into a `failed` state. The caller only sees `ProviderCallError`.
  */
-export const step = (current: State, env: Environment): Effect.Effect<State, GitLabError> => {
+export const step = (
+  current: State,
+  env: Environment,
+): Effect.Effect<State, ProviderCallError, GitProvider> => {
   if (current.kind === "fetch_queue") {
     return onFetchQueue;
   }
