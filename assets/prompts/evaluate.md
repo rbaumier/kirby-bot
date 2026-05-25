@@ -14,7 +14,7 @@ Every Bash call runs from inside `{worktree}`.
 
 1. **Read the open discussions:**
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts list --mr {mr_iid}
+       bun {scripts_dir}/mr-discussion.ts list --mr {mr_iid}
 
    This returns every discussion as `{ id, resolved, notes }`. Act on ONLY
    the ones with `resolved: false` — those are the findings still needing a
@@ -50,8 +50,8 @@ Every Bash call runs from inside `{worktree}`.
      **verified fix instruction**, and leave the thread UNRESOLVED — that is
      `fix`'s work.
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts reply   --mr {mr_iid} --discussion <id> --body "<reply>"
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts resolve --mr {mr_iid} --discussion <id>
+       bun {scripts_dir}/mr-discussion.ts reply   --mr {mr_iid} --discussion <id> --body "<reply>"
+       bun {scripts_dir}/mr-discussion.ts resolve --mr {mr_iid} --discussion <id>
 
    Use `reply` (a note ON the finding's thread), never `post` — `post` would
    create an orphan discussion instead of answering the finding in place.

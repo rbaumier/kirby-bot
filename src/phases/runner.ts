@@ -7,13 +7,20 @@
  * - `pipelineContext`: copies the five shared pipeline fields onto the next state.
  * - `phaseHandlerError`: maps `PhaseError` to `HandlerError` with a phase-prefixed reason.
  */
+import { SCRIPTS_DIR } from "../config";
 import { HandlerError } from "../pipeline/errors";
 import type { PipelineContext } from "../pipeline/state";
 import { describePhaseError } from "../session/errors";
 import type { PhaseError } from "../session/errors";
 import type { RunPhaseSessionInput } from "../session/phase";
 
-/** Build the `RunPhaseSessionInput` for a PR-bound Phase — the `{worktree, mr_iid}` template. */
+/**
+ * Build the `RunPhaseSessionInput` for a PR-bound Phase — the
+ * `{worktree, mr_iid, scripts_dir}` template. `scripts_dir` is the
+ * absolute path to the orchestrator's `scripts/` folder, so prompts
+ * can invoke `bun {scripts_dir}/mr-discussion.ts ...` without
+ * hard-coding a stale install location.
+ */
 export const mrPhaseOptions = (
   context: PipelineContext,
   phase: RunPhaseSessionInput["phase"],
@@ -24,7 +31,11 @@ export const mrPhaseOptions = (
   worktree: context.worktree,
   deadline: context.deadline,
   iteration,
-  replacements: { worktree: context.worktree, mr_iid: String(context.pullRequestIid) },
+  replacements: {
+    worktree: context.worktree,
+    mr_iid: String(context.pullRequestIid),
+    scripts_dir: SCRIPTS_DIR,
+  },
 });
 
 /** The five shared pipeline fields, copied off any node that carries them. */

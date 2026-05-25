@@ -14,7 +14,7 @@ Every Bash call runs from inside `{worktree}`.
 
 1. **Read the discussions:**
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts list --mr {mr_iid}
+       bun {scripts_dir}/mr-discussion.ts list --mr {mr_iid}
 
    Act on ONLY the discussions with `resolved: false` — those are the real
    findings `evaluate` left for you. Each carries, in a reply, `evaluate`'s
@@ -36,8 +36,8 @@ Every Bash call runs from inside `{worktree}`.
 5. **Resolve each fixed thread** — reply with the real pushed commit SHA,
    then resolve it:
 
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts reply   --mr {mr_iid} --discussion <id> --body "fixed in <sha>: …"
-       bun ~/.claude/skills/afk/scripts/mr-discussion.ts resolve --mr {mr_iid} --discussion <id>
+       bun {scripts_dir}/mr-discussion.ts reply   --mr {mr_iid} --discussion <id> --body "fixed in <sha>: …"
+       bun {scripts_dir}/mr-discussion.ts resolve --mr {mr_iid} --discussion <id>
 
    If a `resolve` call exits non-zero, retry it once.
 

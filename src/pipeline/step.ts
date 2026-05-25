@@ -56,7 +56,7 @@ const onFailed = (
     yield* provider
       .updateIssueLabels(issue.iid, {
         add: [LABELS.failedByAgent],
-        remove: [LABELS.pickedByAgent],
+        remove: [LABELS.pickedByAgent, LABELS.readyForAgent],
       })
       .pipe(
         Effect.catchAll((error) =>

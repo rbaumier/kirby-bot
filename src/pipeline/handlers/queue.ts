@@ -101,7 +101,10 @@ export const onClaimIssue = (
     }
 
     yield* provider
-      .updateIssueLabels(issue.iid, { add: [LABELS.pickedByAgent], remove: [] })
+      .updateIssueLabels(issue.iid, {
+        add: [LABELS.pickedByAgent],
+        remove: [LABELS.readyForAgent],
+      })
       .pipe(Effect.mapError(providerHandlerError("claim_issue")));
 
     const banner = "─".repeat(80);

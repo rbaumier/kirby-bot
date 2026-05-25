@@ -68,3 +68,10 @@ export const RUNS_DIR = join(homedir(), ".afk-runs");
  * Works under both Bun and Node.
  */
 export const PROMPTS_DIR = join(import.meta.dirname, "..", "assets", "prompts");
+
+/**
+ * The directory holding helper scripts (`mr-discussion.ts`, etc.) that
+ * the phase prompts invoke via `bun {scripts_dir}/<script>.ts`.
+ * Resolved relative to this file the same way as {@link PROMPTS_DIR}.
+ */
+export const SCRIPTS_DIR = join(import.meta.dirname, "..", "scripts");
