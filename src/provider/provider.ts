@@ -1,4 +1,5 @@
-import { Context, type Effect, type Option } from "effect";
+import { Context } from "effect";
+import type { Effect, Option } from "effect";
 import type {
   CreateDraftPullRequestInput,
   DiscussionId,

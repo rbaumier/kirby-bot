@@ -30,6 +30,10 @@ type ListIssuesByLabelsParams = {
   readonly perPage?: number;
 };
 
+/** Comma-join a label list, or `undefined` if the list is empty/missing. */
+const joinOrUndefined = (labels: readonly string[] | undefined): string | undefined =>
+  labels !== undefined && labels.length > 0 ? labels.join(",") : undefined;
+
 /** List issues filtered by label, with optional exclusions. */
 export const listIssuesByLabels = (
   params: ListIssuesByLabelsParams,
@@ -43,7 +47,7 @@ export const listIssuesByLabels = (
         labels: params.include.join(","),
         // GitLab REST uses bracket-notation `not[labels]` for the negation —
         // `not_labels` is silently ignored by the server.
-        "not[labels]": params.exclude?.join(",") || undefined,
+        "not[labels]": joinOrUndefined(params.exclude),
         per_page: params.perPage ?? 100,
       },
     },
@@ -54,7 +58,7 @@ export const listIssuesByLabels = (
 export const viewIssue = (iid: number): Effect.Effect<GitLabIssue, ProviderError> =>
   runGitLabRead({ method: "GET", path: `projects/:id/issues/${iid}` }, IssueSchema);
 
-/** Schema returned by issue-note creation — just enough to confirm the note exists. */
+/** Schema for issue-note creation — confirms the note exists by checking an id. */
 const NoteAckSchema = Schema.Struct({
   id: Schema.Union(Schema.String, Schema.Number),
 });
@@ -73,13 +77,12 @@ export const updateIssueLabels = (
   iid: number,
   changes: LabelChanges,
 ): Effect.Effect<void, ProviderError> => {
-  const body: Record<string, unknown> = {};
-  if (changes.add !== undefined && changes.add.length > 0) {
-    body.add_labels = changes.add.join(",");
-  }
-  if (changes.remove !== undefined && changes.remove.length > 0) {
-    body.remove_labels = changes.remove.join(",");
-  }
+  const addLabels = joinOrUndefined(changes.add);
+  const removeLabels = joinOrUndefined(changes.remove);
+  const body: Record<string, unknown> = {
+    ...(addLabels === undefined ? {} : { add_labels: addLabels }),
+    ...(removeLabels === undefined ? {} : { remove_labels: removeLabels }),
+  };
   // No labels to add or remove → don't fire an empty PUT that would no-op
   // server-side but still bump `updated_at` and waste a write.
   if (Object.keys(body).length === 0) {
@@ -117,7 +120,7 @@ export const findOpenMergeRequestBySource = (
       query: { source_branch: sourceBranch, state: "opened", per_page: 1 },
     },
     mrArraySchema,
-  ).pipe(Effect.map((list) => list[0]));
+  ).pipe(Effect.map((list) => list.at(0)));
 
 /** Params for {@link createDraftMergeRequest}. */
 type CreateDraftMergeRequestParams = {
@@ -159,6 +162,12 @@ export const viewMergeRequest = (iid: number): Effect.Effect<GitLabMergeRequest,
 const TitledMrSchema = Schema.Struct({ title: Schema.String });
 
 /**
+ * Strip a leading `Draft:` / `Draft -` / `WIP:` / `WIP -` prefix (and any
+ * surrounding whitespace). Case-insensitive.
+ */
+const DRAFT_PREFIX = /^(?:Draft|WIP)\s*[:-]\s*/i;
+
+/**
  * Mark a draft MR as ready by stripping the "Draft:" / "WIP:" prefix from its
  * title. The GitLab API derives the draft flag from the title prefix, so the
  * canonical way to "un-draft" is to PUT a clean title.
@@ -169,7 +178,7 @@ export const markMergeRequestReady = (iid: number): Effect.Effect<void, Provider
       { method: "GET", path: `projects/:id/merge_requests/${iid}` },
       TitledMrSchema,
     );
-    const stripped = current.title.replace(/^(?:Draft|WIP)\s*[:\-]\s*/i, "");
+    const stripped = current.title.replace(DRAFT_PREFIX, "");
     if (stripped === current.title) {
       return; // already ready
     }

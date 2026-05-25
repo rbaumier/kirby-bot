@@ -7,8 +7,8 @@
  * shared (provider/types.ts) so no error remapping is needed here.
  *
  * Boot-time misconfiguration (ProviderConfigError) is treated as a defect
- * at the seam — the provider contract narrows call errors to
- * ProviderCallError, and a missing token / unparseable remote is a wiring
+ * at the seam. The provider contract narrows call errors to
+ * ProviderCallError; a missing token or unparseable remote is a wiring
  * bug, not a routable call failure.
  */
 import { Effect, Layer, Option } from "effect";
@@ -16,7 +16,6 @@ import {
   addIssueNote as glAddIssueNote,
   createDraftMergeRequest as glCreateDraftMergeRequest,
   findOpenMergeRequestBySource as glFindOpenMergeRequestBySource,
-  type GitLabIssue,
   listDiscussions as glListDiscussions,
   listIssuesByLabels as glListIssuesByLabels,
   markMergeRequestReady as glMarkMergeRequestReady,
@@ -28,20 +27,21 @@ import {
   viewIssue as glViewIssue,
   viewMergeRequest as glViewMergeRequest,
 } from "../gitlab/api";
+import type { GitLabIssue } from "../gitlab/api";
 import type { DiscussionSummary as GitLabDiscussionSummary } from "../gitlab/discussion";
 import type { GitLabMergeRequest } from "../gitlab/schema";
 import { GitProvider } from "./provider";
-import {
-  type CreateDraftPullRequestInput,
-  DiscussionId,
-  type DiscussionSummary,
-  type Issue,
-  type IssueLabelChange,
-  type ListIssuesQuery,
-  type MergeInput,
-  type ProviderCallError,
-  type ProviderError,
-  type PullRequestRef,
+import { DiscussionId } from "./types";
+import type {
+  CreateDraftPullRequestInput,
+  DiscussionSummary,
+  Issue,
+  IssueLabelChange,
+  ListIssuesQuery,
+  MergeInput,
+  ProviderCallError,
+  ProviderError,
+  PullRequestRef,
 } from "./types";
 
 /** Turn a config failure into a defect; call failures pass through unchanged. */
@@ -65,6 +65,11 @@ const mapPullRequest = (mr: GitLabMergeRequest): PullRequestRef => ({
   iid: mr.iid,
   isMerged: mr.state === "merged",
 });
+
+const pullRequestAsOption = (
+  mr: GitLabMergeRequest | undefined,
+): Option.Option<PullRequestRef> =>
+  mr === undefined ? Option.none() : Option.some(mapPullRequest(mr));
 
 const mapDiscussionAuthor = (author: string): string | null =>
   author === "unknown" ? null : author;
@@ -96,7 +101,7 @@ export const GitLabProviderLive: Layer.Layer<GitProvider> = Layer.succeed(
 
     findOpenPullRequestBySource: (sourceBranch: string) =>
       adaptCall(glFindOpenMergeRequestBySource(sourceBranch)).pipe(
-        Effect.map((mr) => (mr === undefined ? Option.none() : Option.some(mapPullRequest(mr)))),
+        Effect.map(pullRequestAsOption),
       ),
 
     createDraftPullRequest: (input: CreateDraftPullRequestInput) =>

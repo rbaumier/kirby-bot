@@ -162,6 +162,83 @@ disabled = true
 # glab.ts does not mean the whole package is type-only.
 disabled = true
 
+# ── Disabled: bun:test specifics ─────────────────────────────────────────
+
+[rules.no-implicit-deps]
+# `bun:test` is the Bun runtime's built-in test runner, not an npm package
+# — bundled with Bun and not declared in package.json by design.
+disabled = true
+
+[rules.unlisted-dependency]
+# Same as no-implicit-deps — `bun:test` is built into the Bun runtime.
+disabled = true
+
+[rules.testing-prefer-test-each]
+# bun:test's `it.each` typings require tuple arrays and reject readonly
+# scalar arrays (forcing a `.map((x) => [x] as const)` wrap). Plain
+# for-of + it() is shorter and works on any readonly literal tuple.
+disabled = true
+
+[rules.function-inside-loop]
+# Fires on `it(name, fn)` inside our for-of test loops (see waiver of
+# testing-prefer-test-each). The per-iteration closure cost is irrelevant
+# for tests.
+disabled = true
+
+[rules.require-hook]
+# Effect's `Layer.succeed(...)` at module top-level is pure construction,
+# not a side effect. Building a layer once and closing over it from the
+# `describe`/`it` blocks is the idiomatic Effect-in-tests shape.
+disabled = true
+
+# ── Disabled: architecture choices ───────────────────────────────────────
+
+[rules.god-module]
+# `run-artifacts.ts` is intentionally a cross-cutting Effect service used
+# by both the pipeline and session slices. The wide fan-in is the design.
+disabled = true
+
+[rules.api-import-from-public-index]
+# The orchestrator has no public index — internal modules are imported
+# directly. The rule targets layered codebases with a barrel pattern.
+disabled = true
+
+[rules.no-useless-path-segments]
+# Mis-fires on legitimate `../../foo` imports from nested directories
+# (e.g. src/pipeline/handlers/queue.ts reaching up to src/config.ts).
+disabled = true
+
+[rules.node-no-process-env]
+# `gitlab/http.ts:computeConfig` is the GitLab config boundary — env
+# access for GITLAB_* belongs there. config.ts holds orchestrator
+# tunables, not provider-specific wiring.
+disabled = true
+
+[rules.no-let]
+# Imperative state machines (e.g. `parseTokenFromYaml`) legitimately
+# need mutable bindings; the rule is a stylistic preference, not a
+# correctness check.
+disabled = true
+
+[rules.consistent-destructuring]
+# Conflicts with the discriminated-union narrowing pattern: switching
+# on `state.kind` is what TypeScript narrows; pre-destructuring `kind`
+# would erase that narrowing for the rest of the function.
+disabled = true
+
+[rules.os-command]
+# Misfires on `RegExp.prototype.exec(...)` in `gitlab/http.ts`, reading
+# regex matches as shell `exec()` calls. The one real shell invocation
+# (`git remote get-url origin`) is a static template literal with no
+# user input — already covered by `no-unsafe-shell-exec`.
+disabled = true
+
+[rules.regex-no-optional-assertion]
+# Fires on `HTTPS_REMOTE = /^https?:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/`,
+# misreading `(?:[^@/]+@)?` as containing an assertion. There is none —
+# the optional group only matches characters.
+disabled = true
+
 # ── Threshold overrides ──────────────────────────────────────────────────
 
 [rules.max-union-size]

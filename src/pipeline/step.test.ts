@@ -10,7 +10,8 @@ import { Effect, Layer } from "effect";
 import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
-import { RunArtifacts, type RunArtifactsShape } from "../run-artifacts";
+import { RunArtifacts } from "../run-artifacts";
+import type { RunArtifactsShape } from "../run-artifacts";
 import { failedFieldsOf, step } from "./step";
 import type { State } from "./state";
 

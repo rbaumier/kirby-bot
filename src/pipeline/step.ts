@@ -19,7 +19,7 @@ import type { ProviderCallError } from "../provider/types";
 import { describeProviderError } from "../provider/types";
 import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
-import { HandlerError } from "./errors";
+import type { HandlerError } from "./errors";
 import { onDone, onMerge, onOpenDraftMr } from "./handlers/pr";
 import { onBranchWorktree, onClaimIssue, onFetchQueue } from "./handlers/queue";
 import type { State } from "./state";
@@ -81,32 +81,44 @@ const dispatchHandler = (
   env: Environment,
 ): Effect.Effect<State, HandlerError, HandlerServices> => {
   switch (current.kind) {
-    case "claim_issue":
+    case "claim_issue": {
       return onClaimIssue(current.issue);
-    case "branch_worktree":
+    }
+    case "branch_worktree": {
       return onBranchWorktree(current.issue, env);
-    case "run_impl":
+    }
+    case "run_impl": {
       return runImplPhase(current);
-    case "open_draft_mr":
+    }
+    case "open_draft_mr": {
       return onOpenDraftMr(current, env);
-    case "review":
+    }
+    case "review": {
       return reviewPhase(current);
-    case "evaluate":
+    }
+    case "evaluate": {
       return evaluatePhase(current);
-    case "fix":
+    }
+    case "fix": {
       return fixPhase(current);
-    case "run_dogfood":
+    }
+    case "run_dogfood": {
       return runDogfoodPhase(current);
-    case "merge":
+    }
+    case "merge": {
       return onMerge(current);
-    case "done":
+    }
+    case "done": {
       return onDone(current);
-    case "failed":
+    }
+    case "failed": {
       return onFailed(current);
-    case "end":
+    }
+    case "end": {
       return Effect.die("step was called on the end state");
+    }
     default: {
-      // Exhaustiveness: a new State variant without a case here is a compile error.
+      // Exhaustiveness: a new State variant without a case is a compile error.
       const unreachable: never = current;
       return Effect.die(`unhandled state: ${JSON.stringify(unreachable)}`);
     }
@@ -116,16 +128,16 @@ const dispatchHandler = (
 /**
  * Extract pipeline fields off the current state to enrich a `failed` state.
  *
- * Exhaustive switch on the state kind: a new State variant fails to compile
- * here until it's given an explicit row, forcing a deliberate decision about
- * which of its fields propagate into `failed`.
+ * Exhaustive switch on the state kind. A new State variant fails to compile
+ * here until it gets an explicit row. That forces a deliberate decision on
+ * which fields propagate into `failed`.
  */
 export const failedFieldsOf = (
   state: Exclude<State, { kind: "fetch_queue" | "end" | "failed" }>,
 ): Omit<Extract<State, { kind: "failed" }>, "kind" | "reason"> => {
   switch (state.kind) {
     case "claim_issue":
-    case "branch_worktree":
+    case "branch_worktree": {
       return {
         issue: state.issue,
         branch: null,
@@ -133,7 +145,8 @@ export const failedFieldsOf = (
         pullRequestIid: null,
         fixCycles: null,
       };
-    case "run_impl":
+    }
+    case "run_impl": {
       return {
         issue: state.issue,
         branch: state.branch,
@@ -141,7 +154,8 @@ export const failedFieldsOf = (
         pullRequestIid: null,
         fixCycles: null,
       };
-    case "open_draft_mr":
+    }
+    case "open_draft_mr": {
       return {
         issue: state.issue,
         branch: state.branch,
@@ -149,9 +163,10 @@ export const failedFieldsOf = (
         pullRequestIid: null,
         fixCycles: null,
       };
+    }
     case "review":
     case "evaluate":
-    case "fix":
+    case "fix": {
       return {
         issue: state.issue,
         branch: state.branch,
@@ -159,8 +174,9 @@ export const failedFieldsOf = (
         pullRequestIid: state.pullRequestIid,
         fixCycles: state.fixCycles,
       };
+    }
     case "run_dogfood":
-    case "merge":
+    case "merge": {
       return {
         issue: state.issue,
         branch: state.branch,
@@ -168,7 +184,8 @@ export const failedFieldsOf = (
         pullRequestIid: state.pullRequestIid,
         fixCycles: null,
       };
-    case "done":
+    }
+    case "done": {
       return {
         issue: state.issue,
         branch: null,
@@ -176,6 +193,7 @@ export const failedFieldsOf = (
         pullRequestIid: state.pullRequestIid,
         fixCycles: null,
       };
+    }
     default: {
       const _exhaustive: never = state;
       throw new Error(`unhandled state: ${JSON.stringify(_exhaustive)}`);

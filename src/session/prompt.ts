@@ -24,7 +24,13 @@ const PLACEHOLDER = /\{[a-z_]+\}/g;
 const applyReplacements = (
   text: string,
   entries: readonly (readonly [string, string])[],
-): string => entries.reduce((acc, [key, value]) => acc.replaceAll(`{${key}}`, value), text);
+): string => {
+  let result = text;
+  for (const [key, value] of entries) {
+    result = result.replaceAll(`{${key}}`, value);
+  }
+  return result;
+};
 
 /**
  * Read the `phase` template and substitute every `{placeholder}`.
