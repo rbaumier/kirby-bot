@@ -59,9 +59,5 @@ export function describeGitLabError(error: GitLabError): string {
       return `${error.method} ${error.path} — unexpected response: ${error.detail.slice(0, 200)}`;
     case "GitLabConfigError":
       return `GitLab config error: ${error.detail.slice(0, 200)}`;
-    default: {
-      const _exhaustive: never = error;
-      throw new Error(`unreachable GitLab error: ${JSON.stringify(_exhaustive)}`);
-    }
   }
 }

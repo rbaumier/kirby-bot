@@ -132,28 +132,27 @@ const computeConfig = async (): Promise<GitLabConfig> => {
   };
 };
 
-/**
- * Lazily resolved, then memoized, GitLab config. Resolved once on first use.
- *
- * `Effect.cached` allocates the cache up front and returns an Effect that
- * runs `computeConfig` on first yield, then replays the cached result for
- * every subsequent yield. A `GitLabConfigError` is boot-time misconfig
- * (no token, no remote): retrying it cannot help, so caching it is the
- * fail-fast we want — `runGitLabRead` already excludes it from retries.
- */
-const gitLabConfig: Effect.Effect<GitLabConfig, GitLabConfigError> = Effect.runSync(
-  Effect.cached(
-    Effect.tryPromise({
-      try: computeConfig,
-      catch: (error): GitLabConfigError =>
-        error instanceof GitLabConfigError
-          ? error
-          : new GitLabConfigError({
-              detail: error instanceof Error ? error.message : String(error),
-            }),
-    }),
-  ),
-);
+/** Process-wide cache of the resolved config. Resolved once on first call. */
+let configPromise: Promise<GitLabConfig> | undefined;
+
+/** Lazily resolve, then cache, the GitLab config. Re-tries on failure. */
+const gitLabConfig: Effect.Effect<GitLabConfig, GitLabConfigError> = Effect.tryPromise({
+  try: () => {
+    if (configPromise === undefined) {
+      configPromise = computeConfig().catch((error: unknown) => {
+        configPromise = undefined; // a transient failure must not poison the cache
+        throw error;
+      });
+    }
+    return configPromise;
+  },
+  catch: (error): GitLabConfigError =>
+    error instanceof GitLabConfigError
+      ? error
+      : new GitLabConfigError({
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+});
 
 /** A single GitLab REST call: method, project-relative path, and optional query/body. */
 export type GitLabRequest = {
