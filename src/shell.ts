@@ -4,13 +4,13 @@
  * Two surfaces:
  *
  *  - {@link runShell} — strict default. Fails with a tagged {@link ShellError}.
- *    The three failure modes are detected structurally, not via sentinel
- *    exit codes. A real process exiting 124 or 127 is reported faithfully
- *    as `ShellNonZeroExit`.
+ *    Each failure mode (non-zero exit, timeout, spawn failure) is its own
+ *    tagged error — callers route on the tag, not on the exit code.
  *  - {@link runShellAllowingFailure} — opt-out for cleanup paths. Folds
- *    every outcome into a {@link CommandResult}. The sentinel codes 124
- *    and 127 stand in for timeout and spawn failure for the callers that
- *    don't distinguish those from a real process exit.
+ *    every outcome into a {@link CommandResult} with `exitCode === 0` for
+ *    success and `exitCode === 1` for any failure mode. Callers that care
+ *    about *which* failure read `stderr`; nothing reads the exit code beyond
+ *    a binary success/fail check.
  */
 import type { $ } from "bun";
 import { Data, Effect } from "effect";
@@ -25,12 +25,6 @@ export type CommandResult = {
 
 /** The streams of a successful command (exit 0). */
 export type ShellOutput = Omit<CommandResult, "exitCode">;
-
-/** Conventional exit codes used by {@link runShellAllowingFailure} for the
- * two non-process failure modes. The permissive contract maps spawn/timeout
- * back onto these sentinels so callers can keep the `exitCode === 0` idiom. */
-const SPAWN_FAILURE_EXIT_CODE = 127;
-const EXIT_CODE_TIMED_OUT = 124;
 
 /** The command ran and exited with a non-zero status. */
 export class ShellNonZeroExit extends Data.TaggedError("ShellNonZeroExit")<CommandResult> {}
@@ -112,12 +106,10 @@ export const runShell = (
   );
 
 /**
- * Run a command and capture its result without failing. Spawn failures and
- * timeouts are folded back into the success channel via sentinel exit codes
- * ({@link SPAWN_FAILURE_EXIT_CODE} / {@link EXIT_CODE_TIMED_OUT}).
- *
- * Use only for cleanup paths where every outcome is acceptable. For typed
- * errors prefer {@link runShell}.
+ * Run a command and capture its result without failing. Every failure mode
+ * folds into the success channel with `exitCode === 1`; the original detail
+ * stays on `stderr`. Use only for cleanup paths where the binary success/fail
+ * check is enough. For typed errors prefer {@link runShell}.
  */
 export const runShellAllowingFailure = (
   build: () => ReturnType<typeof $>,
@@ -136,18 +128,10 @@ export const runShellAllowingFailure = (
             });
           }
           case "ShellTimeout": {
-            return Effect.succeed({
-              exitCode: EXIT_CODE_TIMED_OUT,
-              stdout: "",
-              stderr: "command timed out",
-            });
+            return Effect.succeed({ exitCode: 1, stdout: "", stderr: "command timed out" });
           }
           case "ShellSpawnFailed": {
-            return Effect.succeed({
-              exitCode: SPAWN_FAILURE_EXIT_CODE,
-              stdout: "",
-              stderr: error.cause,
-            });
+            return Effect.succeed({ exitCode: 1, stdout: "", stderr: error.cause });
           }
           default: {
             const _exhaustive: never = error;

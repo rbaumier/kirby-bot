@@ -60,14 +60,6 @@ const writeStopHookConfig = (
       new WorkspaceError({ phase, operation: "write the Stop-hook config", reason: String(cause) }),
   });
 
-/**
- * A phase's session timeout: the smaller of its per-phase cap and the budget
- * still left for the issue. There is deliberately no floor — when the result
- * is below one poll interval, `runPhaseSession` refuses to spawn.
- */
-const phaseTimeoutMs = (phase: Phase, deadlineMs: number): number =>
-  Math.min(PHASE_CAP_MINUTES[phase] * 60 * 1000, deadlineMs - Date.now());
-
 /** Input for {@link pollSentinel}. */
 type PollSentinelInput = {
   readonly phase: Phase;
@@ -143,7 +135,9 @@ export const runPhaseSession = <const V extends VerdictToken>(
 ): Effect.Effect<V, PhaseError, RunArtifacts> =>
   Effect.gen(function* () {
     const { phase, issueIid, worktree, iteration, deadline, replacements } = input;
-    const timeoutMs = phaseTimeoutMs(phase, deadline);
+    // Phase timeout: the smaller of its per-phase cap and the budget still
+    // left for the issue. No floor — below one poll interval we refuse to spawn.
+    const timeoutMs = Math.min(PHASE_CAP_MINUTES[phase] * 60 * 1000, deadline - Date.now());
 
     // A budget below one poll interval can never yield a verdict in time —
     // fail now rather than spawn a session that is killed mid-boot.

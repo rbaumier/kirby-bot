@@ -12,7 +12,7 @@ import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
-import { phaseRunHandlerError } from "./runner";
+import { phaseHandlerError } from "./runner";
 
 /** Run_impl Phase Module — implements the run_impl state's transition. */
 export const runImplPhase = (
@@ -38,7 +38,7 @@ export const runImplPhase = (
         },
       },
       ["READY_FOR_REVIEW", "BLOCKER_SUSPECTED"],
-    ).pipe(Effect.mapError(phaseRunHandlerError("run_impl")));
+    ).pipe(Effect.mapError(phaseHandlerError("run_impl")));
 
     if (verdict === "READY_FOR_REVIEW") {
       return { kind: "open_draft_mr", issue, branch, worktree, deadline };

@@ -333,13 +333,14 @@ const onFailed = (
   Effect.gen(function* () {
     const provider = yield* GitProvider;
     const artifacts = yield* RunArtifacts;
-    const { reason, pullRequestIid, worktree, issue } = state;
+    const { reason, pullRequestIid, worktree, issue, fixCycles } = state;
     const note = [
       `**AFK failed** — ${reason}`,
       "",
       `- Run log: \`${artifacts.logPath}\``,
       pullRequestIid === null ? null : `- Draft MR (left for inspection): !${pullRequestIid}`,
       worktree === null ? null : `- Worktree (left for inspection): \`${worktree}\``,
+      fixCycles === null ? null : `- Fix cycles completed: ${fixCycles}`,
     ]
       .filter((line): line is string => line !== null)
       .join("\n");
@@ -441,6 +442,7 @@ export const failedFieldsOf = (
     branch: "branch" in state ? state.branch : null,
     worktree: "worktree" in state ? state.worktree : null,
     pullRequestIid: "pullRequestIid" in state ? state.pullRequestIid : null,
+    fixCycles: "fixCycles" in state ? state.fixCycles : null,
   };
 };
 
@@ -472,6 +474,7 @@ export const step = (
         branch: error.branch ?? base.branch,
         worktree: error.worktree ?? base.worktree,
         pullRequestIid: error.pullRequestIid ?? base.pullRequestIid,
+        fixCycles: base.fixCycles,
         reason: error.reason,
       });
     }),
