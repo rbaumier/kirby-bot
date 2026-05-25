@@ -34,14 +34,13 @@ const ORIGIN_PREFIX_RE = /^origin\//;
 
 /** Check that a required tool is in PATH. */
 const assertToolInPath = (tool: string): Effect.Effect<void, PreflightError> =>
-  Effect.gen(function* () {
-    const found = yield* runShell(() => $`which ${tool}`);
-    if (found.exitCode !== 0) {
-      yield* Effect.fail(
+  runShell(() => $`which ${tool}`).pipe(
+    Effect.mapError(
+      () =>
         new PreflightError({ reason: `${tool} is not in PATH — required by the orchestrator` }),
-      );
-    }
-  });
+    ),
+    Effect.asVoid,
+  );
 
 /**
  * Create the run directory and verify the environment, returning
@@ -58,19 +57,20 @@ export const preflight: Effect.Effect<Environment, PreflightError> = Effect.gen(
     yield* assertToolInPath(tool);
   }
 
-  const topLevel = yield* runShell(() => $`git rev-parse --show-toplevel`);
-  if (topLevel.exitCode !== 0) {
-    return yield* Effect.fail(new PreflightError({ reason: "not inside a git repository" }));
-  }
+  const topLevel = yield* runShell(() => $`git rev-parse --show-toplevel`).pipe(
+    Effect.mapError(() => new PreflightError({ reason: "not inside a git repository" })),
+  );
 
-  const originHead = yield* runShell(() => $`git symbolic-ref --short refs/remotes/origin/HEAD`);
-  if (originHead.exitCode !== 0) {
-    return yield* Effect.fail(
-      new PreflightError({
-        reason: "origin/HEAD is not set locally — run: git remote set-head origin -a",
-      }),
-    );
-  }
+  const originHead = yield* runShell(
+    () => $`git symbolic-ref --short refs/remotes/origin/HEAD`,
+  ).pipe(
+    Effect.mapError(
+      () =>
+        new PreflightError({
+          reason: "origin/HEAD is not set locally — run: git remote set-head origin -a",
+        }),
+    ),
+  );
 
   return {
     repoName: basename(topLevel.stdout.trim()),
