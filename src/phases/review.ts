@@ -11,7 +11,7 @@ import type { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
-import { mrPhaseOptions, phaseRunHandlerError, pipelineContext } from "./runner";
+import { mrPhaseOptions, phaseHandlerError, pipelineContext } from "./runner";
 
 /** Review Phase Module — implements the review state's transition. */
 export const reviewPhase = (
@@ -20,7 +20,7 @@ export const reviewPhase = (
   Effect.gen(function* () {
     const { fixCycles } = state;
     yield* runPhaseSession(mrPhaseOptions(state, "review", fixCycles), ["REVIEW_DONE"]).pipe(
-      Effect.mapError(phaseRunHandlerError(`review[${fixCycles}]`)),
+      Effect.mapError(phaseHandlerError(`review[${fixCycles}]`)),
     );
     return { kind: "evaluate", ...pipelineContext(state), fixCycles };
   });

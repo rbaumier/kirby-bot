@@ -1,10 +1,11 @@
 /**
- * Phases/runner.ts — the cross-Phase plumbing each Phase Module reuses.
+ * Phases/runner.ts — cross-Phase plumbing shared by every Phase Module.
  *
- * `mrPhaseOptions` builds the `runPhaseSession` input shape for a PR-bound
- * Phase. `pipelineContext` carries the five shared pipeline fields forward.
- * `phaseRunHandlerError` maps a Session failure into a `HandlerError` with a
- * phase-prefixed reason — the seam the pipeline routes on.
+ * The three helpers below carry data across the Session/pipeline seam.
+ *
+ * - `mrPhaseOptions`: builds `RunPhaseSessionInput` for a PR-bound Phase.
+ * - `pipelineContext`: copies the five shared pipeline fields onto the next state.
+ * - `phaseHandlerError`: maps `PhaseError` to `HandlerError` with a phase-prefixed reason.
  */
 import { HandlerError } from "../pipeline/errors";
 import type { PipelineContext } from "../pipeline/state";
@@ -36,7 +37,7 @@ export const pipelineContext = (state: PipelineContext): PipelineContext => ({
 });
 
 /** Map a Session error into a `HandlerError` with a phase-prefixed reason. */
-export const phaseRunHandlerError =
+export const phaseHandlerError =
   (prefix: string) =>
   (error: PhaseError): HandlerError =>
     new HandlerError({ reason: `${prefix}: ${describePhaseError(error)}` });

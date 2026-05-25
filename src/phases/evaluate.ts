@@ -11,7 +11,7 @@ import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
-import { mrPhaseOptions, phaseRunHandlerError, pipelineContext } from "./runner";
+import { mrPhaseOptions, phaseHandlerError, pipelineContext } from "./runner";
 
 /** Evaluate Phase Module — implements the evaluate state's transition. */
 export const evaluatePhase = (
@@ -22,7 +22,7 @@ export const evaluatePhase = (
     const verdict = yield* runPhaseSession(
       mrPhaseOptions(state, "evaluate", fixCycles),
       ["CONVERGED", "NEEDS_FIX"],
-    ).pipe(Effect.mapError(phaseRunHandlerError(`evaluate[${fixCycles}]`)));
+    ).pipe(Effect.mapError(phaseHandlerError(`evaluate[${fixCycles}]`)));
 
     if (verdict === "CONVERGED") {
       return { kind: "run_dogfood", ...pipelineContext(state) };

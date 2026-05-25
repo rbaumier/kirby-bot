@@ -10,7 +10,7 @@ import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
-import { mrPhaseOptions, phaseRunHandlerError, pipelineContext } from "./runner";
+import { mrPhaseOptions, phaseHandlerError, pipelineContext } from "./runner";
 
 /** Run_dogfood Phase Module — implements the run_dogfood state's transition. */
 export const runDogfoodPhase = (
@@ -20,7 +20,7 @@ export const runDogfoodPhase = (
     const verdict = yield* runPhaseSession(
       mrPhaseOptions(state, "run_dogfood", 0),
       ["DOGFOOD_PASS", "DOGFOOD_FAIL"],
-    ).pipe(Effect.mapError(phaseRunHandlerError("run_dogfood")));
+    ).pipe(Effect.mapError(phaseHandlerError("run_dogfood")));
 
     if (verdict === "DOGFOOD_PASS") {
       return { kind: "merge", ...pipelineContext(state) };

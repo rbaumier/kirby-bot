@@ -74,6 +74,7 @@ export type State =
       readonly branch: string | null;
       readonly worktree: string | null;
       readonly pullRequestIid: number | null;
+      readonly fixCycles: number | null;
       readonly reason: string;
     }
   | { readonly kind: "end" };
