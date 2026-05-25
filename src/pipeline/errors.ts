@@ -6,6 +6,8 @@
  * longer spread `{issue, branch, worktree, pullRequestIid}`.
  */
 import { Data } from "effect";
+import type { ProviderCallError } from "../provider/types";
+import { describeProviderError } from "../provider/types";
 
 /**
  * A handler decided the issue cannot proceed. `reason` enters the failed state.
@@ -21,3 +23,9 @@ export class HandlerError extends Data.TaggedError("HandlerError")<{
   readonly worktree?: string;
   readonly pullRequestIid?: number;
 }> {}
+
+/** Map a `ProviderCallError` into a `HandlerError` with a phase-prefixed reason. */
+export const providerHandlerError =
+  (prefix: string) =>
+  (error: ProviderCallError): HandlerError =>
+    new HandlerError({ reason: `${prefix}: ${describeProviderError(error)}` });

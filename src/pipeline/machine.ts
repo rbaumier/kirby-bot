@@ -9,7 +9,7 @@ import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
-import { step } from "./handlers";
+import { step } from "./step";
 import type { IssueRef, State } from "./state";
 
 /** Services every machine-level Effect requires. */

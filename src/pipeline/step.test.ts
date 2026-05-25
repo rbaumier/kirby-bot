@@ -11,7 +11,7 @@ import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
 import { RunArtifacts, type RunArtifactsShape } from "../run-artifacts";
-import { failedFieldsOf, step } from "./handlers";
+import { failedFieldsOf, step } from "./step";
 import type { State } from "./state";
 
 const noopRunArtifacts: RunArtifactsShape = {
