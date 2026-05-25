@@ -11,7 +11,7 @@ import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
 import { RunArtifacts, type RunArtifactsShape } from "../run-artifacts";
-import { UnexpectedVerdictError, describePhaseRunError } from "./errors";
+import { UnexpectedVerdictError, describePhaseError } from "../session/errors";
 import { failedFieldsOf, step } from "./handlers";
 import type { State } from "./state";
 
@@ -118,14 +118,14 @@ const makeClaimFailingProvider = (): Layer.Layer<GitProvider> =>
     resolveDiscussion: () => Effect.die("fake: resolveDiscussion"),
   });
 
-describe("describePhaseRunError", () => {
+describe("describePhaseError", () => {
   it("formats UnexpectedVerdictError with the verdict + expected list", () => {
     const error = new UnexpectedVerdictError({
       phase: "review",
       verdict: "BLOCKER_SUSPECTED",
       expected: ["REVIEW_DONE"],
     });
-    expect(describePhaseRunError(error)).toBe(
+    expect(describePhaseError(error)).toBe(
       "unexpected verdict BLOCKER_SUSPECTED (expected: REVIEW_DONE)",
     );
   });

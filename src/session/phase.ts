@@ -17,7 +17,13 @@ import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
-import { BudgetExhausted, NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
+import {
+  BudgetExhausted,
+  NoVerdict,
+  SessionTimedOut,
+  UnexpectedVerdictError,
+  WorkspaceError,
+} from "./errors";
 import { renderPrompt } from "./prompt";
 import { bootClaudeSession, createSession, killSession } from "./tmux";
 import type { VerdictToken } from "./verdict";
@@ -59,7 +65,7 @@ const writeStopHookConfig = (
  * still left for the issue. There is deliberately no floor — when the result
  * is below one poll interval, `runPhaseSession` refuses to spawn.
  */
-export const phaseTimeoutMs = (phase: Phase, deadlineMs: number): number =>
+const phaseTimeoutMs = (phase: Phase, deadlineMs: number): number =>
   Math.min(PHASE_CAP_MINUTES[phase] * 60 * 1000, deadlineMs - Date.now());
 
 /** Input for {@link pollSentinel}. */
@@ -116,23 +122,28 @@ export type RunPhaseSessionInput = {
   readonly issueIid: number;
   readonly worktree: string;
   readonly iteration: number;
-  readonly timeoutMs: number;
+  readonly deadline: number;
   readonly replacements: Record<string, string>;
 };
 
 /**
- * Run one phase as a fresh `claude` tmux session and return its verdict.
+ * Run one phase as a fresh `claude` tmux session and return a verdict narrowed
+ * to the expected set.
  *
- * The tmux session is an `acquireUseRelease` resource.
- * `createSession` is the acquire, `killSession` the release —
- * guaranteed to run on every exit of `use` (verdict, timeout,
- * defect, or interruption).
+ * The tmux session is an `acquireUseRelease` resource. `createSession` is the
+ * acquire, `killSession` the release — guaranteed to run on every exit of
+ * `use` (verdict, timeout, defect, or interruption).
+ *
+ * An out-of-set verdict fails with `UnexpectedVerdictError` so callers route
+ * on tagged data rather than re-pattern-matching a verdict string.
  */
-export const runPhaseSession = (
+export const runPhaseSession = <const V extends VerdictToken>(
   input: RunPhaseSessionInput,
-): Effect.Effect<VerdictToken, PhaseError, RunArtifacts> =>
+  expected: readonly V[],
+): Effect.Effect<V, PhaseError, RunArtifacts> =>
   Effect.gen(function* () {
-    const { phase, issueIid, worktree, iteration, timeoutMs, replacements } = input;
+    const { phase, issueIid, worktree, iteration, deadline, replacements } = input;
+    const timeoutMs = phaseTimeoutMs(phase, deadline);
 
     // A budget below one poll interval can never yield a verdict in time —
     // fail now rather than spawn a session that is killed mid-boot.
@@ -157,7 +168,7 @@ export const runPhaseSession = (
     // Clear any stale session of the same name from a crashed prior run.
     yield* killSession(session);
 
-    return yield* Effect.acquireUseRelease(
+    const verdict = yield* Effect.acquireUseRelease(
       createSession(session, worktree),
       () =>
         Effect.gen(function* () {
@@ -171,4 +182,10 @@ export const runPhaseSession = (
         }),
       () => killSession(session),
     );
+
+    const narrowed = expected.find((candidate) => candidate === verdict);
+    if (narrowed === undefined) {
+      return yield* Effect.fail(new UnexpectedVerdictError({ phase, verdict, expected }));
+    }
+    return narrowed;
   });

@@ -11,7 +11,8 @@ import { ISSUE_BUDGET_MS } from "../config";
 import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
-import { phaseRunHandlerError, runPhase } from "./runner";
+import { runPhaseSession } from "../session/phase";
+import { phaseRunHandlerError } from "./runner";
 
 /** Run_impl Phase Module — implements the run_impl state's transition. */
 export const runImplPhase = (
@@ -21,9 +22,9 @@ export const runImplPhase = (
     const { issue, branch, worktree } = state;
     const deadline = Date.now() + ISSUE_BUDGET_MS;
 
-    const verdict = yield* runPhase(
-      "run_impl",
+    const verdict = yield* runPhaseSession(
       {
+        phase: "run_impl",
         issueIid: issue.iid,
         worktree,
         deadline,

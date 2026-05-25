@@ -23,7 +23,7 @@ Known tokens: `READY_FOR_REVIEW`, `BLOCKER_SUSPECTED`, `REVIEW_DONE`, `CONVERGED
 
 ### Session
 
-The mechanism a Phase uses to run a single `claude` invocation in isolation: spawn a tmux session with the rendered prompt, register a Stop hook that writes the last assistant message to a sentinel, poll the sentinel, parse the Verdict, kill the tmux. The Session Module hides tmux/sentinel/verdict-parsing behind a small interface; the Phase only sees `run(prompt, timeout, allowedVerdicts) → Effect<Verdict, SessionError>`.
+The mechanism a Phase uses to run a single `claude` invocation in isolation: spawn a tmux session with the rendered prompt, register a Stop hook that writes the last assistant message to a sentinel, poll the sentinel, parse the Verdict, kill the tmux. The Session Module hides tmux/sentinel/verdict-parsing behind a small interface; the Phase only sees `runPhaseSession(input, expected) → Effect<V, PhaseError, RunArtifacts>`, where `V extends VerdictToken` is narrowed to the expected set and an off-set verdict fails with `UnexpectedVerdictError`.
 
 A Session is per-Phase — there is no long-lived Session across Phases. Each Phase mints one.
 
