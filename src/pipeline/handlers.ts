@@ -127,17 +127,24 @@ const findOpenPullRequest = (
  */
 const excludeStopHookConfig = (worktree: string): Effect.Effect<void> =>
   runShellGit(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).pipe(
-    Effect.flatMap((probe) => {
-      const excludeFile = join(probe.stdout.trim(), "info", "exclude");
-      return Effect.tryPromise(async () => {
-        const current = existsSync(excludeFile) ? await readFile(excludeFile, "utf8") : "";
-        if (!current.split("\n").includes(".claude/settings.local.json")) {
-          const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-          await appendFile(excludeFile, `${separator}.claude/settings.local.json\n`);
-        }
-      });
+    Effect.matchEffect({
+      // Probe failure: silent skip — the worktree may be transiently unreadable.
+      onFailure: () => Effect.void,
+      onSuccess: (probe) => {
+        const excludeFile = join(probe.stdout.trim(), "info", "exclude");
+        return Effect.tryPromise(async () => {
+          const current = existsSync(excludeFile) ? await readFile(excludeFile, "utf8") : "";
+          if (!current.split("\n").includes(".claude/settings.local.json")) {
+            const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+            await appendFile(excludeFile, `${separator}.claude/settings.local.json\n`);
+          }
+        }).pipe(
+          Effect.catchAll(() =>
+            Console.error("  ⚠ could not update the git exclude for .claude/"),
+          ),
+        );
+      },
     }),
-    Effect.catchAll(() => Console.error("  ⚠ could not update the git exclude for .claude/")),
   );
 
 // ─── State handlers ────────────────────────────────────────────────────────

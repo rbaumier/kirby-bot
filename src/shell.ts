@@ -1,17 +1,16 @@
 /**
  * Shell.ts — the one Effect-wrapped way to run an external command.
  *
- * Every orchestrator shell-out (tmux, git, glab, jq, rm) goes through
- * here. The codebase has a single consistent boundary to the OS instead
- * of `$`-templates scattered across call sites.
- *
  * Two surfaces:
  *
- *  - {@link runShell} — strict default. Fails with a tagged
- *    {@link ShellError} on non-zero exit, spawn failure, or timeout.
- *    Use this everywhere a non-zero exit is an actual problem.
- *  - {@link runShellAllowingFailure} — opt-out for cleanup paths where
- *    every outcome is acceptable. Returns a {@link CommandResult}.
+ *  - {@link runShell} — strict default. Fails with a tagged {@link ShellError}.
+ *    The three failure modes are detected structurally, not via sentinel
+ *    exit codes. A real process exiting 124 or 127 is reported faithfully
+ *    as `ShellNonZeroExit`.
+ *  - {@link runShellAllowingFailure} — opt-out for cleanup paths. Folds
+ *    every outcome into a {@link CommandResult}. The sentinel codes 124
+ *    and 127 stand in for timeout and spawn failure for the callers that
+ *    don't distinguish those from a real process exit.
  */
 import type { $ } from "bun";
 import { Data, Effect } from "effect";
@@ -25,21 +24,16 @@ export type CommandResult = {
 };
 
 /** The streams of a successful command (exit 0). */
-export type ShellOutput = {
-  readonly stdout: string;
-  readonly stderr: string;
-};
+export type ShellOutput = Omit<CommandResult, "exitCode">;
 
-/** Exit codes for the two failure modes that are not a real process exit. */
+/** Conventional exit codes used by {@link runShellAllowingFailure} for the
+ * two non-process failure modes. The permissive contract maps spawn/timeout
+ * back onto these sentinels so callers can keep the `exitCode === 0` idiom. */
 const SPAWN_FAILURE_EXIT_CODE = 127;
 const EXIT_CODE_TIMED_OUT = 124;
 
 /** The command ran and exited with a non-zero status. */
-export class ShellNonZeroExit extends Data.TaggedError("ShellNonZeroExit")<{
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}> {}
+export class ShellNonZeroExit extends Data.TaggedError("ShellNonZeroExit")<CommandResult> {}
 
 /** The command could not be spawned (missing binary, OS error). */
 export class ShellSpawnFailed extends Data.TaggedError("ShellSpawnFailed")<{
@@ -54,22 +48,14 @@ export class ShellTimeout extends Data.TaggedError("ShellTimeout")<{
 /** The complete error channel of {@link runShell}. */
 export type ShellError = ShellNonZeroExit | ShellSpawnFailed | ShellTimeout;
 
-/** Pick the first non-empty trimmed stream, falling back to a marker. */
-const firstNonEmpty = (...candidates: readonly string[]): string => {
-  for (const candidate of candidates) {
-    const trimmed = candidate.trim();
-    if (trimmed !== "") {
-      return trimmed;
-    }
-  }
-  return "<no output>";
-};
-
 /** A one-line, human-readable description of any shell failure. */
 export const describeShellError = (error: ShellError): string => {
   switch (error._tag) {
     case "ShellNonZeroExit": {
-      return `exit ${error.exitCode}: ${firstNonEmpty(error.stderr, error.stdout)}`;
+      const detail =
+        [error.stderr.trim(), error.stdout.trim()].find((stream) => stream !== "") ??
+        "<no output>";
+      return `exit ${error.exitCode}: ${detail}`;
     }
     case "ShellSpawnFailed": {
       return `spawn failed — ${error.cause}`;
@@ -85,85 +71,89 @@ export const describeShellError = (error: ShellError): string => {
 };
 
 /**
- * Run a command and capture its result. Never fails. A non-zero exit,
- * a spawn failure, or a timeout are all reported as a {@link CommandResult}
- * — the caller decides what counts as an error.
+ * Run a command, failing with a tagged {@link ShellError}. The three failure
+ * modes are detected at their structural source — `Effect.tryPromise.catch`
+ * for spawn errors, `Effect.timeoutFail` for timeouts, the success-channel
+ * exit code for process failures — so the three tags are unambiguous.
  *
- * Use only for cleanup paths where every outcome is acceptable. The
- * default for the codebase is {@link runShell}.
- *
- * Two guards beyond `.nothrow()` (which already suppresses non-zero exits):
- *  - the inner try/catch turns a spawn-level throw (missing binary, OS
- *    error) into exit code {@link SPAWN_FAILURE_EXIT_CODE}.
- *  - a {@link COMMAND_TIMEOUT_MS} timeout turns a hung command into
- *    exit code {@link EXIT_CODE_TIMED_OUT}, preventing a freeze.
+ * `build` is a thunk so the `$` template is constructed inside the Effect.
  */
-export const runShellAllowingFailure = (
+export const runShell = (
   build: () => ReturnType<typeof $>,
-): Effect.Effect<CommandResult> =>
-  Effect.promise(async (): Promise<CommandResult> => {
-    try {
+): Effect.Effect<ShellOutput, ShellError> =>
+  Effect.tryPromise({
+    try: async (): Promise<CommandResult> => {
       const output = await build().nothrow().quiet();
       return {
         exitCode: output.exitCode,
         stdout: output.stdout.toString(),
         stderr: output.stderr.toString(),
       };
-    } catch (error: unknown) {
-      return {
-        exitCode: SPAWN_FAILURE_EXIT_CODE,
-        stdout: "",
-        stderr: String(error),
-      };
-    }
+    },
+    catch: (cause: unknown): ShellSpawnFailed =>
+      new ShellSpawnFailed({ cause: String(cause) }),
   }).pipe(
-    Effect.timeoutTo({
+    Effect.timeoutFail({
       duration: `${COMMAND_TIMEOUT_MS} millis`,
-      onSuccess: (result: CommandResult) => result,
-      onTimeout: (): CommandResult => ({
-        exitCode: EXIT_CODE_TIMED_OUT,
-        stdout: "",
-        stderr: "command timed out",
-      }),
+      onTimeout: (): ShellTimeout => new ShellTimeout({ timeoutMs: COMMAND_TIMEOUT_MS }),
     }),
+    Effect.flatMap(
+      (result): Effect.Effect<ShellOutput, ShellError> =>
+        result.exitCode === 0
+          ? Effect.succeed({ stdout: result.stdout, stderr: result.stderr })
+          : Effect.fail(
+              new ShellNonZeroExit({
+                exitCode: result.exitCode,
+                stdout: result.stdout,
+                stderr: result.stderr,
+              }),
+            ),
+    ),
   );
 
 /**
- * Run a command, failing with a tagged {@link ShellError} on a non-zero
- * exit, spawn failure, or timeout. The default shell-out for the
- * codebase — handlers/preflight/tmux all use this so non-zero exits
- * surface in their typed error channel.
+ * Run a command and capture its result without failing. Spawn failures and
+ * timeouts are folded back into the success channel via sentinel exit codes
+ * ({@link SPAWN_FAILURE_EXIT_CODE} / {@link EXIT_CODE_TIMED_OUT}).
  *
- * Built on top of {@link runShellAllowingFailure}; the two sentinel exit
- * codes ({@link SPAWN_FAILURE_EXIT_CODE}, {@link EXIT_CODE_TIMED_OUT}) are
- * routed back to their respective tagged variants. Note: a real process
- * that itself exits 124 or 127 is indistinguishable here — the convention
- * is preserved from the previous API.
+ * Use only for cleanup paths where every outcome is acceptable. For typed
+ * errors prefer {@link runShell}.
  */
-export const runShell = (
+export const runShellAllowingFailure = (
   build: () => ReturnType<typeof $>,
-): Effect.Effect<ShellOutput, ShellError> =>
-  runShellAllowingFailure(build).pipe(
-    Effect.flatMap((result): Effect.Effect<ShellOutput, ShellError> => {
-      switch (result.exitCode) {
-        case 0: {
-          return Effect.succeed({ stdout: result.stdout, stderr: result.stderr });
+): Effect.Effect<CommandResult> =>
+  runShell(build).pipe(
+    Effect.matchEffect({
+      onSuccess: ({ stdout, stderr }) =>
+        Effect.succeed<CommandResult>({ exitCode: 0, stdout, stderr }),
+      onFailure: (error): Effect.Effect<CommandResult> => {
+        switch (error._tag) {
+          case "ShellNonZeroExit": {
+            return Effect.succeed({
+              exitCode: error.exitCode,
+              stdout: error.stdout,
+              stderr: error.stderr,
+            });
+          }
+          case "ShellTimeout": {
+            return Effect.succeed({
+              exitCode: EXIT_CODE_TIMED_OUT,
+              stdout: "",
+              stderr: "command timed out",
+            });
+          }
+          case "ShellSpawnFailed": {
+            return Effect.succeed({
+              exitCode: SPAWN_FAILURE_EXIT_CODE,
+              stdout: "",
+              stderr: error.cause,
+            });
+          }
+          default: {
+            const _exhaustive: never = error;
+            return Effect.die(`unhandled shell error: ${String(_exhaustive)}`);
+          }
         }
-        case SPAWN_FAILURE_EXIT_CODE: {
-          return Effect.fail(new ShellSpawnFailed({ cause: result.stderr }));
-        }
-        case EXIT_CODE_TIMED_OUT: {
-          return Effect.fail(new ShellTimeout({ timeoutMs: COMMAND_TIMEOUT_MS }));
-        }
-        default: {
-          return Effect.fail(
-            new ShellNonZeroExit({
-              exitCode: result.exitCode,
-              stdout: result.stdout,
-              stderr: result.stderr,
-            }),
-          );
-        }
-      }
+      },
     }),
   );

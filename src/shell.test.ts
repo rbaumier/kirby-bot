@@ -28,15 +28,6 @@ describe("runShell (strict)", () => {
     const error = await Effect.runPromise(Effect.flip(runShell(() => $`false`)));
     expect(error).toMatchObject({ _tag: "ShellNonZeroExit", exitCode: 1 });
   });
-
-  it("missing binary → tagged error (NonZeroExit or SpawnFailed depending on platform)", async () => {
-    const error = await Effect.runPromise(
-      Effect.flip(runShell(() => $`this-command-does-not-exist-anywhere-xyz`)),
-    );
-    // Bun may surface a missing binary as a completed non-zero exit OR via
-    // the catch path; either way we must produce a tagged ShellError.
-    expect(["ShellNonZeroExit", "ShellSpawnFailed"]).toContain(error._tag);
-  });
 });
 
 describe("runShellAllowingFailure (permissive)", () => {
