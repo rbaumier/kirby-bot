@@ -127,11 +127,6 @@ disabled = true
 # https://github.com/rbaumier/comply/issues/280
 disabled = true
 
-[rules.no-while-loop]
-# The `prefer-while` rule contradicts this, and genuine polling loops (e.g.
-# sentinel file polling in v0-test.ts) need `while`.
-disabled = true
-
 [rules.no-array-callback-reference]
 # Fires on `Effect.forEach(iterable, callback)` reading the iterable as a
 # function reference. Effect.forEach is not Array.forEach — the first arg
