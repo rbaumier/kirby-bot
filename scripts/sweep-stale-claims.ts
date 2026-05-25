@@ -21,7 +21,7 @@ import { listIssuesByLabels, updateIssueLabels } from "../src/gitlab/api";
 import { describeGitLabError } from "../src/gitlab/errors";
 import type { ClaimedIssue } from "../src/recovery/stale";
 import { selectStale, worktreePathsForIssue } from "../src/recovery/stale";
-import { runShell } from "../src/shell";
+import { runShellAllowingFailure } from "../src/shell";
 
 /** Staleness threshold — 2h, safely above the 90-minute per-issue budget. */
 const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
@@ -40,7 +40,7 @@ const listClaimedIssues = Effect.gen(function* () {
 /** Remove a single worktree by path. Logs success or failure. */
 const removeOneWorktree = (path: string): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const removed = yield* runShell(() => $`git worktree remove --force ${path}`);
+    const removed = yield* runShellAllowingFailure(() => $`git worktree remove --force ${path}`);
     if (removed.exitCode === 0) {
       yield* Console.log(`    removed worktree ${path}`);
     } else {
@@ -51,7 +51,7 @@ const removeOneWorktree = (path: string): Effect.Effect<void> =>
 /** Force-remove an issue's orphan worktree(s). Best-effort, and logged. */
 const removeOrphanWorktrees = (iid: number): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const listed = yield* runShell(() => $`git worktree list --porcelain`);
+    const listed = yield* runShellAllowingFailure(() => $`git worktree list --porcelain`);
     if (listed.exitCode !== 0) {
       yield* Console.error("    worktree cleanup skipped — `git worktree list` failed");
       return;
@@ -59,7 +59,7 @@ const removeOrphanWorktrees = (iid: number): Effect.Effect<void> =>
     for (const path of worktreePathsForIssue(listed.stdout, iid)) {
       yield* removeOneWorktree(path);
     }
-    yield* runShell(() => $`git worktree prune`);
+    yield* runShellAllowingFailure(() => $`git worktree prune`);
   });
 
 /** Recover one crash-orphaned issue: unlabel it, then clean its worktree. */

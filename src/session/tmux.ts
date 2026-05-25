@@ -9,20 +9,30 @@
  */
 import { $ } from "bun";
 import { Effect } from "effect";
-import { runShell } from "../shell";
+import { describeShellError, runShell, runShellAllowingFailure } from "../shell";
 import { TmuxError } from "./errors";
 
-/** Run one tmux command, failing {@link TmuxError} on a non-zero exit. */
+/**
+ * Run one tmux command, failing {@link TmuxError} on a non-zero exit.
+ *
+ * For a real non-zero exit, `stderr` carries the trimmed process stderr
+ * — preserves the legacy contract. The two non-process modes (spawn,
+ * timeout) fall back to {@link describeShellError} as the reason.
+ */
 const tmuxStep = (
   step: string,
   build: () => ReturnType<typeof $>,
 ): Effect.Effect<void, TmuxError> =>
   runShell(build).pipe(
-    Effect.flatMap((result) =>
-      result.exitCode === 0
-        ? Effect.void
-        : Effect.fail(new TmuxError({ step, stderr: result.stderr.trim() })),
+    Effect.mapError(
+      (error) =>
+        new TmuxError({
+          step,
+          stderr:
+            error._tag === "ShellNonZeroExit" ? error.stderr.trim() : describeShellError(error),
+        }),
     ),
+    Effect.asVoid,
   );
 
 /** Create a detached tmux session rooted at `worktree`. */
@@ -31,11 +41,13 @@ export const createSession = (session: string, worktree: string): Effect.Effect<
 
 /** Kill a tmux session. Best-effort — a missing session is not an error. */
 export const killSession = (session: string): Effect.Effect<void> =>
-  runShell(() => $`tmux kill-session -t ${session}`).pipe(Effect.asVoid);
+  runShellAllowingFailure(() => $`tmux kill-session -t ${session}`).pipe(Effect.asVoid);
 
 /** Capture the visible content of a session's pane. */
 const capturePane = (session: string): Effect.Effect<string> =>
-  runShell(() => $`tmux capture-pane -p -t ${session}`).pipe(Effect.map((result) => result.stdout));
+  runShellAllowingFailure(() => $`tmux capture-pane -p -t ${session}`).pipe(
+    Effect.map((result) => result.stdout),
+  );
 
 /**
  * Wait for the `claude` TUI to settle before pasting into it.

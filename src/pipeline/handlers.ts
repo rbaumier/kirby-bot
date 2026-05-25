@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { Console, Effect, Option } from "effect";
 import type { Phase } from "../config";
 import { ISSUE_BUDGET_MS, LABELS, MAX_FIX_CYCLES, WORKTREES_DIR } from "../config";
-import { runShell } from "../shell";
+import { describeShellError, runShell, runShellAllowingFailure } from "../shell";
 import { GitProvider } from "../provider/provider";
 import { describeProviderError } from "../provider/types";
 import type { ProviderCallError, PullRequestRef } from "../provider/types";
@@ -126,26 +126,26 @@ const findOpenPullRequest = (
  * a failure is logged, not fatal.
  */
 const excludeStopHookConfig = (worktree: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const probe = yield* runShellGit(worktree, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir",
-    ]);
-    if (probe.exitCode !== 0) {
-      return;
-    }
-    const excludeFile = join(probe.stdout.trim(), "info", "exclude");
-    yield* Effect.tryPromise(async () => {
-      const current = existsSync(excludeFile) ? await readFile(excludeFile, "utf8") : "";
-      if (!current.split("\n").includes(".claude/settings.local.json")) {
-        const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-        await appendFile(excludeFile, `${separator}.claude/settings.local.json\n`);
-      }
-    }).pipe(
-      Effect.catchAll(() => Console.error("  ⚠ could not update the git exclude for .claude/")),
-    );
-  });
+  runShellGit(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).pipe(
+    Effect.matchEffect({
+      // Probe failure: silent skip — the worktree may be transiently unreadable.
+      onFailure: () => Effect.void,
+      onSuccess: (probe) => {
+        const excludeFile = join(probe.stdout.trim(), "info", "exclude");
+        return Effect.tryPromise(async () => {
+          const current = existsSync(excludeFile) ? await readFile(excludeFile, "utf8") : "";
+          if (!current.split("\n").includes(".claude/settings.local.json")) {
+            const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+            await appendFile(excludeFile, `${separator}.claude/settings.local.json\n`);
+          }
+        }).pipe(
+          Effect.catchAll(() =>
+            Console.error("  ⚠ could not update the git exclude for .claude/"),
+          ),
+        );
+      },
+    }),
+  );
 
 // ─── State handlers ────────────────────────────────────────────────────────
 
@@ -226,41 +226,42 @@ const onBranchWorktree = (
     // Re-entrancy: a crashed prior run may have left this branch and worktree
     // behind (the sweep removes only the worktree, not the branch). Clear both
     // so the `git worktree add -b` below starts from a clean slate.
-    yield* runShell(() => $`git worktree remove --force ${worktree}`);
-    yield* runShell(() => $`git worktree prune`);
-    yield* runShell(() => $`git branch -D ${branch}`);
+    yield* runShellAllowingFailure(() => $`git worktree remove --force ${worktree}`);
+    yield* runShellAllowingFailure(() => $`git worktree prune`);
+    yield* runShellAllowingFailure(() => $`git branch -D ${branch}`);
 
-    const fetched = yield* runShell(() => $`git fetch origin ${env.defaultBranch}`);
-    if (fetched.exitCode !== 0) {
-      yield* Console.error(
-        `  ⚠ git fetch failed — branching off a possibly-stale origin/${env.defaultBranch}`,
-      );
-    }
-    const added = yield* runShell(
-      () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,
+    yield* runShell(() => $`git fetch origin ${env.defaultBranch}`).pipe(
+      Effect.catchAll(() =>
+        Console.error(
+          `  ⚠ git fetch failed — branching off a possibly-stale origin/${env.defaultBranch}`,
+        ),
+      ),
     );
-    if (added.exitCode !== 0) {
-      return yield* Effect.fail(
-        new HandlerError({
-          reason: `branch_worktree: worktree add failed — ${added.stderr.trim()}`,
-        }),
-      );
-    }
+    yield* runShell(
+      () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,
+    ).pipe(
+      Effect.mapError(
+        (error): HandlerError =>
+          new HandlerError({
+            reason: `branch_worktree: worktree add failed — ${describeShellError(error)}`,
+          }),
+      ),
+    );
 
     yield* excludeStopHookConfig(worktree);
 
-    const pushed = yield* runShellGit(worktree, ["push", "-u", "origin", branch]);
-    if (pushed.exitCode !== 0) {
-      // branch/worktree exist on disk by now — surface them so onFailed can
-      // print the path the operator needs to inspect.
-      return yield* Effect.fail(
-        new HandlerError({
-          reason: `branch_worktree: push failed — ${pushed.stderr.trim()}`,
-          branch,
-          worktree,
-        }),
-      );
-    }
+    // Push: branch/worktree exist on disk by now — surface them on the error
+    // so `onFailed` can print the path the operator needs to inspect.
+    yield* runShellGit(worktree, ["push", "-u", "origin", branch]).pipe(
+      Effect.mapError(
+        (error): HandlerError =>
+          new HandlerError({
+            reason: `branch_worktree: push failed — ${describeShellError(error)}`,
+            branch,
+            worktree,
+          }),
+      ),
+    );
     return { kind: "run_impl", issue, branch, worktree };
   });
 
@@ -476,11 +477,12 @@ const onDone = (
     yield* Effect.forEach([LABELS.pickedByAgent, LABELS.readyForAgent], unlabelOne, {
       discard: true,
     });
-    const removed = yield* runShell(() => $`git worktree remove ${worktree} --force`);
-    if (removed.exitCode !== 0) {
-      yield* Console.error(`  ⚠ worktree removal failed: ${removed.stderr.trim().slice(0, 160)}`);
-    }
-    yield* runShell(() => $`git worktree prune`);
+    yield* runShell(() => $`git worktree remove ${worktree} --force`).pipe(
+      Effect.catchAll((error) =>
+        Console.error(`  ⚠ worktree removal failed: ${describeShellError(error).slice(0, 160)}`),
+      ),
+    );
+    yield* runShellAllowingFailure(() => $`git worktree prune`);
     yield* Console.log(`  ✓ #${issue.iid} merged (!${pullRequestIid})`);
     return { kind: STATE_FETCH_QUEUE };
   });
