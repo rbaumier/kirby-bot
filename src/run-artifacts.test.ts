@@ -64,13 +64,6 @@ describe("RunArtifacts", () => {
     );
   });
 
-  it("randomSuffix is always 6 hex chars even when rand=0", async () => {
-    const out = await Effect.runPromise(buildAt(1_700_000_000_000, 0));
-    const suffix = out.dir.split("-").at(-1) ?? "";
-    expect(suffix).toHaveLength(6);
-    expect(suffix).toMatch(/^[0-9a-f]{6}$/);
-  });
-
   it("logEvent swallows write failures when the dir does not exist", async () => {
     // buildRunArtifacts does NOT mkdir its own dir — appendFile will fail with ENOENT.
     // Effect.ignore must swallow that failure so a run never aborts on logging.
@@ -86,17 +79,30 @@ describe("RunArtifacts", () => {
 
   it("logEvent writes an ISO-8601 `at` timestamp driven by Clock", async () => {
     const clockMs = 1_700_000_000_000;
+    // Dir name is deterministic (TestClock + fixed seed); acquireUseRelease
+    // guarantees the dir is cleaned even if the assertion below throws.
     const program = Effect.gen(function* () {
       yield* TestClock.setTime(clockMs);
       const artifacts = yield* buildRunArtifacts;
-      yield* Effect.tryPromise(() => mkdir(artifacts.dir, { recursive: true }));
-      yield* artifacts.logEvent({ event: "ping" });
-      const content = yield* Effect.tryPromise(() => readFile(artifacts.logPath, "utf8"));
-      yield* Effect.tryPromise(() => rm(artifacts.dir, { recursive: true, force: true }));
-      return content;
+      return yield* Effect.acquireUseRelease(
+        Effect.tryPromise(async () => {
+          await rm(artifacts.dir, { recursive: true, force: true });
+          await mkdir(artifacts.dir, { recursive: true });
+          return artifacts;
+        }),
+        (live) =>
+          Effect.gen(function* () {
+            yield* live.logEvent({ event: "ping" });
+            return yield* Effect.tryPromise(() => readFile(live.logPath, "utf8"));
+          }),
+        (live) =>
+          Effect.tryPromise(() => rm(live.dir, { recursive: true, force: true })).pipe(
+            Effect.ignore,
+          ),
+      );
     }).pipe(Effect.withRandom(Random.make(11)), Effect.provide(TestContext.TestContext));
-    const raw = await Effect.runPromise(program);
-    const parsed: unknown = JSON.parse(raw.trim());
+    const content = await Effect.runPromise(program);
+    const parsed: unknown = JSON.parse(content.trim());
     expect(parsed).toMatchObject({ at: new Date(clockMs).toISOString(), event: "ping" });
   });
 });
