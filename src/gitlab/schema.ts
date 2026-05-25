@@ -24,7 +24,7 @@ export const IssueSchema = z.object({
 export const MergeRequestSchema = z.object({
   iid: z.number(),
   web_url: z.string().trim().min(1).default(""),
-  state: z.string().trim().min(1).default(""),
+  state: z.enum(["opened", "closed", "merged", "locked"]),
 });
 
 /** A merge request as the orchestrator consumes it. */
