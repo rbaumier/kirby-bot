@@ -3,8 +3,8 @@
  * Mr-discussion.ts — a thin CLI over the GitLab MR-discussion operations.
  *
  * The phase prompts call this (`review` posts, `evaluate`/`fix` reply and
- * resolve). The logic lives in `src/gitlab/discussion-api.ts`; this file only
- * parses argv and prints the result.
+ * resolve). The logic lives in `src/gitlab/api.ts`; this file only parses
+ * argv and prints the result.
  *
  *   post    --mr <iid> --body <text>
  *   list    --mr <iid>
@@ -18,7 +18,7 @@ import {
   postDiscussion,
   replyToDiscussion,
   resolveDiscussion,
-} from "../src/gitlab/discussion-api";
+} from "../src/gitlab/api";
 
 /** The CLI was invoked with a missing or malformed argument. */
 class UsageError extends Data.TaggedError("UsageError")<{ readonly message: string }> {}
