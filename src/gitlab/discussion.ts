@@ -3,7 +3,7 @@
  *
  * `toDiscussionSummary` maps raw GitLab discussion JSON to the trimmed shape
  * the evaluate/fix phases reason about. Pure and bun-free, so it unit-tests
- * under Node — the `glab api` operations live in `discussion-api.ts`.
+ * under Node — the `glab api` operations live in `api.ts`.
  */
 
 /** A discussion reduced to what the pipeline reasons about. */
