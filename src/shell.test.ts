@@ -12,7 +12,6 @@ import { Effect } from "effect";
 import {
   describeShellError,
   runShell,
-  runShellAllowingFailure,
   ShellNonZeroExit,
   ShellSpawnFailed,
   ShellTimeout,
@@ -27,19 +26,6 @@ describe("runShell (strict)", () => {
   it("exit non-zero → ShellNonZeroExit with the exit code", async () => {
     const error = await Effect.runPromise(Effect.flip(runShell(() => $`false`)));
     expect(error).toMatchObject({ _tag: "ShellNonZeroExit", exitCode: 1 });
-  });
-});
-
-describe("runShellAllowingFailure (permissive)", () => {
-  it("never fails — returns CommandResult on success", async () => {
-    const out = await Effect.runPromise(runShellAllowingFailure(() => $`printf ok`));
-    expect(out.exitCode).toBe(0);
-    expect(out.stdout).toBe("ok");
-  });
-
-  it("never fails — returns CommandResult on non-zero exit", async () => {
-    const out = await Effect.runPromise(runShellAllowingFailure(() => $`false`));
-    expect(out.exitCode).toBe(1);
   });
 });
 

@@ -19,7 +19,7 @@ import { LABELS, WORKTREES_DIR } from "../../config";
 import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
 import type { ProviderCallError } from "../../provider/types";
-import { describeShellError, runShell, runShellAllowingFailure } from "../../shell";
+import { describeShellError, runShell } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
 import { branchName, worktreePath } from "../naming";
 import type { IssueRef, State } from "../state";
@@ -131,9 +131,9 @@ export const onBranchCreate = (
     // Re-entrancy: a crashed prior run may have left this branch and worktree
     // behind (the sweep removes only the worktree, not the branch). Clear both
     // so the `git worktree add -b` below starts from a clean slate.
-    yield* runShellAllowingFailure(() => $`git worktree remove --force ${worktree}`);
-    yield* runShellAllowingFailure(() => $`git worktree prune`);
-    yield* runShellAllowingFailure(() => $`git branch -D ${branch}`);
+    yield* runShell(() => $`git worktree remove --force ${worktree}`).pipe(Effect.ignore);
+    yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
+    yield* runShell(() => $`git branch -D ${branch}`).pipe(Effect.ignore);
 
     yield* runShell(() => $`git fetch origin ${env.defaultBranch}`).pipe(
       Effect.catchAll(() =>

@@ -9,7 +9,7 @@
  */
 import { $ } from "bun";
 import { Effect } from "effect";
-import { describeShellError, runShell, runShellAllowingFailure } from "../shell";
+import { describeShellError, runShell } from "../shell";
 import { TmuxError } from "./errors";
 
 /**
@@ -41,12 +41,13 @@ export const createSession = (session: string, worktree: string): Effect.Effect<
 
 /** Kill a tmux session. Best-effort — a missing session is not an error. */
 export const killSession = (session: string): Effect.Effect<void> =>
-  runShellAllowingFailure(() => $`tmux kill-session -t ${session}`).pipe(Effect.asVoid);
+  runShell(() => $`tmux kill-session -t ${session}`).pipe(Effect.ignore);
 
-/** Capture the visible content of a session's pane. */
+/** Capture the visible content of a session's pane. Empty string on any failure. */
 const capturePane = (session: string): Effect.Effect<string> =>
-  runShellAllowingFailure(() => $`tmux capture-pane -p -t ${session}`).pipe(
+  runShell(() => $`tmux capture-pane -p -t ${session}`).pipe(
     Effect.map((result) => result.stdout),
+    Effect.catchAll(() => Effect.succeed("")),
   );
 
 /**

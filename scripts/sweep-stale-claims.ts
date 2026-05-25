@@ -15,13 +15,13 @@
  */
 import { $ } from "bun";
 import { BunRuntime } from "@effect/platform-bun";
-import { Console, Effect } from "effect";
+import { Console, Effect, Option } from "effect";
 import { LABELS } from "../src/config";
 import { listIssuesByLabels, updateIssueLabels } from "../src/gitlab/api";
 import { describeProviderError } from "../src/provider/types";
 import type { ClaimedIssue } from "../src/recovery/stale";
 import { selectStale, worktreePathsForIssue } from "../src/recovery/stale";
-import { runShellAllowingFailure } from "../src/shell";
+import { describeShellError, runShell } from "../src/shell";
 
 /** Staleness threshold — 2h, safely above the 90-minute per-issue budget. */
 const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
@@ -39,27 +39,26 @@ const listClaimedIssues = Effect.gen(function* () {
 
 /** Remove a single worktree by path. Logs success or failure. */
 const removeOneWorktree = (path: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const removed = yield* runShellAllowingFailure(() => $`git worktree remove --force ${path}`);
-    if (removed.exitCode === 0) {
-      yield* Console.log(`    removed worktree ${path}`);
-    } else {
-      yield* Console.error(`    could not remove worktree ${path}: ${removed.stderr.trim()}`);
-    }
-  });
+  runShell(() => $`git worktree remove --force ${path}`).pipe(
+    Effect.matchEffect({
+      onSuccess: () => Console.log(`    removed worktree ${path}`),
+      onFailure: (error) =>
+        Console.error(`    could not remove worktree ${path}: ${describeShellError(error)}`),
+    }),
+  );
 
 /** Force-remove an issue's orphan worktree(s). Best-effort, and logged. */
 const removeOrphanWorktrees = (iid: number): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const listed = yield* runShellAllowingFailure(() => $`git worktree list --porcelain`);
-    if (listed.exitCode !== 0) {
+    const listed = yield* runShell(() => $`git worktree list --porcelain`).pipe(Effect.option);
+    if (Option.isNone(listed)) {
       yield* Console.error("    worktree cleanup skipped — `git worktree list` failed");
       return;
     }
-    for (const path of worktreePathsForIssue(listed.stdout, iid)) {
+    for (const path of worktreePathsForIssue(listed.value.stdout, iid)) {
       yield* removeOneWorktree(path);
     }
-    yield* runShellAllowingFailure(() => $`git worktree prune`);
+    yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
   });
 
 /** Recover one crash-orphaned issue: unlabel it, then clean its worktree. */

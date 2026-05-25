@@ -16,7 +16,7 @@ import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
-import { describeShellError, runShell, runShellAllowingFailure } from "../../shell";
+import { describeShellError, runShell } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
 import type { State } from "../state";
 
@@ -138,7 +138,7 @@ export const onDone = (
         Console.error(`  ⚠ worktree removal failed: ${describeShellError(error).slice(0, 160)}`),
       ),
     );
-    yield* runShellAllowingFailure(() => $`git worktree prune`);
+    yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
     yield* Console.log(`  ✓ #${issue.iid} merged (!${pullRequestIid})`);
     return { kind: "fetch_queue" };
   });

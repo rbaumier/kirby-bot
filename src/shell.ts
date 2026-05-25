@@ -1,33 +1,27 @@
 /**
  * Shell.ts — the one Effect-wrapped way to run an external command.
  *
- * Two surfaces:
- *
- *  - {@link runShell} — strict default. Fails with a tagged {@link ShellError}.
- *    Each failure mode (non-zero exit, timeout, spawn failure) is its own
- *    tagged error — callers route on the tag, not on the exit code.
- *  - {@link runShellAllowingFailure} — opt-out for cleanup paths. Folds
- *    every outcome into a {@link CommandResult} with `exitCode === 0` for
- *    success and `exitCode === 1` for any failure mode. Callers that care
- *    about *which* failure read `stderr`; nothing reads the exit code beyond
- *    a binary success/fail check.
+ * {@link runShell} is the strict default. Each failure mode (non-zero exit,
+ * timeout, spawn failure) is its own tagged error — callers route on the tag,
+ * not on the exit code. Cleanup paths that don't care about the outcome use
+ * `runShell(...).pipe(Effect.ignore)`.
  */
 import type { $ } from "bun";
 import { Data, Effect } from "effect";
 import { COMMAND_TIMEOUT_MS } from "./config";
 
-/** The outcome of a finished command — exit code plus captured streams. */
-export type CommandResult = {
-  readonly exitCode: number;
+/** The streams of a successful command (exit 0). */
+export type ShellOutput = {
   readonly stdout: string;
   readonly stderr: string;
 };
 
-/** The streams of a successful command (exit 0). */
-export type ShellOutput = Omit<CommandResult, "exitCode">;
-
 /** The command ran and exited with a non-zero status. */
-export class ShellNonZeroExit extends Data.TaggedError("ShellNonZeroExit")<CommandResult> {}
+export class ShellNonZeroExit extends Data.TaggedError("ShellNonZeroExit")<{
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}> {}
 
 /** The command could not be spawned (missing binary, OS error). */
 export class ShellSpawnFailed extends Data.TaggedError("ShellSpawnFailed")<{
@@ -76,7 +70,7 @@ export const runShell = (
   build: () => ReturnType<typeof $>,
 ): Effect.Effect<ShellOutput, ShellError> =>
   Effect.tryPromise({
-    try: async (): Promise<CommandResult> => {
+    try: async () => {
       const output = await build().nothrow().quiet();
       return {
         exitCode: output.exitCode,
@@ -105,39 +99,3 @@ export const runShell = (
     ),
   );
 
-/**
- * Run a command and capture its result without failing. Every failure mode
- * folds into the success channel with `exitCode === 1`; the original detail
- * stays on `stderr`. Use only for cleanup paths where the binary success/fail
- * check is enough. For typed errors prefer {@link runShell}.
- */
-export const runShellAllowingFailure = (
-  build: () => ReturnType<typeof $>,
-): Effect.Effect<CommandResult> =>
-  runShell(build).pipe(
-    Effect.matchEffect({
-      onSuccess: ({ stdout, stderr }) =>
-        Effect.succeed<CommandResult>({ exitCode: 0, stdout, stderr }),
-      onFailure: (error): Effect.Effect<CommandResult> => {
-        switch (error._tag) {
-          case "ShellNonZeroExit": {
-            return Effect.succeed({
-              exitCode: error.exitCode,
-              stdout: error.stdout,
-              stderr: error.stderr,
-            });
-          }
-          case "ShellTimeout": {
-            return Effect.succeed({ exitCode: 1, stdout: "", stderr: "command timed out" });
-          }
-          case "ShellSpawnFailed": {
-            return Effect.succeed({ exitCode: 1, stdout: "", stderr: error.cause });
-          }
-          default: {
-            const _exhaustive: never = error;
-            return Effect.die(`unhandled shell error: ${String(_exhaustive)}`);
-          }
-        }
-      },
-    }),
-  );
