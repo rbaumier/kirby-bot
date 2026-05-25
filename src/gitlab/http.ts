@@ -19,8 +19,7 @@
 import { $ } from "bun";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { Effect, Schedule } from "effect";
-import type { z } from "zod";
+import { Effect, ParseResult, Schedule, Schema } from "effect";
 import {
   GitLabConfigError,
   type GitLabError,
@@ -177,10 +176,34 @@ const buildUrl = (config: GitLabConfig, request: GitLabRequest): string => {
   return `${config.baseUrl}/${path}${query}`;
 };
 
-/** Make one HTTP call and validate the response body against `schema`. */
-const callOnce = <A>(
+/**
+ * Decode a parsed body against `schema` and lift any `ParseError` into a
+ * typed {@link GitLabResponseError}.
+ *
+ * `errors: "all"` so multi-field failures surface every issue at once.
+ * The 800-char slice gives `TreeFormatter` room to keep the offending value
+ * the previous 300-char limit was cutting away.
+ */
+const decodeBodyOrFail = <A, I>(
   request: GitLabRequest,
-  schema: z.ZodType<A>,
+  schema: Schema.Schema<A, I>,
+  parsed: unknown,
+): Effect.Effect<A, GitLabError> =>
+  Schema.decodeUnknown(schema, { errors: "all" })(parsed).pipe(
+    Effect.mapError(
+      (error): GitLabError =>
+        new GitLabResponseError({
+          method: request.method,
+          path: request.path,
+          detail: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 800),
+        }),
+    ),
+  );
+
+/** Make one HTTP call and validate the response body against `schema`. */
+const callOnce = <A, I>(
+  request: GitLabRequest,
+  schema: Schema.Schema<A, I>,
 ): Effect.Effect<A, GitLabError> =>
   Effect.gen(function* () {
     const config = yield* gitLabConfig;
@@ -252,17 +275,7 @@ const callOnce = <A>(
       );
     }
 
-    const validation = schema.safeParse(parsed);
-    if (!validation.success) {
-      return yield* Effect.fail(
-        new GitLabResponseError({
-          method: request.method,
-          path: request.path,
-          detail: validation.error.message.slice(0, 300),
-        }),
-      );
-    }
-    return validation.data;
+    return yield* decodeBodyOrFail(request, schema, parsed);
   });
 
 /**
@@ -280,9 +293,9 @@ const readRetryPolicy = Schedule.exponential("200 millis").pipe(
  * Run a READ request, retrying transient failures.
  * Never pass a mutation here — use {@link runGitLabWrite}.
  */
-export const runGitLabRead = <A>(
+export const runGitLabRead = <A, I>(
   request: GitLabRequest & { readonly method: "GET" },
-  schema: z.ZodType<A>,
+  schema: Schema.Schema<A, I>,
 ): Effect.Effect<A, GitLabError> =>
   callOnce(request, schema).pipe(
     Effect.retry({
@@ -296,10 +309,10 @@ export const runGitLabRead = <A>(
  * A retry after a lost response would duplicate the mutation; the caller
  * handles a genuine failure instead.
  */
-export const runGitLabWrite = <A>(
+export const runGitLabWrite = <A, I>(
   request: GitLabRequest,
-  schema: z.ZodType<A>,
+  schema: Schema.Schema<A, I>,
 ): Effect.Effect<A, GitLabError> => callOnce(request, schema);
 
 /** Exposed for tests — never used in production code. */
-export const __test = { parseRemoteUrl, parseTokenFromYaml };
+export const __test = { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail };

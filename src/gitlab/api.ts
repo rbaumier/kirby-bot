@@ -2,32 +2,36 @@
  * Gitlab/api.ts — typed REST operations the pipeline calls.
  *
  * Each function wraps `runGitLabRead`/`runGitLabWrite` from `./http.ts` with
- * the request shape and zod schema for one endpoint. Handlers call these
+ * the request shape and Effect schema for one endpoint. Handlers call these
  * named operations rather than threading raw HTTP details — the boundary's
  * vocabulary lives here.
  *
  * Discussion endpoints stay in `./discussion-api.ts` to keep that domain
  * (the review medium) cohesive with its pure model.
  */
-import { Effect } from "effect";
-import { z } from "zod";
+import { Effect, Schema } from "effect";
 import { runGitLabRead, runGitLabWrite } from "./http";
 import { type GitLabMergeRequest, IssueSchema, MergeRequestSchema } from "./schema";
 import type { GitLabError } from "./errors";
 
 /** A trimmed issue, as the pipeline consumes it. */
-export type GitLabIssue = z.infer<typeof IssueSchema>;
+export type GitLabIssue = Schema.Schema.Type<typeof IssueSchema>;
 
 // ─── Issue operations ──────────────────────────────────────────────────────
 
-const issueArraySchema = z.array(IssueSchema);
+const issueArraySchema = Schema.Array(IssueSchema);
 
-/** List issues filtered by label, with optional exclusions. */
-export const listIssuesByLabels = (params: {
+/** Params for {@link listIssuesByLabels}. */
+type ListIssuesByLabelsParams = {
   readonly include: readonly string[];
   readonly exclude?: readonly string[];
   readonly perPage?: number;
-}): Effect.Effect<readonly GitLabIssue[], GitLabError> =>
+};
+
+/** List issues filtered by label, with optional exclusions. */
+export const listIssuesByLabels = (
+  params: ListIssuesByLabelsParams,
+): Effect.Effect<readonly GitLabIssue[], GitLabError> =>
   runGitLabRead(
     {
       method: "GET",
@@ -48,13 +52,24 @@ export const listIssuesByLabels = (params: {
 export const viewIssue = (iid: number): Effect.Effect<GitLabIssue, GitLabError> =>
   runGitLabRead({ method: "GET", path: `projects/:id/issues/${iid}` }, IssueSchema);
 
+/** Schema returned by issue-note creation — just enough to confirm the note exists. */
+const NoteAckSchema = Schema.Struct({
+  id: Schema.Union(Schema.String, Schema.Number),
+});
+
+/** Label add/remove changes for an issue. At least one side must be set. */
+type LabelChanges = {
+  readonly add?: readonly string[];
+  readonly remove?: readonly string[];
+};
+
 /**
  * Update an issue's labels (add and/or remove). At least one side must be set.
  * Maps to the `PUT /issues/:iid` endpoint's `add_labels` / `remove_labels` fields.
  */
 export const updateIssueLabels = (
   iid: number,
-  changes: { readonly add?: readonly string[]; readonly remove?: readonly string[] },
+  changes: LabelChanges,
 ): Effect.Effect<void, GitLabError> => {
   const body: Record<string, unknown> = {};
   if (changes.add !== undefined && changes.add.length > 0) {
@@ -82,12 +97,12 @@ export const addIssueNote = (iid: number, body: string): Effect.Effect<void, Git
       path: `projects/:id/issues/${iid}/notes`,
       body: { body },
     },
-    z.object({ id: z.union([z.string(), z.number()]) }),
+    NoteAckSchema,
   ).pipe(Effect.asVoid);
 
 // ─── Merge request operations ──────────────────────────────────────────────
 
-const mrArraySchema = z.array(MergeRequestSchema);
+const mrArraySchema = Schema.Array(MergeRequestSchema);
 
 /** Find the one open MR for a branch, if any. */
 export const findOpenMergeRequestBySource = (
@@ -102,13 +117,18 @@ export const findOpenMergeRequestBySource = (
     mrArraySchema,
   ).pipe(Effect.map((list) => list[0]));
 
-/** Create a draft MR. Returns the created MR (its iid is the orchestrator's handle). */
-export const createDraftMergeRequest = (params: {
+/** Params for {@link createDraftMergeRequest}. */
+type CreateDraftMergeRequestParams = {
   readonly sourceBranch: string;
   readonly targetBranch: string;
   readonly title: string;
   readonly description: string;
-}): Effect.Effect<GitLabMergeRequest, GitLabError> =>
+};
+
+/** Create a draft MR. Returns the created MR (its iid is the orchestrator's handle). */
+export const createDraftMergeRequest = (
+  params: CreateDraftMergeRequestParams,
+): Effect.Effect<GitLabMergeRequest, GitLabError> =>
   runGitLabWrite(
     {
       method: "POST",
@@ -134,7 +154,7 @@ export const viewMergeRequest = (iid: number): Effect.Effect<GitLabMergeRequest,
   );
 
 /** Schema for the title-bearing read used to compute the un-drafted title. */
-const TitledMrSchema = z.object({ title: z.string() });
+const TitledMrSchema = Schema.Struct({ title: Schema.String });
 
 /**
  * Mark a draft MR as ready by stripping the "Draft:" / "WIP:" prefix from its
@@ -161,15 +181,20 @@ export const markMergeRequestReady = (iid: number): Effect.Effect<void, GitLabEr
     );
   });
 
+/** Params for {@link mergeMergeRequest}. */
+type MergeMergeRequestParams = {
+  readonly iid: number;
+  readonly squash: boolean;
+  readonly autoMerge: boolean;
+};
+
 /**
  * Merge a merge request. `autoMerge` requests merge-when-pipeline-succeeds,
  * which falls through to an immediate merge when no pipeline is configured.
  */
-export const mergeMergeRequest = (params: {
-  readonly iid: number;
-  readonly squash: boolean;
-  readonly autoMerge: boolean;
-}): Effect.Effect<GitLabMergeRequest, GitLabError> =>
+export const mergeMergeRequest = (
+  params: MergeMergeRequestParams,
+): Effect.Effect<GitLabMergeRequest, GitLabError> =>
   runGitLabWrite(
     {
       method: "PUT",
