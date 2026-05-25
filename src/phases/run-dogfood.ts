@@ -9,16 +9,16 @@ import { Effect } from "effect";
 import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
-import { mrPhaseOptions, phaseRunHandlerError, pipelineContext, runPhase } from "./runner";
+import { runPhaseSession } from "../session/phase";
+import { mrPhaseOptions, phaseRunHandlerError, pipelineContext } from "./runner";
 
 /** Run_dogfood Phase Module — implements the run_dogfood state's transition. */
 export const runDogfoodPhase = (
   state: Extract<State, { kind: "run_dogfood" }>,
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
-    const verdict = yield* runPhase(
-      "run_dogfood",
-      mrPhaseOptions(state, 0),
+    const verdict = yield* runPhaseSession(
+      mrPhaseOptions(state, "run_dogfood", 0),
       ["DOGFOOD_PASS", "DOGFOOD_FAIL"],
     ).pipe(Effect.mapError(phaseRunHandlerError("run_dogfood")));
 

@@ -6,12 +6,13 @@
  * A union alias and a `describe` function let a handler turn any
  * of them into a `failed` state's reason string.
  *
- * The six modes below are genuinely distinct. An operator treats
+ * The seven modes below are genuinely distinct. An operator treats
  * a timeout, a missing verdict, and a broken tmux very differently.
- * Hence six types, not one `{ reason: string }`.
+ * Hence seven types, not one `{ reason: string }`.
  */
 import { Data } from "effect";
 import type { Phase } from "../config";
+import type { VerdictToken } from "./verdict";
 
 /** A tmux command failed — the session could not be created or driven. */
 export class TmuxError extends Data.TaggedError("TmuxError")<{
@@ -49,6 +50,13 @@ export class NoVerdict extends Data.TaggedError("NoVerdict")<{
   readonly captured: string;
 }> {}
 
+/** The session returned a verdict outside the expected set for that phase. */
+export class UnexpectedVerdictError extends Data.TaggedError("UnexpectedVerdictError")<{
+  readonly phase: Phase;
+  readonly verdict: VerdictToken;
+  readonly expected: readonly VerdictToken[];
+}> {}
+
 /** Every failure running a phase session can produce. */
 export type PhaseError =
   | TmuxError
@@ -56,7 +64,8 @@ export type PhaseError =
   | WorkspaceError
   | BudgetExhausted
   | SessionTimedOut
-  | NoVerdict;
+  | NoVerdict
+  | UnexpectedVerdictError;
 
 const MAX_STDERR_CHARS = 160;
 const MS_PER_SECOND = 1000;
@@ -82,6 +91,9 @@ export const describePhaseError = (error: PhaseError): string => {
     }
     case "NoVerdict": {
       return `stopped without a clean verdict (got: ${error.captured.slice(0, MAX_CAPTURED_CHARS)})`;
+    }
+    case "UnexpectedVerdictError": {
+      return `unexpected verdict ${error.verdict} (expected: ${error.expected.join(", ")})`;
     }
     default: {
       const _exhaustive: never = error;

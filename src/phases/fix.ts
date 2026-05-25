@@ -8,7 +8,8 @@ import { Effect } from "effect";
 import type { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
-import { mrPhaseOptions, phaseRunHandlerError, pipelineContext, runPhase } from "./runner";
+import { runPhaseSession } from "../session/phase";
+import { mrPhaseOptions, phaseRunHandlerError, pipelineContext } from "./runner";
 
 /** Fix Phase Module — implements the fix state's transition. */
 export const fixPhase = (
@@ -16,7 +17,7 @@ export const fixPhase = (
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { fixCycles } = state;
-    yield* runPhase("fix", mrPhaseOptions(state, fixCycles), ["FIX_DONE"]).pipe(
+    yield* runPhaseSession(mrPhaseOptions(state, "fix", fixCycles), ["FIX_DONE"]).pipe(
       Effect.mapError(phaseRunHandlerError(`fix[${fixCycles}]`)),
     );
     return { kind: "review", ...pipelineContext(state), fixCycles: fixCycles + 1 };

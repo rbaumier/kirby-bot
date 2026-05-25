@@ -10,7 +10,8 @@ import { MAX_FIX_CYCLES } from "../config";
 import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { RunArtifacts } from "../run-artifacts";
-import { mrPhaseOptions, phaseRunHandlerError, pipelineContext, runPhase } from "./runner";
+import { runPhaseSession } from "../session/phase";
+import { mrPhaseOptions, phaseRunHandlerError, pipelineContext } from "./runner";
 
 /** Evaluate Phase Module — implements the evaluate state's transition. */
 export const evaluatePhase = (
@@ -18,9 +19,8 @@ export const evaluatePhase = (
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { fixCycles } = state;
-    const verdict = yield* runPhase(
-      "evaluate",
-      mrPhaseOptions(state, fixCycles),
+    const verdict = yield* runPhaseSession(
+      mrPhaseOptions(state, "evaluate", fixCycles),
       ["CONVERGED", "NEEDS_FIX"],
     ).pipe(Effect.mapError(phaseRunHandlerError(`evaluate[${fixCycles}]`)));
 
