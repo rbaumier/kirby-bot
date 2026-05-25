@@ -2,6 +2,11 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { IssueSchema, MR_STATES, MergeRequestSchema } from "./schema";
 
+// Matches Effect Schema's `["iid"] is missing` decode error — pins each
+// rejection test to the iid field so a future schema change that rejects
+// for an unrelated reason still fails loudly.
+const MISSING_IID_ERROR = /\biid\b[\s\S]*is missing/;
+
 describe("MergeRequestSchema", () => {
   it.each(MR_STATES)("parses state %s", (state) => {
     const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state });
@@ -13,12 +18,15 @@ describe("MergeRequestSchema", () => {
     expect(parsed.state).toBe("opened");
   });
 
-  it("rejects an unknown state value", () => {
-    expect(() => Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state: "draft" })).toThrow(/transformation failure|is missing|Expected/);
+  it('coerces an unknown state value to "opened" instead of erroring', () => {
+    const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state: "draft" });
+    expect(parsed.state).toBe("opened");
   });
 
   it("rejects when iid is missing", () => {
-    expect(() => Schema.decodeUnknownSync(MergeRequestSchema)({ state: "opened" })).toThrow(/transformation failure|is missing|Expected/);
+    expect(() => Schema.decodeUnknownSync(MergeRequestSchema)({ state: "opened" })).toThrow(
+      MISSING_IID_ERROR,
+    );
   });
 });
 
@@ -43,6 +51,8 @@ describe("IssueSchema", () => {
   });
 
   it("rejects when iid is missing", () => {
-    expect(() => Schema.decodeUnknownSync(IssueSchema)({ title: "hello" })).toThrow(/transformation failure|is missing|Expected/);
+    expect(() => Schema.decodeUnknownSync(IssueSchema)({ title: "hello" })).toThrow(
+      MISSING_IID_ERROR,
+    );
   });
 });

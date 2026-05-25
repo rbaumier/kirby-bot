@@ -1,7 +1,8 @@
+import { Effect, Either, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { __test } from "./http";
 
-const { parseRemoteUrl, parseTokenFromYaml } = __test;
+const { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail } = __test;
 
 describe("parseRemoteUrl", () => {
   it("parses an ssh remote", () => {
@@ -52,5 +53,43 @@ describe("parseTokenFromYaml", () => {
   it("returns null when the token field is absent", () => {
     const yaml = "hosts:\n  gitlab.com:\n    user: alice\n";
     expect(parseTokenFromYaml(yaml, "gitlab.com")).toBeNull();
+  });
+});
+
+describe("decodeBodyOrFail", () => {
+  const schema = Schema.Struct({ iid: Schema.Number });
+  const request = { method: "GET", path: "projects/:id/issues/1" } as const;
+
+  it("returns the decoded value on success", async () => {
+    const value = await Effect.runPromise(decodeBodyOrFail(request, schema, { iid: 42 }));
+    expect(value).toEqual({ iid: 42 });
+  });
+
+  it("maps a decode failure to a GitLabResponseError tagged with the request method/path", async () => {
+    const either = await Effect.runPromise(
+      Effect.either(decodeBodyOrFail(request, schema, { iid: "not-a-number" })),
+    );
+    expect(either).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "GitLabResponseError",
+        method: "GET",
+        path: "projects/:id/issues/1",
+      },
+    });
+  });
+
+  it("surfaces the offending field in the decode error detail", async () => {
+    const either = await Effect.runPromise(
+      Effect.either(decodeBodyOrFail(request, schema, { iid: "not-a-number" })),
+    );
+    const detail = Either.match(either, {
+      onLeft: (error): string =>
+        error._tag === "GitLabResponseError" ? error.detail : "",
+      onRight: (): string => "",
+    });
+    expect(detail.length).toBeGreaterThan(0);
+    expect(detail.length).toBeLessThanOrEqual(800);
+    expect(detail).toMatch(/iid/);
   });
 });

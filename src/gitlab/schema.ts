@@ -7,8 +7,26 @@
  */
 import { Schema } from "effect";
 
-/** The four MR states the orchestrator routes on; any other string falls through to `opened`. */
+/** The four MR states the orchestrator routes on. Source of truth for `MrState`. */
 export const MR_STATES = ["opened", "closed", "locked", "merged"] as const;
+
+/** A merge-request `state` value as the pipeline routes on. */
+export type MrState = (typeof MR_STATES)[number];
+
+const KNOWN_STATES: ReadonlySet<string> = new Set(MR_STATES);
+
+const isKnownState = (value: string): value is MrState => KNOWN_STATES.has(value);
+
+/**
+ * State decoder. A value in `MR_STATES` passes through unchanged.
+ * Any other string coerces to `"opened"` so the orchestrator survives
+ * server-side state values it doesn't recognize.
+ */
+const MrStateSchema = Schema.transform(Schema.String, Schema.Literal(...MR_STATES), {
+  strict: true,
+  decode: (value): MrState => (isKnownState(value) ? value : "opened"),
+  encode: (value) => value,
+});
 
 /**
  * An issue from `GET /projects/:id/issues` and `GET /projects/:id/issues/:iid`.
@@ -30,17 +48,14 @@ export const IssueSchema = Schema.Struct({
 /**
  * A merge request from `GET/POST/PUT /projects/:id/merge_requests`.
  *
- * `state` is constrained to the four known values. Missing state defaults
- * to `"opened"`. An unknown value is rejected — a server-side state change
- * should be surfaced, not silently coerced.
+ * `state` resolves to one of `MR_STATES`. A missing field defaults to
+ * `"opened"`; an unknown string also coerces to `"opened"` so a future
+ * server-side state value doesn't hard-fail a list read.
  */
 export const MergeRequestSchema = Schema.Struct({
   iid: Schema.Number,
   web_url: Schema.optionalWith(Schema.String, { default: () => "" }),
-  state: Schema.optionalWith(
-    Schema.Union(...MR_STATES.map((value) => Schema.Literal(value))),
-    { default: () => "opened" as const },
-  ),
+  state: Schema.optionalWith(MrStateSchema, { default: () => "opened" as const }),
 });
 
 /** A merge request as the orchestrator consumes it. */

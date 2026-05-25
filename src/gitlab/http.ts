@@ -176,6 +176,30 @@ const buildUrl = (config: GitLabConfig, request: GitLabRequest): string => {
   return `${config.baseUrl}/${path}${query}`;
 };
 
+/**
+ * Decode a parsed body against `schema` and lift any `ParseError` into a
+ * typed {@link GitLabResponseError}.
+ *
+ * `errors: "all"` so multi-field failures surface every issue at once.
+ * The 800-char slice gives `TreeFormatter` room to keep the offending value
+ * the previous 300-char limit was cutting away.
+ */
+const decodeBodyOrFail = <A, I>(
+  request: GitLabRequest,
+  schema: Schema.Schema<A, I>,
+  parsed: unknown,
+): Effect.Effect<A, GitLabError> =>
+  Schema.decodeUnknown(schema, { errors: "all" })(parsed).pipe(
+    Effect.mapError(
+      (error): GitLabError =>
+        new GitLabResponseError({
+          method: request.method,
+          path: request.path,
+          detail: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 800),
+        }),
+    ),
+  );
+
 /** Make one HTTP call and validate the response body against `schema`. */
 const callOnce = <A, I>(
   request: GitLabRequest,
@@ -251,16 +275,7 @@ const callOnce = <A, I>(
       );
     }
 
-    return yield* Schema.decodeUnknown(schema)(parsed).pipe(
-      Effect.mapError(
-        (error): GitLabError =>
-          new GitLabResponseError({
-            method: request.method,
-            path: request.path,
-            detail: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 300),
-          }),
-      ),
-    );
+    return yield* decodeBodyOrFail(request, schema, parsed);
   });
 
 /**
@@ -300,4 +315,4 @@ export const runGitLabWrite = <A, I>(
 ): Effect.Effect<A, GitLabError> => callOnce(request, schema);
 
 /** Exposed for tests — never used in production code. */
-export const __test = { parseRemoteUrl, parseTokenFromYaml };
+export const __test = { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail };
