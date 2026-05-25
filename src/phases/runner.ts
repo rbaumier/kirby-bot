@@ -21,8 +21,7 @@ import type { RunArtifacts } from "../run-artifacts";
 import { phaseTimeoutMs, runPhaseSession } from "../session/phase";
 import type { VerdictToken } from "../session/verdict";
 
-/** Options for running a single Phase Session. */
-export type RunPhaseOptions = {
+type RunPhaseOptions = {
   readonly issueIid: number;
   readonly worktree: string;
   readonly deadline: number;
