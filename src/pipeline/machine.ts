@@ -19,7 +19,13 @@ type MachineServices = GitProvider | RunArtifacts;
 const truncate = (text: string, maxLength: number): string =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
 
-/** Render a millisecond duration as a compact human string (`1m05s`, `4.2s`). */
+/**
+ * Render a millisecond duration as a compact human string (`1m05s`, `4.2s`).
+ *
+ * Effect's `Duration.format` ships a different style (`"1m 5s"`, `"4s 200ms"`)
+ * that breaks the single-line transition log this is for — keep the bespoke
+ * compact form.
+ */
 const formatDuration = (milliseconds: number): string => {
   if (milliseconds < 1000) {
     return `${milliseconds}ms`;
