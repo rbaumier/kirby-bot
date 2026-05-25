@@ -10,6 +10,7 @@ import { Effect, Layer } from "effect";
 import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
+import { UnexpectedVerdictError, describePhaseRunError } from "./errors";
 import { failedFieldsOf, step } from "./handlers";
 import type { State } from "./state";
 
@@ -77,36 +78,51 @@ describe("failedFieldsOf", () => {
 });
 
 /**
- * A GitProvider Layer where every call is a defect, except the two `claim_issue`
- * touches: `viewIssue` (returns a typed error the handler swallows to `false`)
- * and `updateIssueLabels` (the one that should surface as `HandlerError`).
+ * Build a GitProvider Layer where every call is a defect.
+ * Only `viewIssue` and `updateIssueLabels` are touched on the `claim_issue` path.
+ * `viewIssue` returns a typed error the handler swallows to `false`.
+ * `updateIssueLabels` is the one that should surface as `HandlerError`.
  */
-const claimFailingProvider: Layer.Layer<GitProvider> = Layer.succeed(GitProvider, {
-  listIssuesByLabels: () => Effect.die("fake: listIssuesByLabels"),
-  viewIssue: () =>
-    Effect.fail(
-      new ProviderHttpError({ method: "GET", path: "issues/42", status: 500, body: "boom" }),
-    ),
-  updateIssueLabels: () =>
-    Effect.fail(
-      new ProviderHttpError({ method: "PUT", path: "issues/42", status: 500, body: "boom" }),
-    ),
-  addIssueNote: () => Effect.die("fake: addIssueNote"),
-  findOpenPullRequestBySource: () => Effect.die("fake: findOpenPullRequestBySource"),
-  createDraftPullRequest: () => Effect.die("fake: createDraftPullRequest"),
-  viewPullRequest: () => Effect.die("fake: viewPullRequest"),
-  markPullRequestReady: () => Effect.die("fake: markPullRequestReady"),
-  mergePullRequest: () => Effect.die("fake: mergePullRequest"),
-  listDiscussions: () => Effect.die("fake: listDiscussions"),
-  postDiscussion: () => Effect.die("fake: postDiscussion"),
-  replyToDiscussion: () => Effect.die("fake: replyToDiscussion"),
-  resolveDiscussion: () => Effect.die("fake: resolveDiscussion"),
+const makeClaimFailingProvider = (): Layer.Layer<GitProvider> =>
+  Layer.succeed(GitProvider, {
+    listIssuesByLabels: () => Effect.die("fake: listIssuesByLabels"),
+    viewIssue: () =>
+      Effect.fail(
+        new ProviderHttpError({ method: "GET", path: "issues/42", status: 500, body: "boom" }),
+      ),
+    updateIssueLabels: () =>
+      Effect.fail(
+        new ProviderHttpError({ method: "PUT", path: "issues/42", status: 500, body: "boom" }),
+      ),
+    addIssueNote: () => Effect.die("fake: addIssueNote"),
+    findOpenPullRequestBySource: () => Effect.die("fake: findOpenPullRequestBySource"),
+    createDraftPullRequest: () => Effect.die("fake: createDraftPullRequest"),
+    viewPullRequest: () => Effect.die("fake: viewPullRequest"),
+    markPullRequestReady: () => Effect.die("fake: markPullRequestReady"),
+    mergePullRequest: () => Effect.die("fake: mergePullRequest"),
+    listDiscussions: () => Effect.die("fake: listDiscussions"),
+    postDiscussion: () => Effect.die("fake: postDiscussion"),
+    replyToDiscussion: () => Effect.die("fake: replyToDiscussion"),
+    resolveDiscussion: () => Effect.die("fake: resolveDiscussion"),
+  });
+
+describe("describePhaseRunError", () => {
+  it("formats UnexpectedVerdictError with the verdict + expected list", () => {
+    const error = new UnexpectedVerdictError({
+      phase: "review",
+      verdict: "BLOCKER_SUSPECTED",
+      expected: ["REVIEW_DONE"],
+    });
+    expect(describePhaseRunError(error)).toBe(
+      "unexpected verdict BLOCKER_SUSPECTED (expected: REVIEW_DONE)",
+    );
+  });
 });
 
 describe("step seam", () => {
   it("HandlerError from claim_issue becomes a `failed` state with the issue copied off `current`", async () => {
     const result = await Effect.runPromise(
-      step({ kind: "claim_issue", issue }, env).pipe(Effect.provide(claimFailingProvider)),
+      step({ kind: "claim_issue", issue }, env).pipe(Effect.provide(makeClaimFailingProvider())),
     );
     const failed = result.kind === "failed" ? result : null;
     expect(failed).not.toBeNull();

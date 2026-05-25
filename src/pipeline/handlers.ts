@@ -251,8 +251,14 @@ const onBranchWorktree = (
 
     const pushed = yield* runShellGit(worktree, ["push", "-u", "origin", branch]);
     if (pushed.exitCode !== 0) {
+      // branch/worktree exist on disk by now — surface them so onFailed can
+      // print the path the operator needs to inspect.
       return yield* Effect.fail(
-        new HandlerError({ reason: `branch_worktree: push failed — ${pushed.stderr.trim()}` }),
+        new HandlerError({
+          reason: `branch_worktree: push failed — ${pushed.stderr.trim()}`,
+          branch,
+          worktree,
+        }),
       );
     }
     return { kind: "run_impl", issue, branch, worktree };
@@ -418,9 +424,14 @@ const onMerge = (
     const provider = yield* GitProvider;
     const { issue, worktree, pullRequestIid } = state;
 
-    yield* provider
-      .markPullRequestReady(pullRequestIid)
-      .pipe(Effect.mapError(providerHandlerError("merge: could not un-draft")));
+    yield* provider.markPullRequestReady(pullRequestIid).pipe(
+      Effect.mapError(
+        (error): HandlerError =>
+          new HandlerError({
+            reason: `merge: could not un-draft — ${describeProviderError(error)}`,
+          }),
+      ),
+    );
 
     // The merge API can return an error while the PR is in fact merged or
     // queued (race with auto-merge) — verify the state before failing.
@@ -612,9 +623,13 @@ export const step = (
         // Unreachable: end dies inside dispatchHandler, failed has no failure mode.
         return Effect.die(`unexpected handler failure for ${current.kind}: ${error.reason}`);
       }
+      const base = failedFieldsOf(current);
       return Effect.succeed({
         kind: "failed",
-        ...failedFieldsOf(current),
+        issue: base.issue,
+        branch: error.branch ?? base.branch,
+        worktree: error.worktree ?? base.worktree,
+        pullRequestIid: error.pullRequestIid ?? base.pullRequestIid,
         reason: error.reason,
       });
     }),
