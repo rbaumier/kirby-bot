@@ -41,8 +41,42 @@ describe("parseTokenFromYaml", () => {
       "  gitlab.other.com:",
       "    token: other-token",
     ].join("\n");
-    expect(parseTokenFromYaml(yaml, "gitlab.com")).toBe("secret-value");
-    expect(parseTokenFromYaml(yaml, "gitlab.other.com")).toBe("other-token");
+    expect(parseTokenFromYaml(yaml, "gitlab.com")).toEqual({
+      token: "secret-value",
+      isOAuth2: false,
+    });
+    expect(parseTokenFromYaml(yaml, "gitlab.other.com")).toEqual({
+      token: "other-token",
+      isOAuth2: false,
+    });
+  });
+
+  it("flags an OAuth2 token when is_oauth2 is set on the host block", () => {
+    const yaml = [
+      "hosts:",
+      "  gitlab.com:",
+      '    token: "oauth-token"',
+      '    is_oauth2: "true"',
+    ].join("\n");
+    expect(parseTokenFromYaml(yaml, "gitlab.com")).toEqual({
+      token: "oauth-token",
+      isOAuth2: true,
+    });
+  });
+
+  it("does not propagate is_oauth2 from a different host block", () => {
+    const yaml = [
+      "hosts:",
+      "  gitlab.other.com:",
+      "    token: pat-token",
+      "    is_oauth2: true",
+      "  gitlab.com:",
+      "    token: oauth-token",
+    ].join("\n");
+    expect(parseTokenFromYaml(yaml, "gitlab.com")).toEqual({
+      token: "oauth-token",
+      isOAuth2: false,
+    });
   });
 
   it("returns null when the host block is absent", () => {

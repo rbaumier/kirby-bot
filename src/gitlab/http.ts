@@ -30,8 +30,17 @@ import type { ProviderError } from "../provider/types";
 type GitLabConfig = {
   readonly baseUrl: string;
   readonly token: string;
+  /**
+   * `true` when `token` is an OAuth2 access token (header `Authorization: Bearer`);
+   * `false` for a personal access token (header `PRIVATE-TOKEN`). The `glab-cli`
+   * config sets `is_oauth2: "true"` on the host block; env-var tokens default to PAT.
+   */
+  readonly isOAuth2: boolean;
   readonly projectRef: string;
 };
+
+/** Token + auth scheme as resolved from a `glab-cli` host block. */
+type GlabAuth = { readonly token: string; readonly isOAuth2: boolean };
 
 /** Parsed git remote — the host and the owner/repo path. */
 type Remote = { readonly host: string; readonly path: string };
@@ -53,6 +62,9 @@ const YAML_HOST_HEADER = /^(\s*)([\w.-]+):\s*$/;
 
 /** YAML token line under a host block: `    token: <value>` — captures value. */
 const YAML_TOKEN_LINE = /^\s+token:\s+(.+)$/;
+
+/** YAML `is_oauth2: <value>` line under a host block — captures value. */
+const YAML_OAUTH2_LINE = /^\s+is_oauth2:\s+(.+)$/;
 
 /** Leading `"` or `'` to strip from a YAML scalar value. */
 const LEADING_QUOTE = /^["']/;
@@ -91,25 +103,21 @@ const matchHostHeader = (line: string): HostHeader | null => {
   return { indent: parts[1]?.length ?? 0, host: parts[2] ?? "" };
 };
 
+/** Strip wrapping single/double quotes and surrounding whitespace from a YAML scalar. */
+const unquote = (raw: string): string =>
+  raw.trim().replace(LEADING_QUOTE, "").replace(TRAILING_QUOTE, "");
+
 const matchTokenLine = (line: string): string | null => {
   const parts = YAML_TOKEN_LINE.exec(line);
-  if (parts === null) {
-    return null;
-  }
-  return (parts[1] ?? "").trim().replace(LEADING_QUOTE, "").replace(TRAILING_QUOTE, "");
+  return parts === null ? null : unquote(parts[1] ?? "");
 };
 
-/**
- * Scan a glab-cli YAML config for the token of a given host.
- *
- * The file's shape is small and stable enough to read line-by-line — we avoid
- * a yaml dependency for a 5-line lookup. Two indentation levels are supported:
- * `hosts.<host>.token` (current glab) and `<host>.token` (older layouts).
- */
-/** Scanner output — next block indent (or `null` outside any block), and any token found. */
-type ScanResult = { readonly blockIndent: number | null; readonly token: string | null };
+const matchOAuth2Line = (line: string): boolean | null => {
+  const parts = YAML_OAUTH2_LINE.exec(line);
+  return parts === null ? null : unquote(parts[1] ?? "").toLowerCase() === "true";
+};
 
-/** Reduce a header line: enter the matching block, or leave when outdented. */
+/** Update the block-indent state when a YAML header line is seen. */
 const advanceOnHeader = (
   blockIndent: number | null,
   header: HostHeader,
@@ -124,32 +132,46 @@ const advanceOnHeader = (
   return blockIndent;
 };
 
-/** Reduce a single YAML line, returning the next scanner state. */
-const scanLine = (blockIndent: number | null, line: string, host: string): ScanResult => {
-  const header = matchHostHeader(line);
-  if (header !== null) {
-    return { blockIndent: advanceOnHeader(blockIndent, header, host), token: null };
-  }
-  if (blockIndent === null) {
-    return { blockIndent, token: null };
-  }
-  return { blockIndent, token: matchTokenLine(line) };
+/** Scanner state: which host block we're inside, plus auth fields collected. */
+type ScanState = {
+  readonly blockIndent: number | null;
+  readonly token: string | null;
+  readonly isOAuth2: boolean;
 };
 
-const parseTokenFromYaml = (yaml: string, host: string): string | null => {
-  let blockIndent: number | null = null;
-  for (const line of yaml.split("\n")) {
-    const result = scanLine(blockIndent, line, host);
-    if (result.token !== null) {
-      return result.token;
-    }
-    blockIndent = result.blockIndent;
+/** Fold one YAML line into the scanner state. */
+const stepScan = (state: ScanState, line: string, host: string): ScanState => {
+  const header = matchHostHeader(line);
+  if (header !== null) {
+    return { ...state, blockIndent: advanceOnHeader(state.blockIndent, header, host) };
   }
-  return null;
+  if (state.blockIndent === null) {
+    return state;
+  }
+  const token = state.token ?? matchTokenLine(line);
+  const flag = matchOAuth2Line(line);
+  return { ...state, token, isOAuth2: flag ?? state.isOAuth2 };
+};
+
+/**
+ * Scan a glab-cli YAML config for the auth of a given host.
+ *
+ * The file's shape is small and stable enough to read line-by-line — we avoid
+ * a yaml dependency for a handful of fields. Two indentation levels are
+ * supported: `hosts.<host>.token` (current glab) and `<host>.token` (older).
+ * Collects `is_oauth2` from the same block so the caller picks the right
+ * Authorization header.
+ */
+const parseTokenFromYaml = (yaml: string, host: string): GlabAuth | null => {
+  let state: ScanState = { blockIndent: null, token: null, isOAuth2: false };
+  for (const line of yaml.split("\n")) {
+    state = stepScan(state, line, host);
+  }
+  return state.token === null ? null : { token: state.token, isOAuth2: state.isOAuth2 };
 };
 
 /** Look up the auth token in `~/.config/glab-cli/config.yml` for `host`. */
-const readTokenFromGlabConfig = (host: string): string | null => {
+const readTokenFromGlabConfig = (host: string): GlabAuth | null => {
   const path = `${homedir()}/.config/glab-cli/config.yml`;
   if (!existsSync(path)) {
     return null;
@@ -183,15 +205,21 @@ const computeConfig = async (): Promise<GitLabConfig> => {
     throw new ProviderConfigError({ detail: "no project path resolved from env or git remote" });
   }
   const hostName = hostUrl.replace(URL_SCHEME, "");
-  const token = envToken ?? readTokenFromGlabConfig(hostName);
-  if (token === null || token === "") {
+  // Env var takes precedence and is treated as a PAT — the typical CI shape.
+  // The glab-cli config carries an explicit `is_oauth2` flag we honor.
+  const auth: GlabAuth | null =
+    envToken !== undefined && envToken !== ""
+      ? { token: envToken, isOAuth2: false }
+      : readTokenFromGlabConfig(hostName);
+  if (auth === null || auth.token === "") {
     throw new ProviderConfigError({
       detail: `no token in $GITLAB_TOKEN or ~/.config/glab-cli/config.yml for host ${hostName}`,
     });
   }
   return {
     baseUrl: `${hostUrl}/api/v4`,
-    token,
+    token: auth.token,
+    isOAuth2: auth.isOAuth2,
     projectRef: encodeURIComponent(projectPath),
   };
 };
@@ -286,10 +314,13 @@ const callOnce = <A, I>(
     const config = yield* gitLabConfig;
     const url = buildUrl(config, request);
     const hasBody = request.body !== undefined;
+    const authHeader = config.isOAuth2
+      ? { Authorization: `Bearer ${config.token}` }
+      : { "PRIVATE-TOKEN": config.token };
     const init: RequestInit = {
       method: request.method,
       headers: {
-        "PRIVATE-TOKEN": config.token,
+        ...authHeader,
         Accept: "application/json",
         ...(hasBody ? { "Content-Type": "application/json" } : {}),
       },
