@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { __test } from "./http";
 
 const { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail } = __test;

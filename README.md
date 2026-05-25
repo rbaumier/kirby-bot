@@ -37,7 +37,7 @@ The orchestrator reads its config from environment + `glab` config, picks the fi
 ## Scripts
 
 ```bash
-bun test src/           # run the bun:test suite (the vitest script is broken — see issue #20)
+bun test src/           # run the bun:test suite
 bun run typecheck       # tsc --noEmit
 bunx comply             # the project linter
 ```

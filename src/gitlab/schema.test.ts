@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { IssueSchema, MR_STATES, MergeRequestSchema } from "./schema";
 
 // Matches Effect Schema's `["iid"] is missing` decode error — pins each
@@ -8,7 +8,7 @@ import { IssueSchema, MR_STATES, MergeRequestSchema } from "./schema";
 const MISSING_IID_ERROR = /\biid\b[\s\S]*is missing/;
 
 describe("MergeRequestSchema", () => {
-  it.each(MR_STATES)("parses state %s", (state) => {
+  it.each(MR_STATES.map((state) => [state] as const))("parses state %s", (state) => {
     const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state });
     expect(parsed.state).toBe(state);
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { parseVerdict, VERDICT_TOKENS } from "./verdict";
 
 describe("parseVerdict", () => {
@@ -6,7 +6,7 @@ describe("parseVerdict", () => {
     expect(parseVerdict("did the work\nVERDICT: READY_FOR_REVIEW")).toBe("READY_FOR_REVIEW");
   });
 
-  it.each(VERDICT_TOKENS)("accepts known token %s", (token) => {
+  it.each(VERDICT_TOKENS.map((token) => [token] as const))("accepts known token %s", (token) => {
     expect(parseVerdict(`summary line\nVERDICT: ${token}`)).toBe(token);
   });
 
