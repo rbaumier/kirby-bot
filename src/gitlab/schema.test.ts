@@ -8,10 +8,12 @@ import { IssueSchema, MR_STATES, MergeRequestSchema } from "./schema";
 const MISSING_IID_ERROR = /\biid\b[\s\S]*is missing/;
 
 describe("MergeRequestSchema", () => {
-  it.each(MR_STATES.map((state) => [state] as const))("parses state %s", (state) => {
-    const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state });
-    expect(parsed.state).toBe(state);
-  });
+  for (const state of MR_STATES) {
+    it(`parses state ${state}`, () => {
+      const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state });
+      expect(parsed.state).toBe(state);
+    });
+  }
 
   it('defaults state to "opened" when the field is absent', () => {
     const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1 });
