@@ -141,6 +141,18 @@ Layer.succeed(GitProvider, { listIssuesByLabels: () => Effect.succeed(fixtures),
 
 That property — adapter swap as a single Layer — is what we're paying the Effect surface for.
 
+### 3.2.1 — Addendum (2026-05-25): the "1 adapter = hypothetical seam" objection
+
+A later architecture review raised the heuristic *1 adapter = hypothetical seam, 2 adapters = real seam* against this Seam: only the GitLab Adapter exists, and the GitHub issue (#5) has been closed for now. By the heuristic alone, the Seam would be deconstructable boilerplate.
+
+The objection is acknowledged and **rejected** in this codebase, with the reason recorded here so the next architecture pass doesn't re-litigate it:
+
+- **The test path is exercised, not aspirational.** `src/pipeline/handlers.test.ts` builds a fake Provider via `Layer.succeed(GitProvider, …)` (see line ~99) and tests the pipeline's reaction to provider failures. Without the Seam, that test would have to mock the GitLab HTTP client or run against a recorded fixture set — both strictly heavier than the current one-line layer swap.
+- **The bot is a pure orchestrator over forge state.** The Provider is the only meaningful side-effect surface — every Phase eventually calls it. Pipeline tests without a mockable Provider Seam aren't a real option.
+- **The vocabulary translation is real, not trivial.** `provider/gitlab.ts` maps `mr.state === "merged"` to `isMerged`, `discussion.resolved` to `isResolved`, GitLab's `"unknown"` author placeholder to `null`, and the GitLab error union to the Provider error union. Inlining this into the pipeline would scatter forge-specific knowledge across multiple call sites.
+
+The heuristic is a good default, not a dogma. Here the test path documented in §3.2 is the load-bearing reason; the future GitHub Adapter would be a second confirmation, not the primary one.
+
 ### 3.3 — What this MR ships
 
 - The `GitProvider` `Context.Tag` with 13 operation signatures (the 11 the spec called for plus `viewIssue` and `viewPullRequest`, used by the maintainer loop to refresh state after side effects).
