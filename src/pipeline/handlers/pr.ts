@@ -14,23 +14,11 @@ import { Console, Effect, Option } from "effect";
 import { LABELS } from "../../config";
 import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
-import type { PullRequestRef } from "../../provider/types";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
 import { describeShellError, runShell, runShellAllowingFailure } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
 import type { State } from "../state";
-
-/** Find the open pull request for a branch, if any. Never fails. */
-const findOpenPullRequest = (
-  branch: string,
-): Effect.Effect<Option.Option<PullRequestRef>, never, GitProvider> =>
-  Effect.gen(function* () {
-    const provider = yield* GitProvider;
-    return yield* provider.findOpenPullRequestBySource(branch).pipe(
-      Effect.catchAll(() => Effect.succeed(Option.none<PullRequestRef>())),
-    );
-  });
 
 /** Open_draft_mr — open the Draft PR (idempotent), recording its iid. */
 export const onOpenDraftMr = (
@@ -41,7 +29,12 @@ export const onOpenDraftMr = (
     const provider = yield* GitProvider;
     const { issue, branch, worktree, deadline } = state;
 
-    const existing = yield* findOpenPullRequest(branch);
+    // Idempotency check: don't swallow lookup failures — a "no MR found" verdict
+    // on a network blip would race into creating a duplicate Draft MR. Surface
+    // the error so the seam re-tries the issue cleanly.
+    const existing = yield* provider
+      .findOpenPullRequestBySource(branch)
+      .pipe(Effect.mapError(providerHandlerError("open_draft_mr")));
     if (Option.isSome(existing)) {
       yield* Console.log(`  ↳ reusing open MR !${existing.value.iid} for ${branch}`);
       return {
