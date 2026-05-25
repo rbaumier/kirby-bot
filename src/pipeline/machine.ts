@@ -8,9 +8,12 @@ import { Console, Effect } from "effect";
 import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
-import { logEvent, runDir } from "../run-artifacts";
+import { RunArtifacts } from "../run-artifacts";
 import { step } from "./handlers";
 import type { IssueRef, State } from "./state";
+
+/** Services every machine-level Effect requires. */
+type MachineServices = GitProvider | RunArtifacts;
 
 /** Shorten `text` to at most `maxLength` characters, with an ellipsis. */
 const truncate = (text: string, maxLength: number): string =>
@@ -56,8 +59,9 @@ const issueOf = (state: State): IssueRef | null => ("issue" in state ? state.iss
 const advance = (
   state: State,
   env: Environment,
-): Effect.Effect<State, ProviderCallError, GitProvider> =>
+): Effect.Effect<State, ProviderCallError, MachineServices> =>
   Effect.gen(function* () {
+    const artifacts = yield* RunArtifacts;
     const startedAt = Date.now();
     const next = yield* step(state, env);
     const elapsedMs = Date.now() - startedAt;
@@ -68,7 +72,7 @@ const advance = (
     yield* Console.log(
       formatTransition({ issue, from: state.kind, to: next.kind, elapsedMs, note }),
     );
-    yield* logEvent({
+    yield* artifacts.logEvent({
       event: "transition",
       from: state.kind,
       to: next.kind,
@@ -86,13 +90,18 @@ const advance = (
  */
 export const runMachine = (
   env: Environment,
-): Effect.Effect<void, ProviderCallError, GitProvider> =>
+): Effect.Effect<void, ProviderCallError, MachineServices> =>
   Effect.gen(function* () {
+    const artifacts = yield* RunArtifacts;
     yield* Console.log(
       `AFK orchestrator starting. Repo: ${env.repoName}, default branch: ${env.defaultBranch}`,
     );
-    yield* Console.log(`Run dir: ${runDir}\n`);
-    yield* logEvent({ event: "run_start", repo: env.repoName, defaultBranch: env.defaultBranch });
+    yield* Console.log(`Run dir: ${artifacts.dir}\n`);
+    yield* artifacts.logEvent({
+      event: "run_start",
+      repo: env.repoName,
+      defaultBranch: env.defaultBranch,
+    });
 
     const initialState: State = { kind: "fetch_queue" };
     yield* Effect.iterate(initialState, {
@@ -100,7 +109,7 @@ export const runMachine = (
       body: (state: State) => advance(state, env),
     });
 
-    yield* logEvent({ event: "run_end" });
+    yield* artifacts.logEvent({ event: "run_end" });
     yield* Console.log(
       "\nAFK done. Worktrees and run logs left under ~/.afk-runs/ and ~/.afk-worktrees/.",
     );

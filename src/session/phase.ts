@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { Console, Effect } from "effect";
 import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
-import { promptFilePath, sentinelPath, sessionName, tmuxLogPath } from "../run-artifacts";
+import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
 import { BudgetExhausted, NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
 import { renderPrompt } from "./prompt";
@@ -130,7 +130,7 @@ export type RunPhaseSessionInput = {
  */
 export const runPhaseSession = (
   input: RunPhaseSessionInput,
-): Effect.Effect<VerdictToken, PhaseError> =>
+): Effect.Effect<VerdictToken, PhaseError, RunArtifacts> =>
   Effect.gen(function* () {
     const { phase, issueIid, worktree, iteration, timeoutMs, replacements } = input;
 
@@ -140,11 +140,12 @@ export const runPhaseSession = (
       return yield* Effect.fail(new BudgetExhausted({ phase }));
     }
 
+    const artifacts = yield* RunArtifacts;
     const ref = { issueIid, phase, iteration };
-    const session = sessionName(ref);
-    const sentinel = sentinelPath(ref);
-    const tmuxLog = tmuxLogPath(ref);
-    const promptFile = promptFilePath(ref);
+    const session = artifacts.sessionName(ref);
+    const sentinel = artifacts.sentinelPath(ref);
+    const tmuxLog = artifacts.tmuxLogPath(ref);
+    const promptFile = artifacts.promptFilePath(ref);
 
     yield* writeStopHookConfig(phase, worktree, sentinel);
     const rendered = yield* renderPrompt(phase, replacements);

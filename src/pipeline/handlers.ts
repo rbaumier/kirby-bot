@@ -20,7 +20,7 @@ import { GitProvider } from "../provider/provider";
 import { describeProviderError } from "../provider/types";
 import type { ProviderCallError, PullRequestRef } from "../provider/types";
 import type { Environment } from "../preflight";
-import { runDir, runLogPath } from "../run-artifacts";
+import { RunArtifacts } from "../run-artifacts";
 import { phaseTimeoutMs, runPhaseSession } from "../session/phase";
 import type { VerdictToken } from "../session/verdict";
 import type { PhaseRunError } from "./errors";
@@ -65,7 +65,7 @@ const runPhase = <const V extends VerdictToken>(
   phase: Phase,
   options: RunPhaseOptions,
   expected: readonly V[],
-): Effect.Effect<V, PhaseRunError> => {
+): Effect.Effect<V, PhaseRunError, RunArtifacts> => {
   const expectedSet: ReadonlySet<string> = new Set(expected);
   const isExpected = (verdict: VerdictToken): verdict is V => expectedSet.has(verdict);
   return runPhaseSession({
@@ -207,7 +207,7 @@ const onClaimIssue = (
 const onBranchWorktree = (
   issue: IssueRef,
   env: Environment,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const branch = branchName(issue);
     const worktree = worktreePath(env.repoName, branch);
@@ -268,7 +268,7 @@ const onBranchWorktree = (
 /** Run_impl — start the budget, run the implementer phase. */
 const onRunImpl = (
   state: Extract<State, { kind: "run_impl" }>,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { issue, branch, worktree } = state;
     const deadline = Date.now() + ISSUE_BUDGET_MS;
@@ -303,7 +303,7 @@ const onRunImpl = (
 const onOpenDraftMr = (
   state: Extract<State, { kind: "open_draft_mr" }>,
   env: Environment,
-): Effect.Effect<State, HandlerError, GitProvider> =>
+): Effect.Effect<State, HandlerError, GitProvider | RunArtifacts> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
     const { issue, branch, worktree, deadline } = state;
@@ -322,9 +322,10 @@ const onOpenDraftMr = (
       };
     }
 
+    const artifacts = yield* RunArtifacts;
     const description =
       `Closes #${issue.iid}\n\nImplemented and reviewed autonomously by the AFK orchestrator.\n\n` +
-      `Run log: \`${runDir}\``;
+      `Run log: \`${artifacts.dir}\``;
     const opened = yield* provider
       .createDraftPullRequest({
         sourceBranch: branch,
@@ -349,7 +350,7 @@ const onOpenDraftMr = (
 /** Review — run the review phase; `REVIEW_DONE` leads to evaluate. */
 const onReview = (
   state: Extract<State, { kind: "review" }>,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { fixCycles } = state;
     yield* runPhase("review", mrPhaseOptions(state, fixCycles), ["REVIEW_DONE"]).pipe(
@@ -361,7 +362,7 @@ const onReview = (
 /** Evaluate — the convergence authority; `CONVERGED` leads to dogfood, `NEEDS_FIX` leads to fix. */
 const onEvaluate = (
   state: Extract<State, { kind: "evaluate" }>,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { fixCycles } = state;
     const verdict = yield* runPhase(
@@ -386,7 +387,7 @@ const onEvaluate = (
   });
 
 /** Fix — apply the verified fix instructions; `FIX_DONE` leads back to review. */
-const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, HandlerError> =>
+const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { fixCycles } = state;
     yield* runPhase("fix", mrPhaseOptions(state, fixCycles), ["FIX_DONE"]).pipe(
@@ -399,7 +400,7 @@ const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, Han
 /** Run_dogfood — the runtime gate; `DOGFOOD_PASS` leads to merge. */
 const onRunDogfood = (
   state: Extract<State, { kind: "run_dogfood" }>,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const verdict = yield* runPhase(
       STATE_RUN_DOGFOOD,
@@ -490,14 +491,15 @@ const onDone = (
 /** Failed — note the failure on the issue, label it, loop back to the queue. */
 const onFailed = (
   state: Extract<State, { kind: "failed" }>,
-): Effect.Effect<State, never, GitProvider> =>
+): Effect.Effect<State, never, GitProvider | RunArtifacts> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
+    const artifacts = yield* RunArtifacts;
     const { reason, pullRequestIid, worktree, issue } = state;
     const note = [
       `**AFK failed** — ${reason}`,
       "",
-      `- Run log: \`${runLogPath}\``,
+      `- Run log: \`${artifacts.logPath}\``,
       pullRequestIid === null ? null : `- Draft MR (left for inspection): !${pullRequestIid}`,
       worktree === null ? null : `- Worktree (left for inspection): \`${worktree}\``,
     ]
@@ -539,7 +541,7 @@ const onFailed = (
 const dispatchHandler = (
   current: Exclude<State, { kind: "fetch_queue" }>,
   env: Environment,
-): Effect.Effect<State, HandlerError, GitProvider> => {
+): Effect.Effect<State, HandlerError, GitProvider | RunArtifacts> => {
   switch (current.kind) {
     case "claim_issue": {
       return onClaimIssue(current.issue);
@@ -615,7 +617,7 @@ export const failedFieldsOf = (
 export const step = (
   current: State,
   env: Environment,
-): Effect.Effect<State, ProviderCallError, GitProvider> => {
+): Effect.Effect<State, ProviderCallError, GitProvider | RunArtifacts> => {
   if (current.kind === "fetch_queue") {
     return onFetchQueue;
   }

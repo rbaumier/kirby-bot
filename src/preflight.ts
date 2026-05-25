@@ -9,7 +9,7 @@ import { mkdir } from "node:fs/promises";
 import { basename } from "node:path";
 import { $ } from "bun";
 import { Data, Effect } from "effect";
-import { runDir } from "./run-artifacts";
+import { RunArtifacts } from "./run-artifacts";
 import { runShell } from "./shell";
 
 /**
@@ -46,34 +46,37 @@ const assertToolInPath = (tool: string): Effect.Effect<void, PreflightError> =>
  * Create the run directory and verify the environment, returning
  * the repo facts. Fails fast with a clear, actionable message.
  */
-export const preflight: Effect.Effect<Environment, PreflightError> = Effect.gen(function* () {
-  yield* Effect.tryPromise({
-    try: () => mkdir(runDir, { recursive: true }),
-    catch: (cause) =>
-      new PreflightError({ reason: `could not create the run directory: ${String(cause)}` }),
-  });
+export const preflight: Effect.Effect<Environment, PreflightError, RunArtifacts> = Effect.gen(
+  function* () {
+    const artifacts = yield* RunArtifacts;
+    yield* Effect.tryPromise({
+      try: () => mkdir(artifacts.dir, { recursive: true }),
+      catch: (cause) =>
+        new PreflightError({ reason: `could not create the run directory: ${String(cause)}` }),
+    });
 
-  for (const tool of REQUIRED_TOOLS) {
-    yield* assertToolInPath(tool);
-  }
+    for (const tool of REQUIRED_TOOLS) {
+      yield* assertToolInPath(tool);
+    }
 
-  const topLevel = yield* runShell(() => $`git rev-parse --show-toplevel`).pipe(
-    Effect.mapError(() => new PreflightError({ reason: "not inside a git repository" })),
-  );
+    const topLevel = yield* runShell(() => $`git rev-parse --show-toplevel`).pipe(
+      Effect.mapError(() => new PreflightError({ reason: "not inside a git repository" })),
+    );
 
-  const originHead = yield* runShell(
-    () => $`git symbolic-ref --short refs/remotes/origin/HEAD`,
-  ).pipe(
-    Effect.mapError(
-      () =>
-        new PreflightError({
-          reason: "origin/HEAD is not set locally — run: git remote set-head origin -a",
-        }),
-    ),
-  );
+    const originHead = yield* runShell(
+      () => $`git symbolic-ref --short refs/remotes/origin/HEAD`,
+    ).pipe(
+      Effect.mapError(
+        () =>
+          new PreflightError({
+            reason: "origin/HEAD is not set locally — run: git remote set-head origin -a",
+          }),
+      ),
+    );
 
-  return {
-    repoName: basename(topLevel.stdout.trim()),
-    defaultBranch: originHead.stdout.trim().replace(ORIGIN_PREFIX_RE, ""),
-  };
-});
+    return {
+      repoName: basename(topLevel.stdout.trim()),
+      defaultBranch: originHead.stdout.trim().replace(ORIGIN_PREFIX_RE, ""),
+    };
+  },
+);

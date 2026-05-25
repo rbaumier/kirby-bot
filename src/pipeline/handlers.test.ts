@@ -10,9 +10,21 @@ import { Effect, Layer } from "effect";
 import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
+import { RunArtifacts, type RunArtifactsShape } from "../run-artifacts";
 import { UnexpectedVerdictError, describePhaseRunError } from "./errors";
 import { failedFieldsOf, step } from "./handlers";
 import type { State } from "./state";
+
+const noopRunArtifacts: RunArtifactsShape = {
+  dir: "/tmp/test-run-dir",
+  logPath: "/tmp/test-run-dir/run.jsonl",
+  sentinelPath: () => "/tmp/test-run-dir/sentinel.flag",
+  tmuxLogPath: () => "/tmp/test-run-dir/tmux.log",
+  promptFilePath: () => "/tmp/test-run-dir/prompt.md",
+  sessionName: () => "test-session",
+  logEvent: () => Effect.void,
+};
+const TestRunArtifacts: Layer.Layer<RunArtifacts> = Layer.succeed(RunArtifacts, noopRunArtifacts);
 
 const issue = { iid: 42, title: "Test issue", body: "body" } as const;
 const env: Environment = { repoName: "test-repo", defaultBranch: "main" };
@@ -122,7 +134,10 @@ describe("describePhaseRunError", () => {
 describe("step seam", () => {
   it("HandlerError from claim_issue becomes a `failed` state with the issue copied off `current`", async () => {
     const result = await Effect.runPromise(
-      step({ kind: "claim_issue", issue }, env).pipe(Effect.provide(makeClaimFailingProvider())),
+      step({ kind: "claim_issue", issue }, env).pipe(
+        Effect.provide(makeClaimFailingProvider()),
+        Effect.provide(TestRunArtifacts),
+      ),
     );
     const failed = result.kind === "failed" ? result : null;
     expect(failed).not.toBeNull();
