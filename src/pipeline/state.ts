@@ -43,7 +43,13 @@ export type PipelineContext = {
 export type State =
   | { readonly kind: "fetch_queue" }
   | { readonly kind: "claim_issue"; readonly issue: IssueRef }
-  | { readonly kind: "branch_worktree"; readonly issue: IssueRef }
+  | { readonly kind: "branch_create"; readonly issue: IssueRef }
+  | {
+      readonly kind: "branch_push";
+      readonly issue: IssueRef;
+      readonly branch: string;
+      readonly worktree: string;
+    }
   | {
       readonly kind: "run_impl";
       readonly issue: IssueRef;

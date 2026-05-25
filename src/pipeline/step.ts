@@ -21,7 +21,7 @@ import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
 import type { HandlerError } from "./errors";
 import { onDone, onMerge, onOpenDraftMr } from "./handlers/pr";
-import { onBranchWorktree, onClaimIssue, onFetchQueue } from "./handlers/queue";
+import { onBranchCreate, onBranchPush, onClaimIssue, onFetchQueue } from "./handlers/queue";
 import type { State } from "./state";
 
 /** Services every multi-yield handler / dispatcher requires. */
@@ -84,8 +84,11 @@ const dispatchHandler = (
     case "claim_issue": {
       return onClaimIssue(current.issue);
     }
-    case "branch_worktree": {
-      return onBranchWorktree(current.issue, env);
+    case "branch_create": {
+      return onBranchCreate(current.issue, env);
+    }
+    case "branch_push": {
+      return onBranchPush(current);
     }
     case "run_impl": {
       return runImplPhase(current);
@@ -137,7 +140,7 @@ export const failedFieldsOf = (
 ): Omit<Extract<State, { kind: "failed" }>, "kind" | "reason"> => {
   switch (state.kind) {
     case "claim_issue":
-    case "branch_worktree": {
+    case "branch_create": {
       return {
         issue: state.issue,
         branch: null,
@@ -146,6 +149,7 @@ export const failedFieldsOf = (
         fixCycles: null,
       };
     }
+    case "branch_push":
     case "run_impl": {
       return {
         issue: state.issue,
@@ -222,14 +226,9 @@ export const step = (
         // Unreachable: end dies inside dispatchHandler, failed has no failure mode.
         return Effect.die(`unexpected handler failure for ${current.kind}: ${error.reason}`);
       }
-      const base = failedFieldsOf(current);
       return Effect.succeed({
         kind: "failed",
-        issue: base.issue,
-        branch: error.branch ?? base.branch,
-        worktree: error.worktree ?? base.worktree,
-        pullRequestIid: error.pullRequestIid ?? base.pullRequestIid,
-        fixCycles: base.fixCycles,
+        ...failedFieldsOf(current),
         reason: error.reason,
       });
     }),

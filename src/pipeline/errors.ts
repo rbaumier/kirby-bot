@@ -12,16 +12,12 @@ import { describeProviderError } from "../provider/types";
 /**
  * A handler decided the issue cannot proceed. `reason` enters the failed state.
  *
- * Optional `branch` / `worktree` / `pullRequestIid` overrides let a handler
- * surface context the current `State` variant doesn't yet carry — e.g. the
- * `branch_worktree` push step has computed both paths but the state itself
- * stores neither.
+ * Pipeline context (branch / worktree / pullRequestIid) is recovered by the
+ * seam via `failedFieldsOf(current)` — handlers do not plumb it through the
+ * error. Each state variant is the source of truth for the fields it has.
  */
 export class HandlerError extends Data.TaggedError("HandlerError")<{
   readonly reason: string;
-  readonly branch?: string;
-  readonly worktree?: string;
-  readonly pullRequestIid?: number;
 }> {}
 
 /** Map a `ProviderCallError` into a `HandlerError` with a phase-prefixed reason. */

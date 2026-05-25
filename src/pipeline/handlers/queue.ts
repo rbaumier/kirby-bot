@@ -3,10 +3,11 @@
  *
  *   - `fetch_queue` — read the ready queue, pick one issue at random, or end.
  *   - `claim_issue` — re-check the labels, then claim by adding `picked-by-agent`.
- *   - `branch_worktree` — create the issue branch in a dedicated worktree, push it.
+ *   - `branch_create` — create the issue branch in a dedicated worktree.
+ *   - `branch_push` — push the freshly-created branch to origin.
  *
  * Only `onFetchQueue` fails fatally (the `ProviderCallError` it surfaces is the
- * orchestrator's terminator). The other two route their failures through
+ * orchestrator's terminator). The others route their failures through
  * `HandlerError`; the `step` seam rebuilds a `failed` state from `current`.
  */
 import { $ } from "bun";
@@ -107,11 +108,11 @@ export const onClaimIssue = (
     yield* Console.log(
       `\n${banner}\n#${issue.iid} ${issue.title}\n${banner}\n${issue.body === "" ? "(no description)" : issue.body}\n${banner}\n`,
     );
-    return { kind: "branch_worktree", issue };
+    return { kind: "branch_create", issue };
   });
 
-/** Branch_worktree — create the issue branch in a dedicated worktree, push it. */
-export const onBranchWorktree = (
+/** Branch_create — materialize the branch + worktree on disk. */
+export const onBranchCreate = (
   issue: IssueRef,
   env: Environment,
 ): Effect.Effect<State, HandlerError> =>
@@ -123,7 +124,7 @@ export const onBranchWorktree = (
       try: () => mkdir(join(WORKTREES_DIR, env.repoName), { recursive: true }),
       catch: (cause): HandlerError =>
         new HandlerError({
-          reason: `branch_worktree: could not create the worktree parent directory — ${String(cause)}`,
+          reason: `branch_create: could not create the worktree parent directory — ${String(cause)}`,
         }),
     });
 
@@ -147,22 +148,26 @@ export const onBranchWorktree = (
       Effect.mapError(
         (error): HandlerError =>
           new HandlerError({
-            reason: `branch_worktree: worktree add failed — ${describeShellError(error)}`,
+            reason: `branch_create: worktree add failed — ${describeShellError(error)}`,
           }),
       ),
     );
 
     yield* excludeStopHookConfig(worktree);
+    return { kind: "branch_push", issue, branch, worktree };
+  });
 
-    // Push: branch/worktree exist on disk by now — surface them on the error
-    // so `onFailed` can print the path the operator needs to inspect.
+/** Branch_push — push the freshly-created branch to origin. */
+export const onBranchPush = (
+  state: Extract<State, { kind: "branch_push" }>,
+): Effect.Effect<State, HandlerError> =>
+  Effect.gen(function* () {
+    const { issue, branch, worktree } = state;
     yield* runShellGit(worktree, ["push", "-u", "origin", branch]).pipe(
       Effect.mapError(
         (error): HandlerError =>
           new HandlerError({
-            reason: `branch_worktree: push failed — ${describeShellError(error)}`,
-            branch,
-            worktree,
+            reason: `branch_push: push failed — ${describeShellError(error)}`,
           }),
       ),
     );
