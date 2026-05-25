@@ -51,9 +51,6 @@ const formatTransition = (transition: TransitionSummary): string => {
 /** The issue a state is about, or `null` for the queue-level states. */
 const issueOf = (state: State): IssueRef | null => ("issue" in state ? state.issue : null);
 
-/** Predicate for `Effect.iterate` — keep looping until the machine reaches `end`. */
-const isNotDone = (state: State): boolean => state.kind !== "end";
-
 /** Run one handler, then print and log the transition it produced. */
 const advance = (state: State, env: Environment): Effect.Effect<State, GitLabError> =>
   Effect.gen(function* () {
@@ -93,7 +90,7 @@ export const runMachine = (env: Environment): Effect.Effect<void, GitLabError> =
 
     const initialState: State = { kind: "fetch_queue" };
     yield* Effect.iterate(initialState, {
-      while: (state: State) => isNotDone(state),
+      while: (state: State) => state.kind !== "end",
       body: (state: State) => advance(state, env),
     });
 

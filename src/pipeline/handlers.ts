@@ -573,9 +573,9 @@ const onDone = (state: Extract<State, { kind: "done" }>): Effect.Effect<State> =
           ),
         ),
       );
-    for (const label of [LABELS.pickedByAgent, LABELS.readyForAgent]) {
-      yield* unlabelOne(label);
-    }
+    yield* Effect.forEach([LABELS.pickedByAgent, LABELS.readyForAgent], unlabelOne, {
+      discard: true,
+    });
     const removed = yield* runShell(() => $`git worktree remove ${worktree} --force`);
     if (removed.exitCode !== 0) {
       yield* Console.error(`  ⚠ worktree removal failed: ${removed.stderr.trim().slice(0, 160)}`);
