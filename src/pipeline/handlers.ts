@@ -7,99 +7,42 @@
  * converts these into a `failed` state at the seam by pulling the pipeline
  * context off `current`. Handlers therefore never spread `{issue, branch,
  * worktree, pullRequestIid}` themselves.
+ *
+ * The five interactive Phase handlers (run_impl, review, evaluate, fix,
+ * run_dogfood) live in `src/phases/*` — each Phase owns its own verdict-set
+ * narrowing and verdict-to-state routing. This file keeps the queue-level
+ * states (fetch_queue, claim_issue, branch_worktree), the script-only states
+ * (open_draft_mr, merge, done), the failure path (failed), and the dispatcher.
  */
 import { $ } from "bun";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Console, Effect, Option } from "effect";
-import type { Phase } from "../config";
-import { ISSUE_BUDGET_MS, LABELS, MAX_FIX_CYCLES, WORKTREES_DIR } from "../config";
+import { LABELS, WORKTREES_DIR } from "../config";
 import { describeShellError, runShell, runShellAllowingFailure } from "../shell";
+import { evaluatePhase } from "../phases/evaluate";
+import { fixPhase } from "../phases/fix";
+import { reviewPhase } from "../phases/review";
+import { runDogfoodPhase } from "../phases/run-dogfood";
+import { runImplPhase } from "../phases/run-impl";
 import { GitProvider } from "../provider/provider";
 import { describeProviderError } from "../provider/types";
 import type { ProviderCallError, PullRequestRef } from "../provider/types";
 import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
-import { phaseTimeoutMs, runPhaseSession } from "../session/phase";
-import type { VerdictToken } from "../session/verdict";
-import type { PhaseRunError } from "./errors";
-import { HandlerError, UnexpectedVerdictError, describePhaseRunError } from "./errors";
+import { HandlerError } from "./errors";
 import { branchName, worktreePath } from "./naming";
-import type { IssueRef, PipelineContext, State } from "./state";
+import type { IssueRef, State } from "./state";
 
 // ─── Constants ────────────────────────────────────────────────────────────
 
 const STATE_FETCH_QUEUE = "fetch_queue" as const;
-const STATE_RUN_DOGFOOD = "run_dogfood" as const;
-const STATE_OPEN_DRAFT_MR = "open_draft_mr" as const;
 
 /** Services every multi-yield handler / dispatcher requires. */
 type HandlerServices = GitProvider | RunArtifacts;
 
 // ─── Handler helpers ───────────────────────────────────────────────────────
-
-/** The five shared pipeline fields, copied off any node that carries them. */
-const pipelineContext = (state: PipelineContext): PipelineContext => ({
-  issue: state.issue,
-  branch: state.branch,
-  worktree: state.worktree,
-  deadline: state.deadline,
-  pullRequestIid: state.pullRequestIid,
-});
-
-/** Options for running a single phase session. */
-type RunPhaseOptions = {
-  readonly issueIid: number;
-  readonly worktree: string;
-  readonly deadline: number;
-  readonly iteration: number;
-  readonly replacements: Record<string, string>;
-};
-
-/**
- * Run one phase and narrow the verdict to the expected set.
- *
- * Keeps the typed `PhaseError` channel of `runPhaseSession`; an out-of-set
- * verdict surfaces as `UnexpectedVerdictError` so callers route on tagged
- * data rather than re-pattern-matching a string reason.
- */
-const runPhase = <const V extends VerdictToken>(
-  phase: Phase,
-  options: RunPhaseOptions,
-  expected: readonly V[],
-): Effect.Effect<V, PhaseRunError, RunArtifacts> => {
-  const expectedSet: ReadonlySet<string> = new Set(expected);
-  const isExpected = (verdict: VerdictToken): verdict is V => expectedSet.has(verdict);
-  return runPhaseSession({
-    phase,
-    issueIid: options.issueIid,
-    worktree: options.worktree,
-    iteration: options.iteration,
-    timeoutMs: phaseTimeoutMs(phase, options.deadline),
-    replacements: options.replacements,
-  }).pipe(
-    Effect.flatMap((verdict) =>
-      isExpected(verdict)
-        ? Effect.succeed(verdict)
-        : Effect.fail(new UnexpectedVerdictError({ phase, verdict, expected })),
-    ),
-  );
-};
-
-/** Build the `RunPhaseOptions` for a PR-bound phase — the `{worktree, mr_iid}` template. */
-const mrPhaseOptions = (context: PipelineContext, iteration: number): RunPhaseOptions => ({
-  issueIid: context.issue.iid,
-  worktree: context.worktree,
-  deadline: context.deadline,
-  iteration,
-  replacements: { worktree: context.worktree, mr_iid: String(context.pullRequestIid) },
-});
-
-/** Map a phase-running error into a `HandlerError` with a phase-prefixed reason. */
-const phaseRunHandlerError = (prefix: string) =>
-  (error: PhaseRunError): HandlerError =>
-    new HandlerError({ reason: `${prefix}: ${describePhaseRunError(error)}` });
 
 /** Map a `ProviderCallError` into a `HandlerError` with a phase-prefixed reason. */
 const providerHandlerError = (prefix: string) =>
@@ -265,40 +208,6 @@ const onBranchWorktree = (
     return { kind: "run_impl", issue, branch, worktree };
   });
 
-/** Run_impl — start the budget, run the implementer phase. */
-const onRunImpl = (
-  state: Extract<State, { kind: "run_impl" }>,
-): Effect.Effect<State, HandlerError, RunArtifacts> =>
-  Effect.gen(function* () {
-    const { issue, branch, worktree } = state;
-    const deadline = Date.now() + ISSUE_BUDGET_MS;
-
-    const verdict = yield* runPhase(
-      "run_impl",
-      {
-        issueIid: issue.iid,
-        worktree,
-        deadline,
-        iteration: 0,
-        replacements: {
-          iid: String(issue.iid),
-          title: issue.title,
-          branch,
-          worktree,
-          body: issue.body === "" ? "(no description)" : issue.body,
-        },
-      },
-      ["READY_FOR_REVIEW", "BLOCKER_SUSPECTED"],
-    ).pipe(Effect.mapError(phaseRunHandlerError("run_impl")));
-
-    if (verdict === "READY_FOR_REVIEW") {
-      return { kind: STATE_OPEN_DRAFT_MR, issue, branch, worktree, deadline };
-    }
-    return yield* Effect.fail(
-      new HandlerError({ reason: "run_impl: the implementer reported a blocker" }),
-    );
-  });
-
 /** Open_draft_mr — open the Draft PR (idempotent), recording its iid. */
 const onOpenDraftMr = (
   state: Extract<State, { kind: "open_draft_mr" }>,
@@ -333,7 +242,7 @@ const onOpenDraftMr = (
         title: `[AFK] ${issue.title}`,
         description,
       })
-      .pipe(Effect.mapError(providerHandlerError(STATE_OPEN_DRAFT_MR)));
+      .pipe(Effect.mapError(providerHandlerError("open_draft_mr")));
 
     yield* Console.log(`  ↳ Draft MR !${opened.iid} created for ${branch}`);
     return {
@@ -345,77 +254,6 @@ const onOpenDraftMr = (
       pullRequestIid: opened.iid,
       fixCycles: 0,
     };
-  });
-
-/** Review — run the review phase; `REVIEW_DONE` leads to evaluate. */
-const onReview = (
-  state: Extract<State, { kind: "review" }>,
-): Effect.Effect<State, HandlerError, RunArtifacts> =>
-  Effect.gen(function* () {
-    const { fixCycles } = state;
-    yield* runPhase("review", mrPhaseOptions(state, fixCycles), ["REVIEW_DONE"]).pipe(
-      Effect.mapError(phaseRunHandlerError(`review[${fixCycles}]`)),
-    );
-    return { kind: "evaluate", ...pipelineContext(state), fixCycles };
-  });
-
-/** Evaluate — the convergence authority; `CONVERGED` leads to dogfood, `NEEDS_FIX` leads to fix. */
-const onEvaluate = (
-  state: Extract<State, { kind: "evaluate" }>,
-): Effect.Effect<State, HandlerError, RunArtifacts> =>
-  Effect.gen(function* () {
-    const { fixCycles } = state;
-    const verdict = yield* runPhase(
-      "evaluate",
-      mrPhaseOptions(state, fixCycles),
-      ["CONVERGED", "NEEDS_FIX"],
-    ).pipe(Effect.mapError(phaseRunHandlerError(`evaluate[${fixCycles}]`)));
-
-    if (verdict === "CONVERGED") {
-      return { kind: STATE_RUN_DOGFOOD, ...pipelineContext(state) };
-    }
-    // NEEDS_FIX — cap is on the number of fix sessions. A 4th NEEDS_FIX is a
-    // structural disagreement, not a slow fix — end the issue for a human.
-    if (MAX_FIX_CYCLES <= fixCycles) {
-      return yield* Effect.fail(
-        new HandlerError({
-          reason: `fix_cycle_cap: ${MAX_FIX_CYCLES} fix cycles without convergence`,
-        }),
-      );
-    }
-    return { kind: "fix", ...pipelineContext(state), fixCycles };
-  });
-
-/** Fix — apply the verified fix instructions; `FIX_DONE` leads back to review. */
-const onFix = (state: Extract<State, { kind: "fix" }>): Effect.Effect<State, HandlerError, RunArtifacts> =>
-  Effect.gen(function* () {
-    const { fixCycles } = state;
-    yield* runPhase("fix", mrPhaseOptions(state, fixCycles), ["FIX_DONE"]).pipe(
-      Effect.mapError(phaseRunHandlerError(`fix[${fixCycles}]`)),
-    );
-    // The cycle is spent — carry the incremented count back into the loop.
-    return { kind: "review", ...pipelineContext(state), fixCycles: fixCycles + 1 };
-  });
-
-/** Run_dogfood — the runtime gate; `DOGFOOD_PASS` leads to merge. */
-const onRunDogfood = (
-  state: Extract<State, { kind: "run_dogfood" }>,
-): Effect.Effect<State, HandlerError, RunArtifacts> =>
-  Effect.gen(function* () {
-    const verdict = yield* runPhase(
-      STATE_RUN_DOGFOOD,
-      mrPhaseOptions(state, 0),
-      ["DOGFOOD_PASS", "DOGFOOD_FAIL"],
-    ).pipe(Effect.mapError(phaseRunHandlerError(STATE_RUN_DOGFOOD)));
-
-    if (verdict === "DOGFOOD_PASS") {
-      return { kind: "merge", ...pipelineContext(state) };
-    }
-    return yield* Effect.fail(
-      new HandlerError({
-        reason: `${STATE_RUN_DOGFOOD}: the runtime dogfood gate found an in-scope bug`,
-      }),
-    );
   });
 
 /** Merge — un-draft the PR and merge it, verifying on a non-zero exit. */
@@ -550,22 +388,22 @@ const dispatchHandler = (
       return onBranchWorktree(current.issue, env);
     }
     case "run_impl": {
-      return onRunImpl(current);
+      return runImplPhase(current);
     }
     case "open_draft_mr": {
       return onOpenDraftMr(current, env);
     }
     case "review": {
-      return onReview(current);
+      return reviewPhase(current);
     }
     case "evaluate": {
-      return onEvaluate(current);
+      return evaluatePhase(current);
     }
     case "fix": {
-      return onFix(current);
+      return fixPhase(current);
     }
     case "run_dogfood": {
-      return onRunDogfood(current);
+      return runDogfoodPhase(current);
     }
     case "merge": {
       return onMerge(current);
