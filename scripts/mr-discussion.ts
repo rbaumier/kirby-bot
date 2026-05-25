@@ -18,7 +18,7 @@ import {
   postDiscussion,
   replyToDiscussion,
   resolveDiscussion,
-} from "../src/gitlab/discussion-api";
+} from "../src/gitlab/api";
 
 /** The CLI was invoked with a missing or malformed argument. */
 class UsageError extends Data.TaggedError("UsageError")<{ readonly message: string }> {}

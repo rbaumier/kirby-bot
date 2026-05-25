@@ -16,19 +16,17 @@ import {
   createDraftMergeRequest as glCreateDraftMergeRequest,
   findOpenMergeRequestBySource as glFindOpenMergeRequestBySource,
   type GitLabIssue,
+  listDiscussions as glListDiscussions,
   listIssuesByLabels as glListIssuesByLabels,
   markMergeRequestReady as glMarkMergeRequestReady,
   mergeMergeRequest as glMergeMergeRequest,
+  postDiscussion as glPostDiscussion,
+  replyToDiscussion as glReplyToDiscussion,
+  resolveDiscussion as glResolveDiscussion,
   updateIssueLabels as glUpdateIssueLabels,
   viewIssue as glViewIssue,
   viewMergeRequest as glViewMergeRequest,
 } from "../gitlab/api";
-import {
-  listDiscussions as glListDiscussions,
-  postDiscussion as glPostDiscussion,
-  replyToDiscussion as glReplyToDiscussion,
-  resolveDiscussion as glResolveDiscussion,
-} from "../gitlab/discussion-api";
 import type { DiscussionSummary as GitLabDiscussionSummary } from "../gitlab/discussion";
 import type { GitLabError } from "../gitlab/errors";
 import type { GitLabMergeRequest } from "../gitlab/schema";
