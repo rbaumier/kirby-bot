@@ -18,7 +18,7 @@ import { BunRuntime } from "@effect/platform-bun";
 import { Console, Effect } from "effect";
 import { LABELS } from "../src/config";
 import { listIssuesByLabels, updateIssueLabels } from "../src/gitlab/api";
-import { describeGitLabError } from "../src/gitlab/errors";
+import { describeProviderError } from "../src/provider/types";
 import type { ClaimedIssue } from "../src/recovery/stale";
 import { selectStale, worktreePathsForIssue } from "../src/recovery/stale";
 import { runShellAllowingFailure } from "../src/shell";
@@ -68,7 +68,7 @@ const recoverIssue = (issue: ClaimedIssue): Effect.Effect<void> =>
     yield* Console.log(`  recovering #${issue.iid} (idle since ${issue.updatedAt})`);
     yield* updateIssueLabels(issue.iid, { remove: [LABELS.pickedByAgent] }).pipe(
       Effect.catchAll((error) =>
-        Console.error(`  #${issue.iid} unlabel failed — ${describeGitLabError(error)}`),
+        Console.error(`  #${issue.iid} unlabel failed — ${describeProviderError(error)}`),
       ),
     );
     yield* removeOrphanWorktrees(issue.iid);

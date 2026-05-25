@@ -21,12 +21,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { Effect, ParseResult, Schedule, Schema } from "effect";
 import {
-  GitLabConfigError,
-  type GitLabError,
-  GitLabHttpError,
-  GitLabNetworkError,
-  GitLabResponseError,
-} from "./errors";
+  ProviderConfigError,
+  type ProviderError,
+  ProviderHttpError,
+  ProviderNetworkError,
+  ProviderResponseError,
+} from "../provider/types";
 
 /** The resolved GitLab connection: base URL, auth token, and URL-encoded project ref. */
 type GitLabConfig = {
@@ -97,7 +97,7 @@ const detectRemote = (): Promise<Remote> =>
     .then((output) => {
       const parsed = parseRemoteUrl(output);
       if (parsed === null) {
-        throw new GitLabConfigError({
+        throw new ProviderConfigError({
           detail: `unparseable origin URL: ${output.trim().slice(0, 120)}`,
         });
       }
@@ -115,12 +115,12 @@ const computeConfig = async (): Promise<GitLabConfig> => {
   const hostUrl = envHost ?? `https://${remote?.host ?? ""}`;
   const projectPath = envProject ?? remote?.path ?? "";
   if (projectPath === "") {
-    throw new GitLabConfigError({ detail: "no project path resolved from env or git remote" });
+    throw new ProviderConfigError({ detail: "no project path resolved from env or git remote" });
   }
   const hostName = hostUrl.replace(/^https?:\/\//, "");
   const token = envToken ?? readTokenFromGlabConfig(hostName);
   if (!token) {
-    throw new GitLabConfigError({
+    throw new ProviderConfigError({
       detail: `no token in $GITLAB_TOKEN or ~/.config/glab-cli/config.yml for host ${hostName}`,
     });
   }
@@ -135,7 +135,7 @@ const computeConfig = async (): Promise<GitLabConfig> => {
 let configPromise: Promise<GitLabConfig> | undefined;
 
 /** Lazily resolve, then cache, the GitLab config. Re-tries on failure. */
-const gitLabConfig: Effect.Effect<GitLabConfig, GitLabConfigError> = Effect.tryPromise({
+const gitLabConfig: Effect.Effect<GitLabConfig, ProviderConfigError> = Effect.tryPromise({
   try: () => {
     if (configPromise === undefined) {
       configPromise = computeConfig().catch((error: unknown) => {
@@ -145,10 +145,10 @@ const gitLabConfig: Effect.Effect<GitLabConfig, GitLabConfigError> = Effect.tryP
     }
     return configPromise;
   },
-  catch: (error): GitLabConfigError =>
-    error instanceof GitLabConfigError
+  catch: (error): ProviderConfigError =>
+    error instanceof ProviderConfigError
       ? error
-      : new GitLabConfigError({
+      : new ProviderConfigError({
           detail: error instanceof Error ? error.message : String(error),
         }),
 });
@@ -178,7 +178,7 @@ const buildUrl = (config: GitLabConfig, request: GitLabRequest): string => {
 
 /**
  * Decode a parsed body against `schema` and lift any `ParseError` into a
- * typed {@link GitLabResponseError}.
+ * typed {@link ProviderResponseError}.
  *
  * `errors: "all"` so multi-field failures surface every issue at once.
  * The 800-char slice gives `TreeFormatter` room to keep the offending value
@@ -188,11 +188,11 @@ const decodeBodyOrFail = <A, I>(
   request: GitLabRequest,
   schema: Schema.Schema<A, I>,
   parsed: unknown,
-): Effect.Effect<A, GitLabError> =>
+): Effect.Effect<A, ProviderError> =>
   Schema.decodeUnknown(schema, { errors: "all" })(parsed).pipe(
     Effect.mapError(
-      (error): GitLabError =>
-        new GitLabResponseError({
+      (error): ProviderError =>
+        new ProviderResponseError({
           method: request.method,
           path: request.path,
           detail: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 800),
@@ -204,7 +204,7 @@ const decodeBodyOrFail = <A, I>(
 const callOnce = <A, I>(
   request: GitLabRequest,
   schema: Schema.Schema<A, I>,
-): Effect.Effect<A, GitLabError> =>
+): Effect.Effect<A, ProviderError> =>
   Effect.gen(function* () {
     const config = yield* gitLabConfig;
     const url = buildUrl(config, request);
@@ -224,8 +224,8 @@ const callOnce = <A, I>(
 
     const response = yield* Effect.tryPromise({
       try: () => fetch(url, init),
-      catch: (error): GitLabError =>
-        new GitLabNetworkError({
+      catch: (error): ProviderError =>
+        new ProviderNetworkError({
           method: request.method,
           path: request.path,
           cause: error instanceof Error ? error.message : String(error),
@@ -234,8 +234,8 @@ const callOnce = <A, I>(
 
     const text = yield* Effect.tryPromise({
       try: () => response.text(),
-      catch: (error): GitLabError =>
-        new GitLabNetworkError({
+      catch: (error): ProviderError =>
+        new ProviderNetworkError({
           method: request.method,
           path: request.path,
           cause: `reading body failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -244,7 +244,7 @@ const callOnce = <A, I>(
 
     if (!response.ok) {
       return yield* Effect.fail(
-        new GitLabHttpError({
+        new ProviderHttpError({
           method: request.method,
           path: request.path,
           status: response.status,
@@ -256,8 +256,8 @@ const callOnce = <A, I>(
     // A 204-style empty body — schemas that tolerate `undefined` (e.g. `void`) pass.
     const parsed = yield* Effect.try({
       try: (): unknown => (text.trim() === "" ? undefined : JSON.parse(text)),
-      catch: (): GitLabError =>
-        new GitLabResponseError({
+      catch: (): ProviderError =>
+        new ProviderResponseError({
           method: request.method,
           path: request.path,
           detail: `body was not JSON: ${text.slice(0, 200)}`,
@@ -270,7 +270,7 @@ const callOnce = <A, I>(
 /**
  * Retry policy for reads: jittered exponential backoff, 3 attempts total.
  * Transient HTTP / network failures retry; a deterministic boot-time
- * misconfiguration ({@link GitLabConfigError}) does not — retrying that just
+ * misconfiguration ({@link ProviderConfigError}) does not — retrying that just
  * delays a clear error message by ~1 second.
  */
 const readRetryPolicy = Schedule.exponential("200 millis").pipe(
@@ -285,11 +285,11 @@ const readRetryPolicy = Schedule.exponential("200 millis").pipe(
 export const runGitLabRead = <A, I>(
   request: GitLabRequest & { readonly method: "GET" },
   schema: Schema.Schema<A, I>,
-): Effect.Effect<A, GitLabError> =>
+): Effect.Effect<A, ProviderError> =>
   callOnce(request, schema).pipe(
     Effect.retry({
       schedule: readRetryPolicy,
-      while: (error: GitLabError) => error._tag !== "GitLabConfigError",
+      while: (error: ProviderError) => error._tag !== "ProviderConfigError",
     }),
   );
 
@@ -301,7 +301,7 @@ export const runGitLabRead = <A, I>(
 export const runGitLabWrite = <A, I>(
   request: GitLabRequest,
   schema: Schema.Schema<A, I>,
-): Effect.Effect<A, GitLabError> => callOnce(request, schema);
+): Effect.Effect<A, ProviderError> => callOnce(request, schema);
 
 /** Exposed for tests — never used in production code. */
 export const __test = { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail };

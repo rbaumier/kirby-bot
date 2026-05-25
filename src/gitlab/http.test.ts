@@ -65,14 +65,14 @@ describe("decodeBodyOrFail", () => {
     expect(value).toEqual({ iid: 42 });
   });
 
-  it("maps a decode failure to a GitLabResponseError tagged with the request method/path", async () => {
+  it("maps a decode failure to a ProviderResponseError tagged with the request method/path", async () => {
     const either = await Effect.runPromise(
       Effect.either(decodeBodyOrFail(request, schema, { iid: "not-a-number" })),
     );
     expect(either).toMatchObject({
       _tag: "Left",
       left: {
-        _tag: "GitLabResponseError",
+        _tag: "ProviderResponseError",
         method: "GET",
         path: "projects/:id/issues/1",
       },
@@ -85,7 +85,7 @@ describe("decodeBodyOrFail", () => {
     );
     const detail = Either.match(either, {
       onLeft: (error): string =>
-        error._tag === "GitLabResponseError" ? error.detail : "",
+        error._tag === "ProviderResponseError" ? error.detail : "",
       onRight: (): string => "",
     });
     expect(detail.length).toBeGreaterThan(0);

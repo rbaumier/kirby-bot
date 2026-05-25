@@ -10,8 +10,8 @@
 import { Effect, Schema } from "effect";
 import { toDiscussionSummary } from "./discussion";
 import type { DiscussionSummary } from "./discussion";
-import { GitLabResponseError } from "./errors";
-import type { GitLabError } from "./errors";
+import { ProviderResponseError } from "../provider/types";
+import type { ProviderError } from "../provider/types";
 import { runGitLabRead, runGitLabWrite } from "./http";
 import { IssueSchema, MergeRequestSchema } from "./schema";
 import type { GitLabMergeRequest } from "./schema";
@@ -33,7 +33,7 @@ type ListIssuesByLabelsParams = {
 /** List issues filtered by label, with optional exclusions. */
 export const listIssuesByLabels = (
   params: ListIssuesByLabelsParams,
-): Effect.Effect<readonly GitLabIssue[], GitLabError> =>
+): Effect.Effect<readonly GitLabIssue[], ProviderError> =>
   runGitLabRead(
     {
       method: "GET",
@@ -51,7 +51,7 @@ export const listIssuesByLabels = (
   );
 
 /** Fetch a single issue by iid. */
-export const viewIssue = (iid: number): Effect.Effect<GitLabIssue, GitLabError> =>
+export const viewIssue = (iid: number): Effect.Effect<GitLabIssue, ProviderError> =>
   runGitLabRead({ method: "GET", path: `projects/:id/issues/${iid}` }, IssueSchema);
 
 /** Schema returned by issue-note creation — just enough to confirm the note exists. */
@@ -72,7 +72,7 @@ type LabelChanges = {
 export const updateIssueLabels = (
   iid: number,
   changes: LabelChanges,
-): Effect.Effect<void, GitLabError> => {
+): Effect.Effect<void, ProviderError> => {
   const body: Record<string, unknown> = {};
   if (changes.add !== undefined && changes.add.length > 0) {
     body.add_labels = changes.add.join(",");
@@ -92,7 +92,7 @@ export const updateIssueLabels = (
 };
 
 /** Post a new note (comment) on an issue. */
-export const addIssueNote = (iid: number, body: string): Effect.Effect<void, GitLabError> =>
+export const addIssueNote = (iid: number, body: string): Effect.Effect<void, ProviderError> =>
   runGitLabWrite(
     {
       method: "POST",
@@ -109,7 +109,7 @@ const mrArraySchema = Schema.Array(MergeRequestSchema);
 /** Find the one open MR for a branch, if any. */
 export const findOpenMergeRequestBySource = (
   sourceBranch: string,
-): Effect.Effect<GitLabMergeRequest | undefined, GitLabError> =>
+): Effect.Effect<GitLabMergeRequest | undefined, ProviderError> =>
   runGitLabRead(
     {
       method: "GET",
@@ -130,7 +130,7 @@ type CreateDraftMergeRequestParams = {
 /** Create a draft MR. Returns the created MR (its iid is the orchestrator's handle). */
 export const createDraftMergeRequest = (
   params: CreateDraftMergeRequestParams,
-): Effect.Effect<GitLabMergeRequest, GitLabError> =>
+): Effect.Effect<GitLabMergeRequest, ProviderError> =>
   runGitLabWrite(
     {
       method: "POST",
@@ -149,7 +149,7 @@ export const createDraftMergeRequest = (
   );
 
 /** Fetch a single MR by iid. */
-export const viewMergeRequest = (iid: number): Effect.Effect<GitLabMergeRequest, GitLabError> =>
+export const viewMergeRequest = (iid: number): Effect.Effect<GitLabMergeRequest, ProviderError> =>
   runGitLabRead(
     { method: "GET", path: `projects/:id/merge_requests/${iid}` },
     MergeRequestSchema,
@@ -163,7 +163,7 @@ const TitledMrSchema = Schema.Struct({ title: Schema.String });
  * title. The GitLab API derives the draft flag from the title prefix, so the
  * canonical way to "un-draft" is to PUT a clean title.
  */
-export const markMergeRequestReady = (iid: number): Effect.Effect<void, GitLabError> =>
+export const markMergeRequestReady = (iid: number): Effect.Effect<void, ProviderError> =>
   Effect.gen(function* () {
     const current = yield* runGitLabRead(
       { method: "GET", path: `projects/:id/merge_requests/${iid}` },
@@ -196,7 +196,7 @@ type MergeMergeRequestParams = {
  */
 export const mergeMergeRequest = (
   params: MergeMergeRequestParams,
-): Effect.Effect<GitLabMergeRequest, GitLabError> =>
+): Effect.Effect<GitLabMergeRequest, ProviderError> =>
   runGitLabWrite(
     {
       method: "PUT",
@@ -233,7 +233,7 @@ const DiscussionSchema = Schema.Object;
 /** List every discussion on a merge request. */
 export const listDiscussions = (
   mergeRequestIid: number,
-): Effect.Effect<readonly DiscussionSummary[], GitLabError> =>
+): Effect.Effect<readonly DiscussionSummary[], ProviderError> =>
   runGitLabRead(
     {
       method: "GET",
@@ -247,7 +247,7 @@ export const listDiscussions = (
 export const postDiscussion = (
   mergeRequestIid: number,
   body: string,
-): Effect.Effect<void, GitLabError> =>
+): Effect.Effect<void, ProviderError> =>
   runGitLabWrite(
     {
       method: "POST",
@@ -266,7 +266,7 @@ export const replyToDiscussion = (
   mergeRequestIid: number,
   discussionId: string,
   body: string,
-): Effect.Effect<void, GitLabError> =>
+): Effect.Effect<void, ProviderError> =>
   runGitLabWrite(
     {
       method: "POST",
@@ -283,7 +283,7 @@ export const replyToDiscussion = (
 export const resolveDiscussion = (
   mergeRequestIid: number,
   discussionId: string,
-): Effect.Effect<void, GitLabError> => {
+): Effect.Effect<void, ProviderError> => {
   const path = `${discussionsPath(mergeRequestIid)}/${discussionId}`;
   return runGitLabWrite(
     {
@@ -298,7 +298,7 @@ export const resolveDiscussion = (
       return summary.resolved
         ? Effect.void
         : Effect.fail(
-            new GitLabResponseError({
+            new ProviderResponseError({
               method: "PUT",
               path,
               detail: `discussion ${discussionId} still unresolved after PUT`,

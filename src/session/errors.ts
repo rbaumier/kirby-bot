@@ -1,7 +1,7 @@
 /**
  * Session/errors.ts — the failure modes of running one phase session.
  *
- * See `gitlab/errors.ts` for the project-wide error policy.
+ * See `provider/types.ts` for the project-wide error policy.
  * One tagged error per distinct failure mode, grouped by boundary.
  * A union alias and a `describe` function let a handler turn any
  * of them into a `failed` state's reason string.

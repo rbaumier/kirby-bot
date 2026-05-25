@@ -2,13 +2,14 @@
  * Provider/gitlab.ts — GitLab implementation of the {@link GitProvider} seam.
  *
  * Wraps the typed REST operations in `src/gitlab/*` and maps their domain
- * shapes (GitLab issues, MRs, discussions) and tagged errors (GitLabError)
- * to the provider-neutral vocabulary the pipeline depends on.
+ * shapes (GitLab issues, MRs, discussions) to the provider-neutral
+ * vocabulary the pipeline depends on. The HTTP error shapes are already
+ * shared (provider/types.ts) so no error remapping is needed here.
  *
- * Boot-time misconfiguration (GitLabConfigError) is treated as a defect at
- * the seam — the provider contract narrows call errors to ProviderCallError,
- * and a missing token / unparseable remote is a wiring bug, not a routable
- * call failure.
+ * Boot-time misconfiguration (ProviderConfigError) is treated as a defect
+ * at the seam — the provider contract narrows call errors to
+ * ProviderCallError, and a missing token / unparseable remote is a wiring
+ * bug, not a routable call failure.
  */
 import { Effect, Layer, Option } from "effect";
 import {
@@ -28,7 +29,6 @@ import {
   viewMergeRequest as glViewMergeRequest,
 } from "../gitlab/api";
 import type { DiscussionSummary as GitLabDiscussionSummary } from "../gitlab/discussion";
-import type { GitLabError } from "../gitlab/errors";
 import type { GitLabMergeRequest } from "../gitlab/schema";
 import { GitProvider } from "./provider";
 import {
@@ -39,57 +39,20 @@ import {
   type IssueLabelChange,
   type ListIssuesQuery,
   type MergeInput,
-  ProviderHttpError,
-  ProviderNetworkError,
-  ProviderResponseError,
   type ProviderCallError,
+  type ProviderError,
   type PullRequestRef,
 } from "./types";
 
-/** Map a GitLab error to its provider counterpart; treat config errors as defects. */
-const toProviderCallError = (error: GitLabError): Effect.Effect<never, ProviderCallError> => {
-  switch (error._tag) {
-    case "GitLabHttpError": {
-      return Effect.fail(
-        new ProviderHttpError({
-          method: error.method,
-          path: error.path,
-          status: error.status,
-          body: error.body,
-        }),
-      );
-    }
-    case "GitLabNetworkError": {
-      return Effect.fail(
-        new ProviderNetworkError({
-          method: error.method,
-          path: error.path,
-          cause: error.cause,
-        }),
-      );
-    }
-    case "GitLabResponseError": {
-      return Effect.fail(
-        new ProviderResponseError({
-          method: error.method,
-          path: error.path,
-          detail: error.detail,
-        }),
-      );
-    }
-    case "GitLabConfigError": {
-      return Effect.die(`GitLab provider config error: ${error.detail}`);
-    }
-    default: {
-      const _exhaustive: never = error;
-      return Effect.die(`unhandled GitLab error: ${String(_exhaustive)}`);
-    }
-  }
-};
-
+/** Turn a config failure into a defect; call failures pass through unchanged. */
 const adaptCall = <A>(
-  effect: Effect.Effect<A, GitLabError>,
-): Effect.Effect<A, ProviderCallError> => effect.pipe(Effect.catchAll(toProviderCallError));
+  effect: Effect.Effect<A, ProviderError>,
+): Effect.Effect<A, ProviderCallError> =>
+  effect.pipe(
+    Effect.catchTag("ProviderConfigError", (error) =>
+      Effect.die(`GitLab provider config error: ${error.detail}`),
+    ),
+  );
 
 const mapIssue = (issue: GitLabIssue): Issue => ({
   iid: issue.iid,
