@@ -254,26 +254,15 @@ const callOnce = <A, I>(
     }
 
     // A 204-style empty body — schemas that tolerate `undefined` (e.g. `void`) pass.
-    const parsed =
-      text.trim() === ""
-        ? undefined
-        : (() => {
-            try {
-              return JSON.parse(text) as unknown;
-            } catch {
-              return Symbol.for("invalid-json");
-            }
-          })();
-
-    if (parsed === Symbol.for("invalid-json")) {
-      return yield* Effect.fail(
+    const parsed = yield* Effect.try({
+      try: (): unknown => (text.trim() === "" ? undefined : JSON.parse(text)),
+      catch: (): GitLabError =>
         new GitLabResponseError({
           method: request.method,
           path: request.path,
           detail: `body was not JSON: ${text.slice(0, 200)}`,
         }),
-      );
-    }
+    });
 
     return yield* decodeBodyOrFail(request, schema, parsed);
   });
