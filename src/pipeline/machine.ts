@@ -4,7 +4,7 @@
  * One transition at a time: run the handler, time it, print and log the
  * transition, repeat until the machine reaches `end`.
  */
-import { Console, Effect } from "effect";
+import { Clock, Console, Effect } from "effect";
 import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
@@ -62,9 +62,10 @@ const advance = (
 ): Effect.Effect<State, ProviderCallError, MachineServices> =>
   Effect.gen(function* () {
     const artifacts = yield* RunArtifacts;
-    const startedAt = Date.now();
+    const startedAt = yield* Clock.currentTimeMillis;
     const next = yield* step(state, env);
-    const elapsedMs = Date.now() - startedAt;
+    const endedAt = yield* Clock.currentTimeMillis;
+    const elapsedMs = endedAt - startedAt;
 
     const issue = issueOf(state) ?? issueOf(next);
     const note = next.kind === "failed" ? next.reason : undefined;

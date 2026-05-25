@@ -34,6 +34,9 @@ const STATE_FETCH_QUEUE = "fetch_queue" as const;
 const STATE_RUN_DOGFOOD = "run_dogfood" as const;
 const STATE_OPEN_DRAFT_MR = "open_draft_mr" as const;
 
+/** Services every multi-yield handler / dispatcher requires. */
+type HandlerServices = GitProvider | RunArtifacts;
+
 // ─── Handler helpers ───────────────────────────────────────────────────────
 
 /** The five shared pipeline fields, copied off any node that carries them. */
@@ -212,16 +215,13 @@ const onBranchWorktree = (
     const branch = branchName(issue);
     const worktree = worktreePath(env.repoName, branch);
 
-    yield* Effect.tryPromise(() =>
-      mkdir(join(WORKTREES_DIR, env.repoName), { recursive: true }),
-    ).pipe(
-      Effect.mapError(
-        (): HandlerError =>
-          new HandlerError({
-            reason: "branch_worktree: could not create the worktree parent directory",
-          }),
-      ),
-    );
+    yield* Effect.tryPromise({
+      try: () => mkdir(join(WORKTREES_DIR, env.repoName), { recursive: true }),
+      catch: (cause): HandlerError =>
+        new HandlerError({
+          reason: `branch_worktree: could not create the worktree parent directory — ${String(cause)}`,
+        }),
+    });
 
     // Re-entrancy: a crashed prior run may have left this branch and worktree
     // behind (the sweep removes only the worktree, not the branch). Clear both
@@ -303,7 +303,7 @@ const onRunImpl = (
 const onOpenDraftMr = (
   state: Extract<State, { kind: "open_draft_mr" }>,
   env: Environment,
-): Effect.Effect<State, HandlerError, GitProvider | RunArtifacts> =>
+): Effect.Effect<State, HandlerError, HandlerServices> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
     const { issue, branch, worktree, deadline } = state;
@@ -491,7 +491,7 @@ const onDone = (
 /** Failed — note the failure on the issue, label it, loop back to the queue. */
 const onFailed = (
   state: Extract<State, { kind: "failed" }>,
-): Effect.Effect<State, never, GitProvider | RunArtifacts> =>
+): Effect.Effect<State, never, HandlerServices> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
     const artifacts = yield* RunArtifacts;
@@ -541,7 +541,7 @@ const onFailed = (
 const dispatchHandler = (
   current: Exclude<State, { kind: "fetch_queue" }>,
   env: Environment,
-): Effect.Effect<State, HandlerError, GitProvider | RunArtifacts> => {
+): Effect.Effect<State, HandlerError, HandlerServices> => {
   switch (current.kind) {
     case "claim_issue": {
       return onClaimIssue(current.issue);
@@ -617,7 +617,7 @@ export const failedFieldsOf = (
 export const step = (
   current: State,
   env: Environment,
-): Effect.Effect<State, ProviderCallError, GitProvider | RunArtifacts> => {
+): Effect.Effect<State, ProviderCallError, HandlerServices> => {
   if (current.kind === "fetch_queue") {
     return onFetchQueue;
   }

@@ -7,6 +7,7 @@
  * runs with the same seed and clock must produce the same paths.
  */
 import { describe, expect, it } from "bun:test";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { Effect, Random, TestClock, TestContext } from "effect";
 import { buildRunArtifacts } from "./run-artifacts";
 
@@ -18,7 +19,7 @@ const buildAt = (clockMs: number, seed: number) =>
 
 const fixedRef = { issueIid: 1, phase: "run_impl", iteration: 0 } as const;
 /** ISO-8601 timestamp followed by a hex suffix — colons/dots replaced. */
-const DIR_PATTERN = /\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{1,6}/;
+const DIR_PATTERN = /\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{6}/;
 
 describe("RunArtifacts", () => {
   it("identical Clock + seed → identical dir", async () => {
@@ -61,5 +62,41 @@ describe("RunArtifacts", () => {
     expect(out.sessionName({ issueIid: 7, phase: "review", iteration: 2 })).toBe(
       "afk-7-review-2",
     );
+  });
+
+  it("randomSuffix is always 6 hex chars even when rand=0", async () => {
+    const out = await Effect.runPromise(buildAt(1_700_000_000_000, 0));
+    const suffix = out.dir.split("-").at(-1) ?? "";
+    expect(suffix).toHaveLength(6);
+    expect(suffix).toMatch(/^[0-9a-f]{6}$/);
+  });
+
+  it("logEvent swallows write failures when the dir does not exist", async () => {
+    // buildRunArtifacts does NOT mkdir its own dir — appendFile will fail with ENOENT.
+    // Effect.ignore must swallow that failure so a run never aborts on logging.
+    const program = Effect.gen(function* () {
+      yield* TestClock.setTime(1_700_000_000_000);
+      const artifacts = yield* buildRunArtifacts;
+      yield* artifacts.logEvent({ event: "test" });
+      return true;
+    }).pipe(Effect.withRandom(Random.make(7)), Effect.provide(TestContext.TestContext));
+    const completed = await Effect.runPromise(program);
+    expect(completed).toBe(true);
+  });
+
+  it("logEvent writes an ISO-8601 `at` timestamp driven by Clock", async () => {
+    const clockMs = 1_700_000_000_000;
+    const program = Effect.gen(function* () {
+      yield* TestClock.setTime(clockMs);
+      const artifacts = yield* buildRunArtifacts;
+      yield* Effect.tryPromise(() => mkdir(artifacts.dir, { recursive: true }));
+      yield* artifacts.logEvent({ event: "ping" });
+      const content = yield* Effect.tryPromise(() => readFile(artifacts.logPath, "utf8"));
+      yield* Effect.tryPromise(() => rm(artifacts.dir, { recursive: true, force: true }));
+      return content;
+    }).pipe(Effect.withRandom(Random.make(11)), Effect.provide(TestContext.TestContext));
+    const raw = await Effect.runPromise(program);
+    const parsed: unknown = JSON.parse(raw.trim());
+    expect(parsed).toMatchObject({ at: new Date(clockMs).toISOString(), event: "ping" });
   });
 });

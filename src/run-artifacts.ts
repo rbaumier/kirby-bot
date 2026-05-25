@@ -11,7 +11,7 @@
  */
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Clock, Context, Effect, Layer, Random } from "effect";
+import { Clock, Console, Context, Effect, Layer, Random } from "effect";
 import type { Phase } from "./config";
 import { RUNS_DIR } from "./config";
 
@@ -78,7 +78,10 @@ const shapeFor = (dir: string): RunArtifactsShape => {
             `${JSON.stringify({ at: new Date(now).toISOString(), ...event })}\n`,
           ),
         );
-      }).pipe(Effect.ignore),
+      }).pipe(
+        Effect.tapError((cause) => Console.error(`[run-artifacts] logEvent failed: ${String(cause)}`)),
+        Effect.ignore,
+      ),
   };
 };
 
@@ -91,7 +94,7 @@ export const buildRunArtifacts: Effect.Effect<RunArtifactsShape> = Effect.gen(fu
   const now = yield* Clock.currentTimeMillis;
   const rand = yield* Random.nextInt;
   const startedAt = new Date(now).toISOString().replaceAll(COLON_OR_DOT_RE, "-").replace("T", "_");
-  const randomSuffix = Math.abs(rand).toString(16).slice(0, RANDOM_SUFFIX_LEN);
+  const randomSuffix = Math.abs(rand).toString(16).padStart(RANDOM_SUFFIX_LEN, "0").slice(0, RANDOM_SUFFIX_LEN);
   return shapeFor(join(RUNS_DIR, `${startedAt}-${randomSuffix}`));
 });
 
