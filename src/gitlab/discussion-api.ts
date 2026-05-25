@@ -6,8 +6,7 @@
  * what it fixed. The CLI in `scripts/mr-discussion.ts` exposes these to the
  * phase prompts.
  */
-import { Effect } from "effect";
-import { z } from "zod";
+import { Effect, Schema } from "effect";
 import type { DiscussionSummary } from "./discussion";
 import { toDiscussionSummary } from "./discussion";
 import { type GitLabError, GitLabResponseError } from "./errors";
@@ -17,13 +16,15 @@ const discussionsPath = (mergeRequestIid: number): string =>
   `projects/:id/merge_requests/${mergeRequestIid}/discussions`;
 
 /** Confirms a mutation took: the API response carries an `id`. */
-const HasIdSchema = z.object({ id: z.union([z.string().min(1), z.number()]) });
+const HasIdSchema = Schema.Struct({
+  id: Schema.Union(Schema.NonEmptyString, Schema.Number),
+});
 
 /** The discussions list endpoint returns an array of opaque objects. */
-const DiscussionListSchema = z.array(z.looseObject({}));
+const DiscussionListSchema = Schema.Array(Schema.Object);
 
 /** A single discussion comes back as an opaque object (validated by the model). */
-const DiscussionSchema = z.looseObject({});
+const DiscussionSchema = Schema.Object;
 
 /** List every discussion on a merge request. */
 export const listDiscussions = (
