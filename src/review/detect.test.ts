@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type ChangedFile, computeTier, detectReviewPlan } from "./detect";
+import { analyzeReviewInputs, type ChangedFile } from "./detect";
 
 /** Build a `ChangedFile` with sensible defaults for tests. */
 const file = (overrides: Partial<ChangedFile> & { path: string }): ChangedFile => ({
@@ -10,282 +10,110 @@ const file = (overrides: Partial<ChangedFile> & { path: string }): ChangedFile =
   ...overrides,
 });
 
-describe("detectReviewPlan — tier classification", () => {
-  test("Lite tier on tiny non-high-stakes diff", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/foo.ts", lineCount: 20 })],
-    });
-    expect(plan.tier).toBe("lite");
-    expect(plan.agents).toContain("funnel-l1");
-    expect(plan.agents).toContain("coding-standards");
-    // Lite drops the umbrella subs, matt-, opus generalist, security-defensive.
-    expect(plan.agents).not.toContain("matt-review");
-    expect(plan.agents).not.toContain("security-defensive");
-    expect(plan.agents).not.toContain("coding-standards:style");
-    // Lite drops every conditional spawn — no language-typescript despite .ts.
-    expect(plan.agents).not.toContain("language-typescript");
-  });
-
-  test("Full tier when file_count > 5", () => {
-    const files = Array.from({ length: 6 }, (_, i) =>
-      file({ path: `src/f${i}.ts`, lineCount: 5 }),
-    );
-    const plan = detectReviewPlan({ files });
-    expect(plan.tier).toBe("full");
-    expect(plan.agents).toContain("matt-review");
-    expect(plan.agents).toContain("language-typescript");
-  });
-
-  test("Full tier when total_lines > 50", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/big.ts", lineCount: 51 })],
-    });
-    expect(plan.tier).toBe("full");
-  });
-
-  test("boundary: total_lines == TIER_LITE_MAX_LINES (50) stays Lite", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/edge.ts", lineCount: 50 })],
-    });
-    expect(plan.tier).toBe("lite");
-  });
-
-  test("boundary: file_count == TIER_LITE_MAX_FILES (5) stays Lite", () => {
-    const files = Array.from({ length: 5 }, (_, i) =>
-      file({ path: `src/f${i}.ts`, lineCount: 5 }),
-    );
-    const plan = detectReviewPlan({ files });
-    expect(plan.tier).toBe("lite");
-  });
-
-  test("Full tier on high-stakes path even when small", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/auth/login.ts", lineCount: 10 })],
-    });
-    expect(plan.tier).toBe("full");
-    expect(plan.highStakes).toBe(true);
-    expect(plan.agents).toContain("auth-subsystem");
-  });
-
-  test("forceFull override flips tiny Lite-eligible diff", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/foo.ts", lineCount: 5 })],
-      forceFull: true,
-    });
-    expect(plan.tier).toBe("full");
-  });
-});
-
-describe("detectReviewPlan — conditional spawns (Full tier)", () => {
-  test("language-rust spawned for .rs files", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/main.rs", lineCount: 100 })],
-    });
-    expect(plan.agents).toContain("language-rust");
-  });
-
-  test("multiple language agents when extensions mix", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({ path: "src/a.ts", lineCount: 60 }),
-        file({ path: "src/b.rs", lineCount: 10 }),
-        file({ path: "ui/c.vue", lineCount: 5 }),
-      ],
-    });
-    expect(plan.agents).toContain("language-typescript");
-    expect(plan.agents).toContain("language-rust");
-    expect(plan.agents).toContain("vue");
-  });
-
-  test("import-skill trigger: drizzle-orm", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({
-          path: "src/db/schema.ts",
-          lineCount: 100,
-          imports: ["drizzle-orm"],
-        }),
-      ],
-    });
-    expect(plan.agents).toContain("drizzle-orm");
-  });
-
-  test("import-skill trigger: react via fallback content scan", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({
-          path: "ui/comp.tsx",
-          lineCount: 100,
-          content: `import React from "react"`,
-        }),
-      ],
-    });
-    expect(plan.agents).toContain("react");
-  });
-
-  test("surface trigger: api-design on /api/ path", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/api/users.ts", lineCount: 100 })],
-    });
-    expect(plan.agents).toContain("api-design");
-  });
-
-  test("surface trigger: ui-ux on /app/ + .tsx", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/app/page.tsx", lineCount: 100 })],
-    });
-    expect(plan.agents).toContain("ui-ux");
-    expect(plan.agents).toContain("frontend");
-  });
-
-  test("subsystem: webhook by code-pattern", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({
-          path: "src/integrations/stripe-webhook.ts",
-          lineCount: 100,
-          content: `crypto.createHmac("sha256", secret)`,
-        }),
-      ],
-    });
-    expect(plan.agents).toContain("webhook-subsystem");
-    expect(plan.highStakes).toBe(true);
-  });
-
-  test("subsystem: billing by path", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/billing/charge.ts", lineCount: 100 })],
-    });
-    expect(plan.agents).toContain("billing-subsystem");
-  });
-});
-
-describe("detectReviewPlan — trust boundaries", () => {
+describe("analyzeReviewInputs — trust boundaries", () => {
   test("network boundary on fetch usage", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/foo.ts", lineCount: 100, content: `await fetch("https://…")` })],
-    });
-    expect(plan.trustBoundaries).toContain("network");
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/foo.ts", lineCount: 100, content: `await fetch("https://…")` }),
+    ]);
+    expect(analysis.trustBoundaries).toContain("network");
   });
 
   test("filesystem + process-exec when both signals present", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({
-          path: "src/foo.ts",
-          lineCount: 100,
-          content: `import { writeFile } from "fs/promises"; Bun.spawn(["ls"])`,
-        }),
-      ],
-    });
-    expect(plan.trustBoundaries).toContain("filesystem");
-    expect(plan.trustBoundaries).toContain("process-exec");
+    const analysis = analyzeReviewInputs([
+      file({
+        path: "src/foo.ts",
+        lineCount: 100,
+        content: `import { writeFile } from "fs/promises"; Bun.spawn(["ls"])`,
+      }),
+    ]);
+    expect(analysis.trustBoundaries).toContain("filesystem");
+    expect(analysis.trustBoundaries).toContain("process-exec");
   });
 
-  test("trust boundaries computed for Lite tier too", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({ path: "src/foo.ts", lineCount: 10, content: `JSON.parse(input)` }),
-      ],
-    });
-    expect(plan.tier).toBe("lite");
-    expect(plan.trustBoundaries).toContain("serialization");
+  test("serialization boundary on JSON.parse", () => {
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/foo.ts", lineCount: 10, content: `JSON.parse(input)` }),
+    ]);
+    expect(analysis.trustBoundaries).toContain("serialization");
   });
 
   test("no boundaries on a comment-only diff", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/foo.ts", lineCount: 10, content: `// hello world` })],
-    });
-    expect(plan.trustBoundaries).toEqual([]);
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/foo.ts", lineCount: 10, content: `// hello world` }),
+    ]);
+    expect(analysis.trustBoundaries).toEqual([]);
+  });
+
+  test("database boundary picked from import specifier", () => {
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/db.ts", lineCount: 10, imports: ["drizzle-orm"] }),
+    ]);
+    expect(analysis.trustBoundaries).toContain("database");
   });
 });
 
-describe("detectReviewPlan — dogfood gate", () => {
+describe("analyzeReviewInputs — dogfood gate", () => {
   test("web-ui category on .tsx under /app/", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/app/page.tsx", lineCount: 100 })],
-    });
-    expect(plan.dogfoodRequired).toBe(true);
-    expect(plan.dogfoodSurfaces).toContain("web-ui");
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/app/page.tsx", lineCount: 100 }),
+    ]);
+    expect(analysis.dogfoodRequired).toBe(true);
+    expect(analysis.dogfoodSurfaces).toContain("web-ui");
   });
 
   test("http-api category on import 'fastify'", () => {
-    const plan = detectReviewPlan({
-      files: [
-        file({
-          path: "src/server.ts",
-          lineCount: 100,
-          imports: ["fastify"],
-        }),
-      ],
-    });
-    expect(plan.dogfoodSurfaces).toContain("http-api");
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/server.ts", lineCount: 100, imports: ["fastify"] }),
+    ]);
+    expect(analysis.dogfoodSurfaces).toContain("http-api");
+  });
+
+  test("cli category on /bin/ path", () => {
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/bin/run.ts", lineCount: 50 }),
+    ]);
+    expect(analysis.dogfoodSurfaces).toContain("cli");
   });
 
   test("no dogfood requirement on a pure library diff", () => {
-    const plan = detectReviewPlan({
-      files: [file({ path: "src/util/format.ts", lineCount: 100 })],
-    });
-    expect(plan.dogfoodRequired).toBe(false);
-    expect(plan.dogfoodSurfaces).toEqual([]);
+    const analysis = analyzeReviewInputs([
+      file({ path: "src/util/format.ts", lineCount: 100 }),
+    ]);
+    expect(analysis.dogfoodRequired).toBe(false);
+    expect(analysis.dogfoodSurfaces).toEqual([]);
   });
 });
 
-describe("detectReviewPlan — determinism", () => {
-  test("agent list is deduplicated", () => {
-    // Two files that would both trigger surface agents for /app/ — output must dedup.
-    const plan = detectReviewPlan({
-      files: [
-        file({ path: "src/app/a.tsx", lineCount: 60 }),
-        file({ path: "src/app/b.tsx", lineCount: 5 }),
-      ],
-    });
-    const ui = plan.agents.filter((a) => a === "ui-ux");
-    expect(ui).toHaveLength(1);
+describe("analyzeReviewInputs — totals", () => {
+  test("totalLines sums every file's lineCount", () => {
+    const analysis = analyzeReviewInputs([
+      file({ path: "a.ts", lineCount: 10 }),
+      file({ path: "b.ts", lineCount: 5 }),
+      file({ path: "c.ts", lineCount: 80 }),
+    ]);
+    expect(analysis.totalLines).toBe(95);
+    expect(analysis.fileCount).toBe(3);
   });
 
-  test("same input → same output (stable ordering)", () => {
-    const input = {
-      files: [
-        file({ path: "src/foo.ts", lineCount: 60, imports: ["zod"] }),
-        file({ path: "src/api/bar.ts", lineCount: 10 }),
-      ],
-    };
-    const a = detectReviewPlan(input);
-    const b = detectReviewPlan(input);
-    expect(a.agents).toEqual(b.agents);
+  test("zero files → zero totals", () => {
+    const analysis = analyzeReviewInputs([]);
+    expect(analysis.totalLines).toBe(0);
+    expect(analysis.fileCount).toBe(0);
+    expect(analysis.trustBoundaries).toEqual([]);
+    expect(analysis.dogfoodRequired).toBe(false);
+  });
+});
+
+describe("analyzeReviewInputs — determinism", () => {
+  test("same input → same output", () => {
+    const input = [
+      file({ path: "src/foo.ts", lineCount: 60, imports: ["zod"] }),
+      file({ path: "src/api/bar.ts", lineCount: 10, imports: ["fastify"] }),
+    ];
+    const a = analyzeReviewInputs(input);
+    const b = analyzeReviewInputs(input);
     expect(a.trustBoundaries).toEqual(b.trustBoundaries);
-  });
-});
-
-describe("computeTier — pure rule on pre-computed totals", () => {
-  const base = { totalLines: 10, fileCount: 1, highStakes: false, forceFull: false };
-
-  test("Lite when every signal is below threshold", () => {
-    expect(computeTier(base)).toBe("lite");
-  });
-
-  test("totalLines == 50 stays Lite (inclusive boundary)", () => {
-    expect(computeTier({ ...base, totalLines: 50 })).toBe("lite");
-  });
-
-  test("totalLines == 51 flips to Full", () => {
-    expect(computeTier({ ...base, totalLines: 51 })).toBe("full");
-  });
-
-  test("fileCount == 5 stays Lite (inclusive boundary)", () => {
-    expect(computeTier({ ...base, fileCount: 5 })).toBe("lite");
-  });
-
-  test("fileCount == 6 flips to Full", () => {
-    expect(computeTier({ ...base, fileCount: 6 })).toBe("full");
-  });
-
-  test("highStakes forces Full regardless of size", () => {
-    expect(computeTier({ ...base, highStakes: true })).toBe("full");
-  });
-
-  test("forceFull overrides every other signal", () => {
-    expect(computeTier({ ...base, forceFull: true })).toBe("full");
+    expect(a.dogfoodSurfaces).toEqual(b.dogfoodSurfaces);
+    expect(a.totalLines).toBe(b.totalLines);
   });
 });

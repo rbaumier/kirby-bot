@@ -2,34 +2,46 @@
  * Session/fanout.ts — `runFanOutPhase`: N parallel `claude` tmux sessions, one
  * per review agent, sharing one worktree and one Stop-hook config.
  *
- * This is the replacement for the single-prompt review session that called the
- * upstream `code-review` skill via the Task tool. Issue #29: Claude Code
- * 2.1.150 broke Stop-hook `decision: "block"` after ~4 consecutive `end_turn`
- * waits, causing the parent session to give up while subagents were still
- * running. The fix is to flatten the fan-out: each agent gets its own
- * top-level session, the orchestrator (this module) does the parallelism in
- * TypeScript via `Effect.forEach`.
+ * Replacement for the single-prompt review session that called the upstream
+ * `code-review` skill via the Task tool. Issue #29: Claude Code 2.1.150 broke
+ * Stop-hook `decision: "block"` after ~4 consecutive `end_turn` waits, causing
+ * the parent session to give up while subagents were still running. The fix is
+ * to flatten the fan-out: each agent gets its own top-level session, the
+ * orchestrator (this module) does the parallelism in TypeScript via
+ * `Effect.forEach`.
  *
- * Per-agent isolation is by environment variable — every session exports its
- * own `AGENT_SENTINEL` before launching `claude`, and the shared Stop-hook
- * script reads `$AGENT_SENTINEL` to know which sentinel to write into. See
- * `phase-primitives.ts` and `tmux.ts` for the underlying mechanics.
+ * The agent-spawn decision now flows through `./router.ts` — a one-shot haiku
+ * tmux session that reads the diff + the agent registry's `description`
+ * column and returns the subset of agents to spawn, along with each agent's
+ * scoped file list. Per-agent isolation is by environment variable — every
+ * session exports its own `AGENT_SENTINEL` before launching `claude`, and the
+ * shared Stop-hook script reads `$AGENT_SENTINEL` to know which sentinel to
+ * write into. See `phase-primitives.ts` and `tmux.ts` for the mechanics.
  *
- * Concurrency is capped by {@link MAX_CONCURRENT_AGENTS} to keep API
- * pressure and local CPU contention bounded. Per-agent failures are
- * collected, not propagated — a single hung agent must not nuke the whole
- * review pass.
+ * Concurrency is capped by {@link MAX_CONCURRENT_AGENTS}. Per-agent failures
+ * are collected, not propagated — a single hung agent must not nuke the whole
+ * review pass. Routing failures, by contrast, DO bubble: a malformed router
+ * output or unknown agent name fails the phase by design (the router IS the
+ * routing decision; a silent fallback would re-introduce the brittleness it
+ * was meant to replace).
  */
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Cause, Console, Effect, Exit } from "effect";
 import type { Phase } from "../config";
 import { MAX_CONCURRENT_AGENTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { type AgentName, getAgentModel } from "../review/agents";
 import { getChangedFilesSince } from "../review/delta-files";
-import type { ChangedFile, ReviewPlan } from "../review/detect";
-import { detectReviewPlan } from "../review/detect";
-import { agentScope, writeDiffSlices } from "../review/diff-slices";
+import { analyzeReviewInputs, type ChangedFile, type ReviewAnalysis } from "../review/detect";
+import { writeDiffSlices, writeFullDiff } from "../review/diff-slices";
 import { renderAgentPrompt, type RenderError } from "../review/render-prompt";
+import {
+  routeAgents,
+  type RoutedAgent,
+  RouterEmpty,
+  RouterMalformedOutput,
+  RouterUnknownAgent,
+} from "../review/router";
 import { RunArtifacts } from "../run-artifacts";
 import { BudgetExhausted, type PhaseError, WorkspaceError } from "./errors";
 import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
@@ -41,8 +53,15 @@ export type AgentOutcome =
 
 /** Aggregate result of a fan-out. */
 export type FanOutResult = {
-  readonly plan: ReviewPlan;
+  /** Deterministic-analysis output: trust boundaries, dogfood, totals. */
+  readonly analysis: ReviewAnalysis;
+  /** The router's decision: which agents fire + each one's file scope. */
+  readonly routes: ReadonlyArray<RoutedAgent>;
+  /** Whether the router's input diff was head-truncated. */
+  readonly routerTruncated: boolean;
+  /** Per-agent best-effort outcomes. */
   readonly outcomes: ReadonlyArray<AgentOutcome>;
+  /** Path to the shared full-diff patch, reused by every full-diff agent. */
   readonly fullDiffPath: string;
 };
 
@@ -56,10 +75,8 @@ export type RunFanOutPhaseInput = {
   readonly deadline: number;
   /** Default branch for `git diff $default...HEAD`. */
   readonly defaultBranch: string;
-  /** The diff file-set the review pass consumes. Drives both detection and slicing. */
+  /** The diff file-set the review pass consumes. Drives analysis + routing. */
   readonly files: ReadonlyArray<ChangedFile>;
-  /** Force the Full tier even if the diff would compute Lite. */
-  readonly forceFull?: boolean;
   /** Path to the vendored templates directory (assets/code-review-templates). */
   readonly templatesDir: string;
   /**
@@ -75,7 +92,7 @@ export type RunFanOutPhaseInput = {
    * defined and still an ancestor of the current HEAD, scoped agents whose
    * scope doesn't intersect the delta `<lastReviewedSha>...HEAD` are skipped
    * — they would otherwise re-flag the same code unchanged. Full-diff agents
-   * (correctness, matt-review, …) are kept unconditionally — they need the
+   * (routed with `files: []`) are kept unconditionally — they need the
    * cross-file view a `fix` commit can perturb in non-obvious ways.
    */
   readonly lastReviewedSha?: string;
@@ -122,21 +139,21 @@ const renderErrorToWorkspace = (phase: Phase) => (error: RenderError): Workspace
 /**
  * Run one agent's session and translate any failure into an `AgentOutcome`.
  * Per-agent best-effort: a timeout or render error becomes `{ kind: "error" }`
- * so the surviving N-1 agents still produce findings. The orchestrator
- * logs the failure into the run's JSONL event stream via
- * {@link runOneClaudeSession}'s own taps.
+ * so the surviving N-1 agents still produce findings.
  */
 const runOneAgent = (params: {
   readonly input: RunFanOutPhaseInput;
   readonly agent: AgentName;
-  readonly plan: ReviewPlan;
+  readonly analysis: ReviewAnalysis;
+  readonly scopedFiles: ReadonlyArray<string>;
   readonly diffFile: string;
   readonly perAgentTimeoutMs: number;
   readonly previousFindingsBlock: string;
 }): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
   Effect.gen(function* () {
     const startedAt = Date.now();
-    const { input, agent, plan, diffFile, perAgentTimeoutMs, previousFindingsBlock } = params;
+    const { input, agent, analysis, scopedFiles, diffFile, perAgentTimeoutMs, previousFindingsBlock } =
+      params;
     const artifacts = yield* RunArtifacts;
     const ref = {
       issueIid: input.issueIid,
@@ -150,19 +167,17 @@ const runOneAgent = (params: {
     const tmuxLogPath = artifacts.tmuxLogPath(ref);
     const session = artifacts.sessionName(ref);
 
-    // The list of files this agent owns — for the prompt's {file_list}. We use
-    // the same scoping logic the slice writer used: but we don't re-derive
-    // here because writeDiffSlices already wrote the slice; we just pass the
-    // plan's full file list to keep it simple and let the slice be the source
-    // of truth on scoping. The prompt template uses {file_list} as a hint, not
-    // as a hard constraint — the agent reads {diff_file} for the real picture.
-    const fileList = input.files.map((file) => file.path);
+    // The router supplied this agent's file scope. Empty = "full diff" — fall
+    // back to the diff's complete file list so the prompt's `{file_list}`
+    // remains informative.
+    const fileList =
+      scopedFiles.length === 0 ? input.files.map((file) => file.path) : scopedFiles;
 
     const result = yield* renderAgentPrompt({
       agent,
       diffFile,
       fileList,
-      trustBoundaries: plan.trustBoundaries,
+      trustBoundaries: analysis.trustBoundaries,
       previousFindingsBlock,
       findingsFile,
       templatesDir: input.templatesDir,
@@ -197,30 +212,83 @@ const runOneAgent = (params: {
     if (Exit.isSuccess(result)) {
       return { kind: "ok" as const, agent, findingsPath: findingsFile, totalMs };
     }
-    // Best-effort: any failure (render, write, session) demotes the agent to
-    // an `error` outcome. The aggregate result still contains it so the
-    // caller can see which agents missed and decide how to report.
     const reason = Cause.pretty(result.cause);
     return { kind: "error" as const, agent, reason, totalMs };
   });
 
 /**
+ * Apply delta-scope filtering to the router output: when `lastReviewedSha` is
+ * still an ancestor of HEAD, drop routed agents whose entire scope sits
+ * outside the delta file-set. Full-diff agents (`files: []`) and empty-scope
+ * agents are kept — they rely on the cross-file view that a `fix` commit can
+ * perturb anywhere.
+ */
+const applyDeltaScope = (
+  routes: ReadonlyArray<RoutedAgent>,
+  delta: ReadonlySet<string>,
+): { readonly kept: ReadonlyArray<RoutedAgent>; readonly skipped: ReadonlyArray<AgentName> } => {
+  const kept: RoutedAgent[] = [];
+  const skipped: AgentName[] = [];
+  for (const route of routes) {
+    const intersects =
+      route.files.length === 0 ||
+      route.files.some((path) => delta.has(path));
+    if (intersects) kept.push(route);
+    else skipped.push(route.name);
+  }
+  return { kept, skipped };
+};
+
+/**
+ * Map the router's `PhaseError` / `RouterMalformedOutput` / `RouterUnknownAgent`
+ * / `RouterEmpty` failures into the phase-level `PhaseError` channel. The
+ * router's three typed failures collapse into one `WorkspaceError` here
+ * because the phase boundary only carries `PhaseError` shapes upward — losing
+ * the tag at this seam is acceptable since the reason text already names the
+ * specific cause.
+ */
+const routerErrorToPhase = (
+  phase: Phase,
+): ((
+  error: PhaseError | RouterMalformedOutput | RouterUnknownAgent | RouterEmpty,
+) => PhaseError) =>
+  (error) => {
+    if (
+      error._tag === "RouterMalformedOutput" ||
+      error._tag === "RouterUnknownAgent" ||
+      error._tag === "RouterEmpty"
+    ) {
+      const reason =
+        error._tag === "RouterMalformedOutput"
+          ? `router emitted malformed JSON — ${error.reason}`
+          : error._tag === "RouterUnknownAgent"
+            ? `router named unknown agent "${error.agent}"`
+            : "router returned an empty agent list";
+      return new WorkspaceError({ phase, operation: "route agents", reason });
+    }
+    return error;
+  };
+
+/**
  * `runFanOutPhase` — main entry point of the per-agent review fan-out.
  *
  * Sequence:
- *   1. Compute the review plan (`detectReviewPlan`) — tier, agent list,
- *      trust boundaries, dogfood gate.
- *   2. Delta-scope (when `input.lastReviewedSha` is set): drop scoped agents
- *      whose scope doesn't intersect the files changed since the previous
- *      review's HEAD. Skipped agents are logged but never reach a session.
- *   3. Write the shared Stop-hook config in the worktree's `.claude/`.
+ *   1. Write the shared Stop-hook config in the worktree's `.claude/`.
  *      The hook reads `$AGENT_SENTINEL` to know which sentinel to write.
- *   4. Write per-agent diff slices to `artifacts.dir`.
- *   5. Spawn one `runOneClaudeSession` per agent, capped to
+ *   2. Write the full diff once → `fullDiffPath`. Reused as both the router's
+ *      input and the `{diff_file}` for every full-diff agent the router picks.
+ *   3. Run the routing haiku via {@link routeAgents}. Failure aborts the
+ *      phase by design — no heuristic fallback.
+ *   4. Compute deterministic analysis: trust boundaries, dogfood surfaces,
+ *      totals. Pure pass over the file roster.
+ *   5. Optionally delta-scope filter the routes when a prior `lastReviewedSha`
+ *      is still an ancestor of HEAD.
+ *   6. Write per-agent diff slices for routed agents with a non-empty scope.
+ *   7. Spawn one `runOneClaudeSession` per kept route, capped to
  *      {@link MAX_CONCURRENT_AGENTS} concurrency. Each session's prompt
  *      embeds `input.previousFindingsBlock` so the agent self-filters
  *      findings the previous evaluator already triaged.
- *   6. Collect outcomes (best-effort: per-agent failures don't bubble).
+ *   8. Collect outcomes (best-effort: per-agent failures don't bubble).
  */
 export const runFanOutPhase = (
   input: RunFanOutPhaseInput,
@@ -228,9 +296,9 @@ export const runFanOutPhase = (
   Effect.gen(function* () {
     const artifacts = yield* RunArtifacts;
 
-    // Per-agent wall-clock budget: the smaller of the phase cap and the
-    // budget still left for the issue, applied to each session independently
-    // (sessions run in parallel — they share the wall-clock, not the budget).
+    // Per-agent wall-clock budget: smaller of the phase cap and the budget
+    // still left for the issue, applied per session (sessions run in parallel
+    // — they share the wall-clock, not the budget).
     const perAgentTimeoutMs = Math.min(
       PHASE_CAP_MINUTES[input.phase] * 60 * 1000,
       input.deadline - Date.now(),
@@ -239,70 +307,96 @@ export const runFanOutPhase = (
       return yield* Effect.fail(new BudgetExhausted({ phase: input.phase }));
     }
 
-    const detected = detectReviewPlan(
-      input.forceFull === undefined
-        ? { files: input.files }
-        : { files: input.files, forceFull: input.forceFull },
-    );
+    // Stop-hook first — the router's session also needs it (verdict captured
+    // exactly the same way as fan-out agents).
+    yield* writeStopHookConfig(input.phase, input.worktree);
 
-    // Delta-scope: when a prior review's HEAD is known and still an ancestor
-    // of the current HEAD, drop scoped agents whose territory has not changed
-    // since. Full-diff agents and empty-scope fallbacks are kept — they rely
-    // on the cross-file view that a `fix` commit can perturb anywhere.
-    const skipped: AgentName[] = [];
-    let plan: ReviewPlan = detected;
+    // Full diff written once; both the router (as input) and every full-diff
+    // agent (as `{diff_file}`) read from this same path.
+    const slug = `review-${input.issueIid}-${input.iteration}`;
+    const fullDiffPath = join(artifacts.dir, `${slug}-full.patch`);
+    yield* writeFullDiff({ defaultBranch: input.defaultBranch, outPath: fullDiffPath }).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceError({
+            phase: input.phase,
+            operation: "write full diff",
+            reason: error.reason,
+          }),
+      ),
+    );
+    const fullDiff = yield* Effect.tryPromise({
+      try: () => readFile(fullDiffPath, "utf8"),
+      catch: (cause) =>
+        new WorkspaceError({
+          phase: input.phase,
+          operation: "read full diff",
+          reason: String(cause),
+        }),
+    });
+
+    // Routing — haiku in a tmux session. Hard-fails the phase if the output
+    // is malformed or the agent list is empty.
+    const routerResult = yield* routeAgents({
+      phase: input.phase,
+      issueIid: input.issueIid,
+      worktree: input.worktree,
+      iteration: input.iteration,
+      deadline: input.deadline,
+      files: input.files,
+      fullDiff,
+    }).pipe(Effect.mapError(routerErrorToPhase(input.phase)));
+
+    // Deterministic analysis — runs after routing so the run JSONL keeps the
+    // chronological order (router_complete → fanout_plan). The analysis itself
+    // does NOT depend on the router; we could parallelize, but routing
+    // dominates wall-clock and analysis is microseconds.
+    const analysis = analyzeReviewInputs(input.files);
+
+    // Delta-scope filter: only when a prior review's HEAD is known AND still
+    // an ancestor of the current HEAD. Failure of `getChangedFilesSince`
+    // (e.g. shallow clone) silently disables the filter — the whole router
+    // output ships intact.
+    let routes: ReadonlyArray<RoutedAgent> = routerResult.agents;
+    let skipped: ReadonlyArray<AgentName> = [];
     if (input.lastReviewedSha !== undefined) {
       const delta = yield* getChangedFilesSince({
         worktree: input.worktree,
         lastSha: input.lastReviewedSha,
-      }).pipe(
-        Effect.catchAll(() => Effect.succeed(null)),
-      );
+      }).pipe(Effect.catchAll(() => Effect.succeed(null)));
       if (delta === null) {
         yield* Console.log(
           `[#${input.issueIid} ${input.phase}[${input.iteration}]] delta-scope disabled: ` +
             `lastSha ${input.lastReviewedSha.slice(0, 8)} is not an ancestor of HEAD`,
         );
       } else {
-        const deltaSet = new Set(delta);
-        const kept: AgentName[] = [];
-        for (const agent of detected.agents) {
-          const scope = agentScope(agent, input.files);
-          const intersects =
-            scope === null ||
-            scope.length === 0 ||
-            scope.some((path) => deltaSet.has(path));
-          if (intersects) kept.push(agent);
-          else skipped.push(agent);
-        }
-        plan = { ...detected, agents: kept };
+        const filtered = applyDeltaScope(routes, new Set(delta));
+        routes = filtered.kept;
+        skipped = filtered.skipped;
       }
     }
 
     yield* Console.log(
       `[#${input.issueIid} ${input.phase}[${input.iteration}]] fan-out planned: ` +
-        `tier=${plan.tier} agents=${plan.agents.length} (skipped ${skipped.length}) ` +
-        `boundaries=${plan.trustBoundaries.length}`,
+        `agents=${routes.length} (skipped ${skipped.length}) ` +
+        `boundaries=${analysis.trustBoundaries.length}`,
     );
     yield* artifacts.logEvent({
       event: "fanout_plan",
       phase: input.phase,
       iteration: input.iteration,
       issueIid: input.issueIid,
-      tier: plan.tier,
-      agents: plan.agents,
+      agents: routes.map((route) => route.name),
       skippedAgents: skipped,
-      trustBoundaries: plan.trustBoundaries,
-      dogfoodRequired: plan.dogfoodRequired,
-      dogfoodSurfaces: plan.dogfoodSurfaces,
+      routerTruncated: routerResult.truncated,
+      trustBoundaries: analysis.trustBoundaries,
+      dogfoodRequired: analysis.dogfoodRequired,
+      dogfoodSurfaces: analysis.dogfoodSurfaces,
     });
 
-    yield* writeStopHookConfig(input.phase, input.worktree);
-
-    const slug = `review-${input.issueIid}-${input.iteration}`;
     const slices = yield* writeDiffSlices({
-      plan,
-      files: input.files,
+      routes,
+      fullDiffPath,
       defaultBranch: input.defaultBranch,
       slicesDir: artifacts.dir,
       slug,
@@ -319,13 +413,14 @@ export const runFanOutPhase = (
 
     const previousFindingsBlock = input.previousFindingsBlock ?? "";
     const outcomes = yield* Effect.forEach(
-      plan.agents,
-      (agent) =>
+      routes,
+      (route) =>
         runOneAgent({
           input,
-          agent,
-          plan,
-          diffFile: slices.perAgent.get(agent) ?? slices.fullDiffPath,
+          agent: route.name,
+          analysis,
+          scopedFiles: route.files,
+          diffFile: slices.perAgent.get(route.name) ?? fullDiffPath,
           perAgentTimeoutMs,
           previousFindingsBlock,
         }),
@@ -352,5 +447,11 @@ export const runFanOutPhase = (
       })),
     });
 
-    return { plan, outcomes, fullDiffPath: slices.fullDiffPath };
+    return {
+      analysis,
+      routes,
+      routerTruncated: routerResult.truncated,
+      outcomes,
+      fullDiffPath: slices.fullDiffPath,
+    };
   });

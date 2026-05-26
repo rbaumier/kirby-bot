@@ -1,15 +1,22 @@
 /**
- * Review/detect-tables.ts — detection tables orthogonal to the agent registry.
+ * Review/detect-tables.ts — tables that are still load-bearing AFTER the router
+ * refactor: trust boundaries and dogfood-gate categories.
  *
- * Per-agent rows (model, prompt, triggers) live in `./agents.ts` — the single
- * CRUD surface. This file keeps only the tables that aren't per-agent:
- *  - {@link TRUST_BOUNDARY_SIGNALS} — independent of which agents fire.
- *  - {@link HIGH_STAKES_PATH_FRAGMENTS} — tier-classification input.
- *  - {@link DOGFOOD_TRIGGERS} — runtime-gate categories.
- *  - {@link TIER_LITE_MAX_LINES} / {@link TIER_LITE_MAX_FILES} — tier bounds.
+ * The router (haiku in `./router.ts`) now owns every agent-spawn decision; this
+ * file holds only the two tables that are NOT per-agent and that we still need
+ * deterministically (not delegated to a model):
  *
- * Re-exported for backward compatibility:
- *  - `AgentName` — see `./agents.ts`.
+ *  - {@link TRUST_BOUNDARY_SIGNALS} — substituted into every line-anchored
+ *    prompt as `{trust_boundaries}` so each agent knows which boundaries the
+ *    diff crosses. Detected by substring scan over file contents + import
+ *    specifiers (a false positive costs one extra token; a false negative
+ *    drops a security lens — bias toward inclusive matching).
+ *  - {@link DOGFOOD_TRIGGERS} — runtime 3-persona gate categories, fed to the
+ *    review pass result so the consuming loop knows whether to run dogfood.
+ *
+ * Tier classification (`Lite` / `Full`, `HIGH_STAKES_PATH_FRAGMENTS`,
+ * `TIER_LITE_MAX_*`) is gone — the router decides which agents fire based on
+ * the diff's actual content, not on path heuristics or line counts.
  */
 
 export type { AgentName } from "./agents";
@@ -87,19 +94,6 @@ export const TRUST_BOUNDARY_SIGNALS: ReadonlyArray<{
   },
 ];
 
-/**
- * Path fragments that force `high_stakes = true` for tier classification,
- * independent of any agent firing. Mirror of the SKILL.md "high-stakes path"
- * list. Subsystem-agent triggers ALSO contribute to `high_stakes` — they live
- * in `./agents.ts` and are detected at plan-build time.
- */
-export const HIGH_STAKES_PATH_FRAGMENTS: ReadonlyArray<string> = [
-  "/auth/",
-  "/crypto/",
-  "/permissions/",
-  "/migrations/",
-];
-
 /** Dogfood category — drives the runtime 3-persona gate after static review. */
 export type DogfoodCategory = "web-ui" | "http-api" | "cli" | "native";
 
@@ -137,11 +131,3 @@ export const DOGFOOD_TRIGGERS: ReadonlyArray<DogfoodRow> = [
     imports: ["electron", "@tauri-apps/", "react-native", "expo"],
   },
 ];
-
-/**
- * Tier rule: Lite iff `total_lines ≤ 50` AND `file_count ≤ 5` AND no
- * `high_stakes` trigger. Otherwise Full. Override (force-Full) is the
- * caller's call when the user explicitly asked for a deep review.
- */
-export const TIER_LITE_MAX_LINES = 50;
-export const TIER_LITE_MAX_FILES = 5;

@@ -1,12 +1,12 @@
 /**
- * Review/read-changed-files.ts — gather the per-file metadata `detectReviewPlan`
- * and `writeDiffSlices` consume.
+ * Review/read-changed-files.ts — gather the per-file metadata `analyzeReviewInputs`,
+ * `routeAgents`, and `writeDiffSlices` consume.
  *
  * The fan-out planner needs four facts about each file in the diff: its path,
- * its extension, the line count of its hunks, and (for trust-boundary and
- * skill detection) its current content + extracted imports. Production gets
- * these from the issue's worktree via `git`. Tests pass them in directly to
- * keep `detect.ts` pure.
+ * its extension, the line count of its hunks, and (for trust-boundary
+ * detection and the router's file roster) its current content + extracted
+ * imports. Production gets these from the issue's worktree via `git`. Tests
+ * pass them in directly to keep `detect.ts` pure.
  *
  * Errors are tagged. `git`-level failures (corrupt worktree, missing default
  * branch) are `ShellError`s, wrapped here as {@link ReadChangedFilesError}.
@@ -31,8 +31,9 @@ export class ReadChangedFilesError extends Data.TaggedError("ReadChangedFilesErr
 /**
  * Match every JS/TS-style import specifier — `import ... from "X"`,
  * bare `import "X"`, dynamic `import("X")`, and `require("X")`. Tolerant of
- * single quotes and templating quirks; the resulting array is what
- * `detect.ts` substring-scans for skill triggers.
+ * single quotes and templating quirks; the resulting array feeds both
+ * `analyzeReviewInputs` (trust-boundary substring scan) and the router's
+ * per-file roster (so the haiku sees which packages each file imports).
  */
 const IMPORT_RE =
   /(?:import(?:\s+[\s\S]*?from)?\s*|require\(\s*|import\(\s*)["']([^"']+)["']/g;
@@ -78,8 +79,8 @@ export type ReadChangedFilesInput = {
 
 /**
  * `readChangedFiles` — list every file changed between `defaultBranch` and
- * HEAD in `worktree`, populating the `ChangedFile` shape `detectReviewPlan`
- * consumes.
+ * HEAD in `worktree`, populating the `ChangedFile` shape both
+ * `analyzeReviewInputs` and `routeAgents` consume.
  */
 export const readChangedFiles = (
   input: ReadChangedFilesInput,

@@ -1,56 +1,33 @@
 /**
  * Review/agents.ts — **the agent registry. Single source of truth.**
  *
- * Each row in {@link AGENTS} declares everything kirby-bot needs to know about
- * one review agent:
- *  - `model` — which Claude tier the session runs on (`haiku` / `sonnet` / `opus`)
- *  - `alwaysIn` — which review tiers spawn this agent unconditionally
- *  - `triggers` — conditional spawn signals (Full tier only)
- *  - `prompt` — which template to render + the per-agent substitutions
+ * Each row declares everything kirby-bot needs to know about one review agent:
+ *  - `model` — Claude tier the session runs on (`haiku` / `sonnet` / `opus`).
+ *  - `description` — one-line summary fed verbatim to the routing haiku so it
+ *    can decide whether the agent is worth spawning for a given diff.
+ *  - `prompt` — which template to render + the per-agent substitutions.
+ *
+ * Spawn decisions are made at runtime by `./router.ts` (a one-shot haiku call
+ * that reads the diff + this registry's `description` column and returns the
+ * subset of agents to spawn, along with each agent's scoped file list). There
+ * is intentionally no static `triggers` or `alwaysIn` field — every previous
+ * heuristic (path substring, extension, import substring) is replaced by the
+ * router's semantic judgment.
  *
  * ## CRUD playbook
  *
- *  - **Add an agent.** Insert one row. The compile-time `satisfies` clause
- *    refuses to let you forget any required field, and `AgentName` automatically
- *    widens to include the new key.
- *  - **Remove an agent.** Delete the row. Every importer dereferences via
- *    `keyof typeof AGENTS` — the compiler flags any stale reference.
+ *  - **Add an agent.** Insert one row with a clear `description`. The router
+ *    learns from the description; no other file needs to change.
+ *  - **Remove an agent.** Delete the row. `AgentName` widens via
+ *    `keyof typeof AGENTS_DATA`; the compiler flags every stale reference.
  *  - **Re-tier an agent's model.** Change one field.
- *  - **Re-route an agent's template.** Change `prompt.roleFile` / `templateFile`.
- *  - **Change when an agent fires.** Edit `alwaysIn` and / or `triggers`.
- *
- * Trigger evaluation is OR-of-fields, OR-of-needles within each field:
- *  - `extensions: ["ts","tsx"]` fires if any changed file has `ext` in the list.
- *  - `pathFragments: ["/billing/"]` fires if any changed path contains the fragment.
- *  - `imports: ["stripe"]` fires if any extracted import OR file content contains the needle.
- *  - `codePatterns: ["verifySignature"]` fires if any file content contains the needle.
- *
- * Detection logic lives in `./detect.ts`; prompt rendering in `./render-prompt.ts`;
- * per-agent diff slicing in `./diff-slices.ts`. They all read from this file.
- *
- * ## Shared trigger blocks
- *
- * Several agents fire on the same surface (e.g. ui-ux, frontend, make-interfaces-feel-better,
- * and web-performance all match the same UI surface). The constants below let each agent
- * compose a self-contained spec without duplicating the underlying signature lists.
+ *  - **Reword for the router.** Edit `description` — the router's behavior
+ *    follows the description verbatim, so keep it short, action-oriented,
+ *    and trigger-revealing ("for files that …", "when you see …").
  */
 
 /** The three Claude model aliases the CLI accepts as `--model <alias>`. */
 export type AgentModel = "haiku" | "sonnet" | "opus";
-
-/** Review tier — drives the Lite vs Full panel split. */
-export type ReviewTier = "lite" | "full";
-
-/**
- * Conditional spawn triggers — any non-empty field whose needles match the
- * diff fires the agent. OR semantics within each field AND across fields.
- */
-export type SpawnTriggers = {
-  readonly extensions?: ReadonlyArray<string>;
-  readonly pathFragments?: ReadonlyArray<string>;
-  readonly imports?: ReadonlyArray<string>;
-  readonly codePatterns?: ReadonlyArray<string>;
-};
 
 /** Prompt spec — drives `renderAgentPrompt`. */
 export type PromptSpec =
@@ -70,48 +47,14 @@ export type PromptSpec =
 /** One agent's complete declaration — the only place to CRUD an agent. */
 export type AgentEntry = {
   readonly model: AgentModel;
-  readonly alwaysIn?: ReadonlyArray<ReviewTier>;
-  readonly triggers?: SpawnTriggers;
+  /**
+   * One-line summary of the agent's job. Fed to the routing haiku verbatim;
+   * also useful for humans scanning the registry. Action-oriented, trigger-
+   * revealing, ~20 words max.
+   */
+  readonly description: string;
   readonly prompt: PromptSpec;
 };
-
-// ──────────────────────────────────────────────────────────────────────────
-// Shared trigger blocks — composed into agents below.
-// ──────────────────────────────────────────────────────────────────────────
-
-const UI_SURFACE = {
-  pathFragments: ["/app/", "/pages/", "/src/routes/"],
-  extensions: ["tsx", "jsx", "vue", "svelte", "astro", "mdx"],
-} as const;
-
-const DESIGN_TOKENS = {
-  pathFragments: ["tokens.", "theme."],
-  extensions: ["css", "scss"],
-} as const;
-
-const API_SURFACE = {
-  pathFragments: [
-    "/route.",
-    "middleware.",
-    "/server/api/",
-    "/api/",
-    "/routes/",
-    "openapi.",
-    "swagger.",
-  ],
-  extensions: ["graphql", "gql"],
-} as const;
-
-/** Merge surface specs into one trigger object. */
-const surface = (
-  ...specs: ReadonlyArray<{
-    readonly pathFragments?: ReadonlyArray<string>;
-    readonly extensions?: ReadonlyArray<string>;
-  }>
-): SpawnTriggers => ({
-  pathFragments: specs.flatMap((spec) => spec.pathFragments ?? []),
-  extensions: specs.flatMap((spec) => spec.extensions ?? []),
-});
 
 // ──────────────────────────────────────────────────────────────────────────
 // THE registry. Add / remove / edit rows here.
@@ -121,42 +64,42 @@ const AGENTS_DATA = {
   // ─── Funnel & generalists ──────────────────────────────────────────────
   "funnel-l1": {
     model: "haiku",
-    alwaysIn: ["lite", "full"],
+    description: "Question the need: does this code need to exist at all? Spawn on every diff.",
     prompt: { kind: "self-contained", templateFile: "funnel-l1.md" },
   },
   "funnel-l2": {
     model: "haiku",
-    alwaysIn: ["lite", "full"],
+    description: "Reduce scope: smallest perimeter solving the validated need. Spawn on every diff.",
     prompt: { kind: "self-contained", templateFile: "funnel-l2.md" },
   },
   "occam-razor": {
     model: "sonnet",
-    alwaysIn: ["lite", "full"],
+    description: "Mechanically walks call sites of every exported symbol; flags 0/1-caller wrappers and derivable defaults. Spawn on every diff.",
     prompt: { kind: "line-anchored", roleFile: "occam-razor.md" },
   },
   correctness: {
     model: "sonnet",
-    alwaysIn: ["lite", "full"],
+    description: "Hunt bugs: logic errors, edge cases, off-by-ones, race conditions. Spawn on every diff.",
     prompt: { kind: "line-anchored", roleFile: "correctness.md" },
   },
   tests: {
     model: "sonnet",
-    alwaysIn: ["lite", "full"],
+    description: "Review test coverage and quality: missing cases, tautological assertions, brittle mocks. Spawn on every diff that touches code.",
     prompt: { kind: "line-anchored", roleFile: "tests-agent.md" },
   },
   simplify: {
     model: "sonnet",
-    alwaysIn: ["lite", "full"],
+    description: "Spot accidental complexity, dead branches, premature abstractions. Spawn on every diff.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "simplify" },
   },
   "coding-standards": {
     model: "sonnet",
-    alwaysIn: ["lite", "full"],
+    description: "Umbrella coding-standards review (naming, hygiene, style, error handling). Spawn on every diff.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "coding-standards" },
   },
   "matt-improve-codebase-architecture": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Architecture pass: module boundaries, layering, dependency direction. Spawn for non-trivial diffs (multi-file or new module).",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -165,17 +108,17 @@ const AGENTS_DATA = {
   },
   "matt-review": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Senior-eng prose review: what's the missing piece, what's the wrong abstraction. Spawn for non-trivial diffs.",
     prompt: { kind: "self-contained", templateFile: "matt-review.md" },
   },
   "thermo-nuclear": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Aggressive structural pass: what would a skeptical senior tear apart. Spawn for non-trivial or high-stakes diffs.",
     prompt: { kind: "self-contained", templateFile: "thermo-nuclear-review.md" },
   },
   "security-defensive": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "OWASP-style security review: injection, auth, secrets, deserialization. Spawn when any trust boundary is crossed.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -184,7 +127,7 @@ const AGENTS_DATA = {
   },
   "coding-standards:design": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Design sub-standard: API shape, function signatures, naming intent. Spawn for non-trivial diffs.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -193,7 +136,7 @@ const AGENTS_DATA = {
   },
   "coding-standards:errors": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Error-handling sub-standard: result types, fail-fast, never-swallow. Spawn for non-trivial diffs.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -202,7 +145,7 @@ const AGENTS_DATA = {
   },
   "coding-standards:hygiene": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Hygiene sub-standard: dead code, unused imports, todo rot. Spawn for non-trivial diffs.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -211,7 +154,7 @@ const AGENTS_DATA = {
   },
   "coding-standards:style": {
     model: "sonnet",
-    alwaysIn: ["full"],
+    description: "Style sub-standard: formatting, idiom consistency, comments. Spawn for non-trivial diffs.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -220,27 +163,26 @@ const AGENTS_DATA = {
   },
   "general-opus": {
     model: "opus",
-    alwaysIn: ["full"],
+    description: "Opus generalist pass: catches what the cheaper models miss. Spawn for high-stakes or large diffs only.",
     prompt: { kind: "line-anchored", roleFile: "correctness.md" },
   },
 
   // ─── CLAUDE.md ─────────────────────────────────────────────────────────
-  // Detection of CLAUDE.md presence is the consuming loop's responsibility;
-  // here we only declare the agent and its template. Currently spawned
-  // explicitly by the orchestrator when a CLAUDE.md exists.
   "claude-md-compliance": {
     model: "sonnet",
+    description: "Walk the diff for violations of the repo's CLAUDE.md rules. Spawn when CLAUDE.md exists in the repo.",
     prompt: { kind: "line-anchored", roleFile: "claude-md-compliance.md" },
   },
   "claude-md-materiality": {
     model: "haiku",
+    description: "Flag when the diff teaches something CLAUDE.md / AGENTS.md should mention but doesn't. Spawn when the diff is material but CLAUDE.md is unchanged.",
     prompt: { kind: "self-contained", templateFile: "materiality.md" },
   },
 
   // ─── Language by extension ─────────────────────────────────────────────
   "language-typescript": {
     model: "sonnet",
-    triggers: { extensions: ["ts", "tsx"] },
+    description: "TypeScript-specific review: type safety, narrowing, branded types, exhaustiveness. Spawn for .ts/.tsx files.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -249,66 +191,66 @@ const AGENTS_DATA = {
   },
   "language-rust": {
     model: "sonnet",
-    triggers: { extensions: ["rs"] },
+    description: "Rust-specific review: ownership, lifetimes, unsafe, error types. Spawn for .rs files.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "language-rust" },
   },
   "language-swift": {
     model: "sonnet",
-    triggers: { extensions: ["swift"] },
+    description: "Swift-specific review: optionals, value types, concurrency. Spawn for .swift files.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "language-swift" },
   },
   vue: {
     model: "haiku",
-    triggers: { extensions: ["vue"] },
+    description: "Vue-specific review: composition API, reactivity, lifecycle. Spawn for .vue files.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "vue" },
   },
 
   // ─── Skill by import — heavy (sonnet) ──────────────────────────────────
   react: {
     model: "sonnet",
-    triggers: { imports: ["react", "react-dom"] },
+    description: "React-specific review: hooks rules, render perf, key/effect bugs. Spawn when files import react/react-dom or render JSX.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "react" },
   },
   database: {
     model: "sonnet",
-    triggers: { imports: ["pg", "mysql2", "sqlite3", "@libsql/", "postgres"] },
+    description: "Database-layer review: SQL injection, N+1, transaction scope. Spawn when files import pg/mysql2/sqlite3/postgres or run raw SQL.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "database" },
   },
   "drizzle-orm": {
     model: "sonnet",
-    triggers: { imports: ["drizzle-orm", "drizzle-kit"] },
+    description: "Drizzle ORM review: schema shape, query correctness, migration safety. Spawn when files import drizzle-orm/drizzle-kit.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "drizzle-orm" },
   },
 
   // ─── Skill by import — light (haiku) ───────────────────────────────────
   i18n: {
     model: "haiku",
-    triggers: { imports: ["i18next", "next-intl", "@formatjs/", "react-i18next"] },
+    description: "i18n review: missing keys, locale-specific formatting bugs. Spawn when files import i18next/next-intl/@formatjs/react-i18next.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "i18n" },
   },
   tailwind: {
     model: "haiku",
-    triggers: { imports: ["tailwind", "tw-merge", "clsx"] },
+    description: "Tailwind utility review: class consistency, no inline overrides. Spawn when files use tw-merge/clsx or have tailwind class strings.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "tailwind" },
   },
   "ui-animations": {
     model: "haiku",
-    triggers: { imports: ["framer-motion", "motion/react", "@react-spring/"] },
+    description: "Animation review: reduced-motion compliance, perf. Spawn when files import framer-motion/motion/react/@react-spring.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "ui-animations" },
   },
   shadcn: {
     model: "haiku",
-    triggers: { imports: ["@radix-ui/", "components/ui/"] },
+    description: "shadcn/ui review: component composition, accessibility. Spawn when files import @radix-ui or use shadcn components.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "shadcn" },
   },
   "tanstack-query": {
     model: "haiku",
-    triggers: { imports: ["@tanstack/react-query", "@tanstack/query-core"] },
+    description: "TanStack Query review: query keys, invalidation, suspense. Spawn when files import @tanstack/react-query/@tanstack/query-core.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "tanstack-query" },
   },
   "tanstack-start-best-practices": {
     model: "haiku",
-    triggers: { imports: ["@tanstack/start", "@tanstack/react-start"] },
+    description: "TanStack Start framework review: routing, loaders, server fns. Spawn when files import @tanstack/start or @tanstack/react-start.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -317,7 +259,7 @@ const AGENTS_DATA = {
   },
   "better-result-adopt": {
     model: "haiku",
-    triggers: { imports: ["better-result"] },
+    description: "Migrate try/catch to better-result. Spawn when files import better-result or contain throw/catch over result-friendly paths.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -326,29 +268,29 @@ const AGENTS_DATA = {
   },
   docker: {
     model: "haiku",
-    triggers: { imports: ["dockerode"] },
+    description: "Dockerfile / compose review: layer order, secrets, multi-stage. Spawn when Dockerfile/compose files or dockerode imports change.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "docker" },
   },
   kubernetes: {
     model: "haiku",
-    triggers: { imports: ["@kubernetes/client-node"] },
+    description: "Kubernetes manifest review: resource limits, secrets, RBAC. Spawn when k8s YAML or @kubernetes/client-node imports change.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "kubernetes" },
   },
   zod: {
     model: "haiku",
-    triggers: { imports: ["zod"] },
+    description: "Zod schema review: branding, refinements, error shaping. Spawn when files import zod.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "zod" },
   },
 
-  // ─── Surface (UI / design tokens / API) ────────────────────────────────
+  // ─── Surface (UI / API) ────────────────────────────────────────────────
   "ui-ux": {
     model: "haiku",
-    triggers: surface(UI_SURFACE, DESIGN_TOKENS),
+    description: "Visual / UX review: layout, accessibility, copy. Spawn for any user-facing UI component (React/Vue/Svelte components, CSS/design tokens).",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "ui-ux" },
   },
   "make-interfaces-feel-better": {
     model: "haiku",
-    triggers: surface(UI_SURFACE, DESIGN_TOKENS),
+    description: "Interaction polish: loading states, error states, transitions. Spawn for any user-facing UI component.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
@@ -357,28 +299,24 @@ const AGENTS_DATA = {
   },
   frontend: {
     model: "sonnet",
-    triggers: surface(UI_SURFACE),
+    description: "Frontend architecture review: state management, data flow, bundling. Spawn for non-trivial frontend code (React/Vue/Svelte apps).",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "frontend" },
   },
   "web-performance": {
     model: "sonnet",
-    triggers: surface(UI_SURFACE),
+    description: "Web-perf review: bundle bloat, render perf, hydration, INP. Spawn for changes affecting client-side runtime.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "web-performance" },
   },
   "api-design": {
     model: "sonnet",
-    triggers: surface(API_SURFACE),
+    description: "HTTP API review: route shape, status codes, request validation, idempotency. Spawn for HTTP route handlers (express/fastify/hono/@trpc/server/next route exports).",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "api-design" },
   },
 
   // ─── Subsystem (high-stakes — all sonnet) ──────────────────────────────
   "billing-subsystem": {
     model: "sonnet",
-    triggers: {
-      pathFragments: ["/billing/", "/payments/", "/invoices/", "/subscriptions/"],
-      imports: ["stripe", "@paddle/", "@lemonsqueezy/"],
-      codePatterns: ["chargeAmount", "refundAmount", "idempotencyKey"],
-    },
+    description: "Billing-specific review framed for money flows. Spawn when the diff touches charging, refunds, invoices, subscriptions, or imports stripe/paddle/lemonsqueezy.",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -389,11 +327,7 @@ const AGENTS_DATA = {
   },
   "auth-subsystem": {
     model: "sonnet",
-    triggers: {
-      pathFragments: ["/auth/", "/session/"],
-      imports: ["better-auth", "next-auth", "lucia", "@clerk/", "@auth/"],
-      codePatterns: ["signIn(", "signUp(", "getSession(", "verifyJwt", "bcrypt", "argon2"],
-    },
+    description: "Auth-specific review framed for session/token/MFA paths. Spawn when the diff touches login/logout, session handling, JWT/bcrypt/argon2, or auth libraries (better-auth/next-auth/lucia/clerk).",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -404,10 +338,7 @@ const AGENTS_DATA = {
   },
   "schema-migration-subsystem": {
     model: "sonnet",
-    triggers: {
-      pathFragments: ["/migrations/", "/drizzle/migrations/", "/prisma/migrations/"],
-      codePatterns: ["alterTable", "dropColumn", "addColumn"],
-    },
+    description: "Schema-migration review framed for data-loss / locking risks. Spawn when the diff touches /migrations/ or contains alterTable/dropColumn/addColumn.",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -418,10 +349,7 @@ const AGENTS_DATA = {
   },
   "webhook-subsystem": {
     model: "sonnet",
-    triggers: {
-      pathFragments: ["webhook"],
-      codePatterns: ["verifySignature", "crypto.createHmac", "crypto.timingSafeEqual"],
-    },
+    description: "Webhook-specific review framed for signature / replay protection. Spawn when the diff touches webhook handlers, HMAC verification, or createHmac/timingSafeEqual.",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -432,11 +360,7 @@ const AGENTS_DATA = {
   },
   "rbac-subsystem": {
     model: "sonnet",
-    triggers: {
-      pathFragments: ["/policies/", "/permissions/", "/rbac/"],
-      imports: ["@casl/", "casl"],
-      codePatterns: ["hasPermission(", "canAccess(", "authorize(", "Policy."],
-    },
+    description: "RBAC / authorization review framed for privilege boundaries. Spawn when the diff touches policies, permissions, RBAC, hasPermission/canAccess/authorize calls, or @casl imports.",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -447,7 +371,7 @@ const AGENTS_DATA = {
   },
   "multi-tenant-subsystem": {
     model: "sonnet",
-    triggers: { codePatterns: ["tenantId", "organizationId", "workspaceId"] },
+    description: "Multi-tenant review framed for tenant-id leakage / cross-tenant data. Spawn when the diff touches tenantId / organizationId / workspaceId paths or queries.",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -458,11 +382,7 @@ const AGENTS_DATA = {
   },
   "cron-subsystem": {
     model: "sonnet",
-    triggers: {
-      pathFragments: ["/cron/", "/jobs/", "/workers/"],
-      imports: ["bullmq", "bull", "agenda", "node-cron", "@trigger.dev/", "inngest"],
-      codePatterns: ["defineJob(", "enqueue(", ".cron("],
-    },
+    description: "Cron / background-job review framed for idempotency + overlap. Spawn when the diff touches /cron/, /jobs/, /workers/, or imports bullmq/bull/agenda/trigger.dev/inngest.",
     prompt: {
       kind: "line-anchored",
       roleFile: "subsystem-agent.md",
@@ -488,27 +408,7 @@ export type AgentName = keyof typeof AGENTS_DATA;
 export const getAgentModel = (agent: AgentName): AgentModel => AGENTS[agent].model;
 
 /** All agent names, stable insertion order. */
-export const ALL_AGENT_NAMES = Object.keys(AGENTS) as ReadonlyArray<AgentName>;
+export const ALL_AGENT_NAMES = Object.keys(AGENTS_DATA) as ReadonlyArray<AgentName>;
 
-/** Subset that spawns unconditionally in the given tier. */
-export const alwaysSpawnIn = (tier: ReviewTier): ReadonlyArray<AgentName> =>
-  ALL_AGENT_NAMES.filter((agent) => AGENTS[agent].alwaysIn?.includes(tier) === true);
-
-/** Whether the agent declares any conditional trigger at all. */
-export const hasTriggers = (agent: AgentName): boolean => {
-  const triggers = AGENTS[agent].triggers;
-  if (triggers === undefined) return false;
-  return (
-    (triggers.extensions?.length ?? 0) +
-      (triggers.pathFragments?.length ?? 0) +
-      (triggers.imports?.length ?? 0) +
-      (triggers.codePatterns?.length ?? 0) >
-    0
-  );
-};
-
-/** Whether the agent represents a subsystem (drives high_stakes tier classification). */
-export const isSubsystemAgent = (agent: AgentName): boolean => {
-  const prompt = AGENTS[agent].prompt;
-  return prompt.kind === "line-anchored" && prompt.subsystemName !== undefined;
-};
+/** Type guard: is the string a known agent name? */
+export const isAgentName = (value: string): value is AgentName => value in AGENTS_DATA;
