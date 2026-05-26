@@ -10,3 +10,4 @@ effect-ref
 node-compile-cache/
 bunx-*/
 v1b-sandbox-setup.ts
+.claude/skills/

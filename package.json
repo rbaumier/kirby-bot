@@ -9,7 +9,8 @@
   "description": "AFK orchestrator — deterministic state machine driving Claude Code through GitLab issues.",
   "scripts": {
     "test": "bun test src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "setup-skills": "bun scripts/setup-skills.ts"
   },
   "dependencies": {
     "@effect/platform": "^0.96.1",
