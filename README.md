@@ -28,20 +28,39 @@ The bot is named after Kirby because, like Kirby, it eats issues whole and spits
 
 For each issue the bot picks up, it transitions through the following phases:
 
-```
-fetch_queue → claim_issue → branch_worktree
-            │
-            ▼
-        run_impl ──▶ review ──▶ evaluate ──┬──▶ run_dogfood ──▶ open_draft_mr ──▶ merge ──▶ done
-                                            │
-                                            └──▶ fix ──▶ review    (loop, capped by MAX_FIX_CYCLES)
-                                                            │
-                                                            └──▶ failed   (gives up, hands back to a human)
+```mermaid
+flowchart TD
+    A[fetch_queue] --> B[claim_issue]
+    B --> C[branch_worktree]
+    C --> D[run_impl]
+    D --> E[review]
+    E --> F{evaluate}
+    F -->|approved| G[run_dogfood]
+    F -->|changes requested| H[fix]
+    H --> E
+    F -->|MAX_FIX_CYCLES hit| X[failed]
+    G --> I[open_draft_mr]
+    I --> J[merge]
+    J --> K[done]
+
+    classDef interactive fill:#ffd6e7,stroke:#d63384,color:#000
+    classDef script fill:#e7f1ff,stroke:#0d6efd,color:#000
+    classDef terminal fill:#e8e8e8,stroke:#444,color:#000
+    class D,E,F,H,G interactive
+    class A,B,C,I,J script
+    class K,X terminal
 ```
 
 - **Interactive phases** (`run_impl`, `review`, `evaluate`, `fix`, `run_dogfood`) spawn a fresh `claude` tmux session with a rendered prompt and wait for a verdict.
 - **Script phases** (`open_draft_mr`, `merge`, plus setup/cleanup transitions) are pure shell work — no `claude` session.
 - A **Stop hook** writes each session's last assistant message to a sentinel file; the orchestrator polls the sentinel and parses the verdict.
+
+### Why tmux, not `claude -p`?
+
+The orchestrator drives the **interactive** `claude` CLI inside a tmux session, not the headless `claude -p` flag or the Agent SDK. That distinction is billing-load-bearing.
+
+> [!NOTE]
+> Starting **June 15, 2026**, `claude -p` and the Claude Agent SDK no longer count toward your Claude plan's usage limits — they draw from a separate **monthly Agent SDK credit** ($20 on Pro, $100/$200 on Max). Interactive Claude Code usage stays on the regular plan limits. By driving the interactive CLI through tmux, kirby-bot reuses the limits you already pay for instead of burning through the (much smaller) SDK credit. See [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for the full breakdown.
 
 The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Module / Interface / Depth / Seam) is documented in [`CONTEXT.md`](CONTEXT.md).
 
@@ -52,6 +71,11 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
 - [`claude`](https://docs.claude.com/en/docs/claude-code) on your `$PATH`
 - A GitLab project with the orchestrator's labels configured (`ready-for-agent`, `picked-by-agent`, `failed-by-agent`, `code-review`, …)
 - A long-lived GitLab personal access token (`api` scope)
+- The two Claude Code skills the phase prompts invoke via the `Skill` tool — installed locally under `~/.claude/skills/`. Both live in my [rbaumier/skills](https://github.com/rbaumier/skills) repo:
+  - `code-review` — invoked by the `review` phase to fan reviewer subagents over the diff.
+  - `dogfood` — loaded by the persona subagents the `run_dogfood` phase spawns.
+
+  Without these, those two phases will fail at the `Skill` tool call.
 
 > [!IMPORTANT]
 > **OAuth2 tokens are not supported.** A single AFK run (several issues × 90-min budget) outlives the few-hour TTL of an OAuth2 token. The orchestrator reads `$GITLAB_TOKEN` first; if absent, it falls back to `~/.config/glab-cli/config.yml` but **skips** any host block flagged `is_oauth2: true`. If your only credential is the one `glab auth login` writes by default, the run fails at startup with a clear `ProviderConfigError`.
