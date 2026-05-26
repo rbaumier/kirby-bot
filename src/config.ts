@@ -53,7 +53,7 @@ export const SENTINEL_POLL_MS = 5000;
 export const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 /** The most review→fix cycles allowed before the issue is failed for a human. */
-export const MAX_FIX_CYCLES = 3;
+export const MAX_FIX_CYCLES = 10;
 
 /** Where per-issue git worktrees live — one subdirectory per repository. */
 export const WORKTREES_DIR = join(homedir(), ".afk-worktrees");
