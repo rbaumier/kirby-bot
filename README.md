@@ -10,6 +10,10 @@
 
 ---
 
+> ⚠️ **Alpha — expect breaking changes.** kirby-bot is in early development and its API, configuration, and behavior will evolve significantly. Only **GitLab** is supported at the moment; GitHub (and other providers) are planned but not yet implemented.
+
+---
+
 kirby-bot picks an issue off your GitLab board, spins up a fresh `claude` session in tmux for each phase of the work (implement, review, evaluate, fix, dogfood), parses the verdict from the session, then opens an MR and merges it. If the reviewer disagrees, it loops back to `fix` until either the reviewer is satisfied or the cap is hit.
 
 The bot is named after Kirby because, like Kirby, it eats issues whole and spits out merge requests.
