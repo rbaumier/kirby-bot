@@ -71,14 +71,14 @@ kirby-bot reaches GitLab through the `PRIVATE-TOKEN` header. OAuth2 access
 tokens are **not** supported: they expire within hours and a single AFK run
 (several issues × 90-min budget) outlives them.
 
-- The orchestrator reads `$GITLAB_TOKEN` first; if absent, it falls back to
+- The orchestrator reads `$KIRBY_GITLAB_TOKEN` first; if absent, it falls back to
   `~/.config/glab-cli/config.yml`, but **skips** any host block flagged
   `is_oauth2: true`.
 - If the only credential you have is the OAuth2 one `glab auth login` writes
   by default, the run fails at startup with a clear `ProviderConfigError`.
   Fix: create a long-lived personal access token (e.g. via
   `glab api -X POST user/personal_access_tokens` with the `api` scope) and
-  export it as `GITLAB_TOKEN` before launching.
+  export it as `KIRBY_GITLAB_TOKEN` before launching.
 
 ## Diagnosing slow phases via Claude session transcripts
 

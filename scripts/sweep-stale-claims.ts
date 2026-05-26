@@ -11,7 +11,7 @@
  *
  * Usage: bun ~/.claude/skills/afk/scripts/sweep-stale-claims.ts [--dry-run]
  * Run from inside the target repo. Requires: a GitLab token (via
- * `$GITLAB_TOKEN` or `~/.config/glab-cli/config.yml`), git.
+ * `$KIRBY_GITLAB_TOKEN` or `~/.config/glab-cli/config.yml`), git.
  */
 import { $ } from "bun";
 import { BunRuntime } from "@effect/platform-bun";

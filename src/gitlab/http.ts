@@ -9,7 +9,7 @@
  * response was lost, a retry would duplicate the mutation.
  *
  * Configuration comes from three sources, in this priority order:
- *   1. `$GITLAB_TOKEN`, `$GITLAB_HOST`, `$GITLAB_PROJECT_PATH` env vars.
+ *   1. `$KIRBY_GITLAB_TOKEN`, `$GITLAB_HOST`, `$GITLAB_PROJECT_PATH` env vars.
  *   2. The `~/.config/glab-cli/config.yml` `token:` field for the host
  *      (a documented fallback layer for the legacy `glab`-based wiring).
  *   3. The git remote URL of `origin` (host + project path).
@@ -152,7 +152,7 @@ const stepScan = (state: ScanState, line: string, host: string): ScanState => {
  *
  * Returns the token only when the host block is **not** OAuth2.
  * OAuth2 access tokens are short-lived. Multi-hour AFK runs outlive them.
- * Refusing them here forces the operator to set `$GITLAB_TOKEN` with a PAT.
+ * Refusing them here forces the operator to set `$KIRBY_GITLAB_TOKEN` with a PAT.
  *
  * The file's shape is small and stable enough to read line-by-line.
  * Two indentation levels supported: `hosts.<host>.token` and `<host>.token`.
@@ -190,7 +190,7 @@ const detectRemote = async (): Promise<Remote> => {
 const computeConfig = async (): Promise<GitLabConfig> => {
   const envHost = process.env.GITLAB_HOST?.replace(TRAILING_SLASH, "");
   const envProject = process.env.GITLAB_PROJECT_PATH;
-  const envToken = process.env.GITLAB_TOKEN;
+  const envToken = process.env.KIRBY_GITLAB_TOKEN;
 
   // Only call out to git when env vars don't already supply both pieces.
   const remote = envHost !== undefined && envProject !== undefined ? null : await detectRemote();
@@ -207,8 +207,8 @@ const computeConfig = async (): Promise<GitLabConfig> => {
   if (token === null || token === "") {
     throw new ProviderConfigError({
       detail:
-        `no personal access token in $GITLAB_TOKEN or ~/.config/glab-cli/config.yml ` +
-        `for host ${hostName} (OAuth2 entries are ignored — export $GITLAB_TOKEN with a PAT)`,
+        `no personal access token in $KIRBY_GITLAB_TOKEN or ~/.config/glab-cli/config.yml ` +
+        `for host ${hostName} (OAuth2 entries are ignored — export $KIRBY_GITLAB_TOKEN with a PAT)`,
     });
   }
   return {
