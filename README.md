@@ -10,7 +10,8 @@
 
 ---
 
-> ⚠️ **Alpha — expect breaking changes.** kirby-bot is in early development and its API, configuration, and behavior will evolve significantly. Only **GitLab** is supported at the moment; GitHub (and other providers) are planned but not yet implemented.
+> [!WARNING]
+> **Alpha — expect breaking changes.** kirby-bot is in early development and its API, configuration, and behavior will evolve significantly. Only **GitLab** is supported at the moment; GitHub (and other providers) are planned but not yet implemented.
 
 ---
 
