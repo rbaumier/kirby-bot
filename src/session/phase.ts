@@ -29,14 +29,20 @@ import { bootClaudeSession, createSession, killSession } from "./tmux";
 import type { VerdictToken } from "./verdict";
 import { parseVerdict } from "./verdict";
 
+/** Absolute path to the Stop-hook handler script — resolved at module load. */
+const STOP_HOOK_SCRIPT = join(import.meta.dirname, "stop-hook.ts");
+
 /**
  * Write the Claude Code Stop-hook config into a worktree's `.claude/`.
  *
- * The hook is non-blocking: on every Stop it dumps the payload's
- * `last_assistant_message` into `sentinel`, written atomically (`.tmp` then
- * `mv`) so the poller never sees a half-written file. Registered for both
- * `Stop` and `StopFailure`. Every path is double-quoted — `jq`/`mv` run
- * through a shell and the worktree path may contain spaces.
+ * On every Stop, Claude Code invokes our `stop-hook.ts` with the sentinel
+ * path. The script reads the Stop payload on stdin, finds the last assistant
+ * entry in the transcript JSONL, and either (a) writes the sentinel
+ * atomically when `stop_reason === "end_turn"`, or (b) emits a
+ * `{"decision":"block"}` response to ask Claude to resume the agent loop —
+ * see the script's header for the full contract. Registered for both `Stop`
+ * and `StopFailure`. Every path is double-quoted — the command runs through
+ * a shell and worktree paths may contain spaces.
  */
 const writeStopHookConfig = (
   phase: Phase,
@@ -47,9 +53,7 @@ const writeStopHookConfig = (
     try: async () => {
       const claudeDir = join(worktree, ".claude");
       await mkdir(claudeDir, { recursive: true });
-      const command =
-        `jq -r '.last_assistant_message // empty' > "${sentinel}.tmp" ` +
-        `&& mv "${sentinel}.tmp" "${sentinel}"`;
+      const command = `bun "${STOP_HOOK_SCRIPT}" "${sentinel}"`;
       const hookEntry = [{ matcher: "", hooks: [{ type: "command", command }] }];
       await writeFile(
         join(claudeDir, "settings.local.json"),
