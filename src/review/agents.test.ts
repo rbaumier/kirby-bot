@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { AGENT_MODELS, getAgentModel } from "./agent-models";
+import { AGENTS, getAgentModel } from "./agents";
 
-describe("AGENT_MODELS — tier sanity", () => {
+describe("AGENTS — model tier sanity", () => {
   test("Funnel L1/L2 → haiku (structural prose, no line-anchoring)", () => {
     expect(getAgentModel("funnel-l1")).toBe("haiku");
     expect(getAgentModel("funnel-l2")).toBe("haiku");
@@ -39,12 +39,11 @@ describe("AGENT_MODELS — tier sanity", () => {
     expect(getAgentModel("claude-md-materiality")).toBe("haiku");
   });
 
-  test("only haiku/sonnet/opus values present", () => {
+  test("only haiku/sonnet/opus values present across registry", () => {
     const valid = new Set(["haiku", "sonnet", "opus"]);
-    for (const [agent, model] of Object.entries(AGENT_MODELS)) {
-      expect(valid.has(model)).toBe(true);
-      // Tag the assertion failure with the offending agent name.
-      if (!valid.has(model)) throw new Error(`bad model for ${agent}: ${model}`);
+    for (const [agent, entry] of Object.entries(AGENTS)) {
+      expect(valid.has(entry.model)).toBe(true);
+      if (!valid.has(entry.model)) throw new Error(`bad model for ${agent}: ${entry.model}`);
     }
   });
 });

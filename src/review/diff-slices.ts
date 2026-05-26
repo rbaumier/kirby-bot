@@ -7,11 +7,10 @@
  * Measured on the upstream `code-review` skill: ~30× less diff payload per
  * agent, same agent count.
  *
- * Some agents (Funnel L1/L2, Matt Review, Materiality, Thermo-nuclear, Occam
- * Razor, simplify, matt-improve-codebase-architecture, claude-md-compliance,
- * general-opus, security-defensive, coding-standards*, correctness, tests)
- * need the cross-file view: they receive the full diff. The split lives in
- * {@link agentScope} below.
+ * Scoping is driven by each agent's `triggers` in `./agents.ts`. An agent
+ * with no triggers (Funnel L1/L2, Correctness, Tests, generalist passes)
+ * receives the full diff. An agent with triggers receives only the files
+ * that match its triggers.
  *
  * Slices are written atomically: write to `<path>.tmp`, then rename — so a
  * fan-out reader never picks up a half-written patch.
@@ -21,15 +20,8 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { Data, Effect } from "effect";
 import { describeShellError, runShell } from "../shell";
-import type { ChangedFile } from "./detect";
-import {
-  type AgentName,
-  IMPORT_SKILL_TRIGGERS,
-  LANGUAGE_BY_EXT,
-  SUBSYSTEM_TRIGGERS,
-  SURFACE_TRIGGERS,
-} from "./detect-tables";
-import type { ReviewPlan } from "./detect";
+import { AGENTS, type AgentName, hasTriggers } from "./agents";
+import type { ChangedFile, ReviewPlan } from "./detect";
 
 /** Failure when a diff slice cannot be written. */
 export class DiffSliceError extends Data.TaggedError("DiffSliceError")<{
@@ -38,75 +30,44 @@ export class DiffSliceError extends Data.TaggedError("DiffSliceError")<{
 }> {}
 
 /**
- * Return the file paths a given agent is scoped to, or `null` to mean
- * "full file set" (the agent gets the full diff). Mirrors the upstream
- * `code-review` Step 0.2 scoping rules. Decisions:
+ * Return the file paths the given agent is scoped to, or `null` to mean
+ * "full file set" (the agent gets the full diff).
  *
- *  - Language agents → files whose extension maps to that language.
- *  - Skill-by-import agents → files importing the lib OR mentioning it.
- *  - Surface agents → files matching the surface globs/extensions.
- *  - Subsystem agents → files matching the subsystem triggers.
- *  - Everything else → `null` (full diff). Includes Funnel L1/L2 (need
- *    cross-file view), Correctness, Tests, Occam Razor (greps repo
- *    anyway), and the various umbrella generalist passes.
+ * An agent with no `triggers` always returns `null` — that covers Funnel
+ * L1/L2 (need cross-file view), Correctness, Tests, Occam Razor, and every
+ * always-spawn generalist pass.
+ *
+ * An agent with triggers returns the files that match any trigger field
+ * (OR across extensions / pathFragments / imports / codePatterns). Import
+ * matching falls back to a content substring scan when the import-extraction
+ * step missed a spec.
  */
 export const agentScope = (
   agent: AgentName,
   files: ReadonlyArray<ChangedFile>,
 ): ReadonlyArray<string> | null => {
-  // Language by extension. Multiple extensions can map to the same language
-  // agent (`.ts` + `.tsx` → `language-typescript`); union them.
-  const languageExts = Object.entries(LANGUAGE_BY_EXT)
-    .filter(([, mapped]) => mapped === agent)
-    .map(([ext]) => ext);
-  if (languageExts.length > 0) {
-    return files.filter((file) => languageExts.includes(file.ext)).map((file) => file.path);
-  }
-
-  // Skill by import — matches the agent name to the trigger row.
-  for (const row of IMPORT_SKILL_TRIGGERS) {
-    if (row.agent !== agent) continue;
-    return files
-      .filter(
-        (file) =>
-          row.imports.some(
+  if (!hasTriggers(agent)) return null;
+  const triggers = AGENTS[agent].triggers;
+  if (triggers === undefined) return null;
+  const exts = triggers.extensions ?? [];
+  const paths = triggers.pathFragments ?? [];
+  const imports = triggers.imports ?? [];
+  const codePatterns = triggers.codePatterns ?? [];
+  return files
+    .filter(
+      (file) =>
+        (exts.length > 0 && exts.includes(file.ext)) ||
+        (paths.length > 0 && paths.some((frag) => file.path.includes(frag))) ||
+        (imports.length > 0 &&
+          imports.some(
             (needle) =>
-              file.imports.some((spec) => spec.includes(needle)) || file.content.includes(needle),
-          ),
-      )
-      .map((file) => file.path);
-  }
-
-  // Subsystem.
-  for (const row of SUBSYSTEM_TRIGGERS) {
-    if (row.agent !== agent) continue;
-    return files
-      .filter((file) => {
-        const pathHit = row.pathFragments.some((frag) => file.path.includes(frag));
-        const importHit = row.imports.some(
-          (needle) =>
-            file.imports.some((spec) => spec.includes(needle)) || file.content.includes(needle),
-        );
-        const codeHit = row.codePatterns.some((pattern) => file.content.includes(pattern));
-        return pathHit || importHit || codeHit;
-      })
-      .map((file) => file.path);
-  }
-
-  // Surface.
-  for (const row of SURFACE_TRIGGERS) {
-    if (!row.agents.includes(agent)) continue;
-    return files
-      .filter(
-        (file) =>
-          row.pathFragments.some((frag) => file.path.includes(frag)) ||
-          row.extensions.includes(file.ext),
-      )
-      .map((file) => file.path);
-  }
-
-  // Everything else: full diff.
-  return null;
+              file.imports.some((spec) => spec.includes(needle)) ||
+              file.content.includes(needle),
+          )) ||
+        (codePatterns.length > 0 &&
+          codePatterns.some((needle) => file.content.includes(needle))),
+    )
+    .map((file) => file.path);
 };
 
 /**
@@ -187,8 +148,7 @@ export const writeDiffSlices = (
     const fullDiffPath = join(input.slicesDir, `${input.slug}-full.patch`);
     yield* writeGitDiff("full", input.defaultBranch, fullDiffPath, []);
 
-    // Group agents into "needs slice" vs "use full". Avoid writing slices for
-    // agents whose scope IS the full file set — they reuse the full diff.
+    // Group agents into "needs slice" vs "use full".
     const agentsNeedingSlice: Array<{ agent: AgentName; scope: ReadonlyArray<string> }> = [];
     const agentsUsingFull: AgentName[] = [];
     for (const agent of input.plan.agents) {
@@ -217,4 +177,3 @@ export const writeDiffSlices = (
 
     return { fullDiffPath, perAgent };
   });
-
