@@ -21,6 +21,7 @@ const noopRunArtifacts: RunArtifactsShape = {
   sentinelPath: () => "/tmp/test-run-dir/sentinel.flag",
   tmuxLogPath: () => "/tmp/test-run-dir/tmux.log",
   promptFilePath: () => "/tmp/test-run-dir/prompt.md",
+  findingsPath: () => "/tmp/test-run-dir/findings.json",
   sessionName: () => "test-session",
   logEvent: () => Effect.void,
 };

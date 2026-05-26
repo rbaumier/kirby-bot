@@ -97,7 +97,7 @@ const dispatchHandler = (
       return onOpenDraftMr(current, env);
     }
     case "review": {
-      return reviewPhase(current);
+      return reviewPhase(current, env);
     }
     case "evaluate": {
       return evaluatePhase(current);

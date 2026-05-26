@@ -11,18 +11,17 @@
  */
 import { writeFile } from "node:fs/promises";
 import { Effect } from "effect";
-import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
 import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "./errors";
 import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
-import { renderPrompt } from "./prompt";
+import { renderPrompt, type PromptablePhase } from "./prompt";
 import type { VerdictToken } from "./verdict";
 
 /** Input for {@link runPhaseSession}. */
 export type RunPhaseSessionInput = {
-  readonly phase: Phase;
+  readonly phase: PromptablePhase;
   readonly issueIid: number;
   readonly worktree: string;
   readonly iteration: number;

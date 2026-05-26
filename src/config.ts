@@ -28,12 +28,12 @@ export type Phase = (typeof PHASES)[number];
  *
  * The 90-minute per-issue budget (below) is the *primary* bound and normally
  * trips first. These caps are the *secondary* guard: they stop a single hung
- * phase from silently eating the whole budget. Their sum (155) deliberately
+ * phase from silently eating the whole budget. Their sum (165) deliberately
  * exceeds the budget — a healthy run never reaches them.
  */
 export const PHASE_CAP_MINUTES: Record<Phase, number> = {
   run_impl: 45,
-  review: 25,
+  review: 35,
   evaluate: 30,
   fix: 30,
   run_dogfood: 25,
@@ -44,6 +44,13 @@ export const ISSUE_BUDGET_MS = 90 * 60 * 1000;
 
 /** How often the orchestrator polls a phase's sentinel file. */
 export const SENTINEL_POLL_MS = 5000;
+
+/**
+ * Maximum number of `claude` tmux sessions to run concurrently during the
+ * review fan-out. Each agent runs in its own session; the cap exists to
+ * bound API pressure and local CPU contention if a fan-out grows large.
+ */
+export const MAX_CONCURRENT_AGENTS = 20;
 
 /**
  * Hard ceiling on any single shell-out (git, glab, jq, tmux).

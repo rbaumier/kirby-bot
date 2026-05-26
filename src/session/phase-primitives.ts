@@ -36,6 +36,14 @@ import { parseVerdict } from "./verdict";
 const STOP_HOOK_SCRIPT = join(import.meta.dirname, "stop-hook.ts");
 
 /**
+ * Env-var name the Stop hook reads to know which sentinel file to write.
+ * Sourced from a single const so the hook command-line (`"$AGENT_SENTINEL"`)
+ * and the session-launch env (`env: { AGENT_SENTINEL: sentinel }`) cannot
+ * drift via typo — changing the name once propagates to both.
+ */
+const AGENT_SENTINEL_VAR = "AGENT_SENTINEL";
+
+/**
  * Write the Claude Code Stop-hook config into a worktree's `.claude/`.
  *
  * The hook command reads its sentinel path from `$AGENT_SENTINEL` rather than
@@ -65,7 +73,7 @@ export const writeStopHookConfig = (
     try: async () => {
       const claudeDir = join(worktree, ".claude");
       await mkdir(claudeDir, { recursive: true });
-      const command = `bun "${STOP_HOOK_SCRIPT}" "$AGENT_SENTINEL"`;
+      const command = `bun "${STOP_HOOK_SCRIPT}" "$${AGENT_SENTINEL_VAR}"`;
       const hookEntry = [{ matcher: "", hooks: [{ type: "command", command }] }];
       await writeFile(
         join(claudeDir, "settings.local.json"),
@@ -147,6 +155,12 @@ export type RunOneClaudeSessionInput = {
   readonly sentinel: string;
   readonly timeoutMs: number;
   readonly logContext: SessionLogContext;
+  /**
+   * `claude --model <alias>` for this session. Required for fan-out so each
+   * agent runs on its assigned tier; omit on single-prompt phases (the CLI
+   * then inherits the orchestrator's model).
+   */
+  readonly model?: string;
 };
 
 /** `[#42 review/correctness[2]]` — concise prefix for stdout session events. */
@@ -218,7 +232,8 @@ export const runOneClaudeSession = (
             promptFile,
             // The Stop hook reads AGENT_SENTINEL — single-session phases get
             // the same env var as fan-out, just with one value each.
-            env: { AGENT_SENTINEL: sentinel },
+            env: { [AGENT_SENTINEL_VAR]: sentinel },
+            ...(input.model === undefined ? {} : { model: input.model }),
           });
           const bootMs = Date.now() - startedAt;
           yield* artifacts.logEvent({

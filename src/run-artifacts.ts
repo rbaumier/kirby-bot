@@ -46,6 +46,12 @@ export type RunArtifactsShape = {
   readonly tmuxLogPath: (ref: PhaseRef) => string;
   /** The rendered prompt handed to a phase's claude session. */
   readonly promptFilePath: (ref: PhaseRef) => string;
+  /**
+   * The file a per-agent fan-out session writes its findings into — distinct
+   * from the sentinel, which only holds the verdict-bearing assistant message.
+   * Only meaningful when `ref.agent` is set.
+   */
+  readonly findingsPath: (ref: PhaseRef) => string;
   /** The tmux session name for one phase run. */
   readonly sessionName: (ref: PhaseRef) => string;
   /**
@@ -79,6 +85,7 @@ const shapeFor = (dir: string): RunArtifactsShape => {
     sentinelPath: (ref) => join(dir, `sentinel-${refSuffix(ref)}.flag`),
     tmuxLogPath: (ref) => join(dir, `tmux-${refSuffix(ref)}.log`),
     promptFilePath: (ref) => join(dir, `prompt-${refSuffix(ref)}.md`),
+    findingsPath: (ref) => join(dir, `findings-${refSuffix(ref)}.json`),
     sessionName: (ref) => `afk-${refSuffix(ref)}`,
     logEvent: (event) =>
       Effect.gen(function* () {

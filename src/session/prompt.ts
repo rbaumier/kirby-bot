@@ -8,10 +8,17 @@ import type { Phase } from "../config";
 import { PROMPTS_DIR } from "../config";
 import { PromptError } from "./errors";
 
-/** The template file backing each phase. */
-const TEMPLATE_FILE: Record<Phase, string> = {
+/**
+ * Subset of {@link Phase} that uses the legacy single-prompt session loader.
+ * `review` is excluded because the per-agent fan-out (Phase: Review) renders
+ * its prompts via {@link renderAgentPrompt} from `src/review/render-prompt.ts`
+ * — there is no monolithic `review.md` anymore.
+ */
+export type PromptablePhase = Exclude<Phase, "review">;
+
+/** The template file backing each promptable phase. */
+const TEMPLATE_FILE: Record<PromptablePhase, string> = {
   run_impl: "run-impl.md",
-  review: "review.md",
   evaluate: "evaluate.md",
   fix: "fix.md",
   run_dogfood: "run-dogfood.md",
@@ -41,7 +48,7 @@ const applyReplacements = (
  * wrong prompt, caught here instead.
  */
 export const renderPrompt = (
-  phase: Phase,
+  phase: PromptablePhase,
   replacements: Record<string, string>,
 ): Effect.Effect<string, PromptError> =>
   Effect.gen(function* () {

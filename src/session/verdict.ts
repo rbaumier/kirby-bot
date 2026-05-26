@@ -19,6 +19,7 @@ export const VERDICT_TOKENS = [
   "FIX_DONE",
   "DOGFOOD_PASS",
   "DOGFOOD_FAIL",
+  "AGENT_DONE",
 ] as const;
 
 export type VerdictToken = (typeof VERDICT_TOKENS)[number];

@@ -88,6 +88,14 @@ type BootClaudeSessionInput = {
    * shell metacharacters in values are preserved verbatim.
    */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Model alias for the `claude --model <alias>` flag. The CLI accepts
+   * `haiku` / `sonnet` / `opus` — the upstream Code-Review skill warns that
+   * omitting this means the session inherits the orchestrator's model, so a
+   * "haiku" agent silently runs on Opus. Per-agent fan-out always sets this.
+   * Optional for backward compat with the single-prompt phase runner.
+   */
+  readonly model?: string;
 };
 
 /** Shell-quote a value for safe inclusion in a single-quoted `export`. */
@@ -95,6 +103,15 @@ export const sqEscape = (value: string): string => `'${value.replaceAll("'", "'\
 
 /** Valid POSIX environment-variable identifier: letter/underscore start, alphanumeric/underscore rest. */
 export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Valid `claude --model` alias. The CLI's documented aliases are exactly
+ * `haiku`, `sonnet`, `opus`; we accept the same lowercase ASCII subset to
+ * prevent shell-injection through this knob. A full model identifier (e.g.
+ * `claude-haiku-4-5-20251001`) also matches the regex — useful when a future
+ * caller pins a specific revision.
+ */
+export const MODEL_ALIAS_RE = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Boot `claude` inside an already-created session and paste the prompt.
@@ -125,9 +142,18 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
         () => $`tmux send-keys -t ${input.session} ${exports} Enter`,
       );
     }
+    if (input.model !== undefined && !MODEL_ALIAS_RE.test(input.model)) {
+      yield* Effect.fail(
+        new TmuxError({ step: "start-claude", stderr: `invalid model alias: ${input.model}` }),
+      );
+    }
+    const claudeCmd =
+      input.model === undefined
+        ? "claude --dangerously-skip-permissions"
+        : `claude --dangerously-skip-permissions --model ${input.model}`;
     yield* tmuxStep(
       "start-claude",
-      () => $`tmux send-keys -t ${input.session} ${"claude --dangerously-skip-permissions"} Enter`,
+      () => $`tmux send-keys -t ${input.session} ${claudeCmd} Enter`,
     );
     yield* waitForTuiReady(input.session);
     yield* tmuxStep("load-buffer", () => $`tmux load-buffer ${input.promptFile}`);
