@@ -34,20 +34,26 @@ Every Bash call runs from inside `{worktree}`.
    success, not a failure: skip step 3 and end the session with the
    verdict trailer below.
 
-3. **Post each finding** as a general MR discussion, one per finding:
+3. **Post every finding in ONE parallel Bash block.** Findings already in the
+   review object — nothing to discover between them. Emit every
+   `mr-discussion.ts post` as a separate Bash call in the SAME assistant turn,
+   inside one `<function_calls>` block. Wall-clock = slowest single Bash
+   (~1 s), not N × (1 s + thinking gap). Measured: serial posting of 10
+   findings burns ~75 s; parallel batch finishes in ~1.5 s.
+
+   Per finding:
 
        bun {scripts_dir}/mr-discussion.ts post --mr {mr_iid} --body "<body>"
 
-   The body's **first line must be a machine-readable header**, exactly:
+   Body **first line** must be exactly:
 
        severity: <severity> | <file>:<line>
 
-   where `<severity>` is the finding's `code-review` severity — one of `bug`,
-   `security`, `performance`, `error_handling`, `suggestion`. After a blank
-   line, write the finding's title and analysis as prose. The `evaluate` and
-   `fix` phases parse that first line — keep its format exact.
+   `<severity>` ∈ `bug` / `security` / `performance` / `error_handling` /
+   `suggestion`. Blank line, then title + analysis. `evaluate` and `fix`
+   phases parse the first line — format exact.
 
-   Post the **full set** — no dedup. A finding genuinely fixed in a prior
+   Post the **full set**, no dedup. A finding genuinely fixed in a prior
    iteration simply won't be re-flagged by `code-review` on the now-fixed
    code.
 

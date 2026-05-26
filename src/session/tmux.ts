@@ -80,7 +80,21 @@ type BootClaudeSessionInput = {
   readonly session: string;
   readonly tmuxLogPath: string;
   readonly promptFile: string;
+  /**
+   * Env vars to export into the tmux shell *before* `claude` launches. Read by
+   * the Stop-hook subprocess via standard inheritance — used to dispatch to a
+   * per-session sentinel path when N parallel sessions share one
+   * `settings.local.json`. Single-quoted in the `export` line so spaces and
+   * shell metacharacters in values are preserved verbatim.
+   */
+  readonly env?: Readonly<Record<string, string>>;
 };
+
+/** Shell-quote a value for safe inclusion in a single-quoted `export`. */
+export const sqEscape = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** Valid POSIX environment-variable identifier: letter/underscore start, alphanumeric/underscore rest. */
+export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * Boot `claude` inside an already-created session and paste the prompt.
@@ -95,6 +109,22 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
       "pipe-pane",
       () => $`tmux pipe-pane -t ${input.session} -O ${`cat >> "${input.tmuxLogPath}"`}`,
     );
+    if (input.env !== undefined) {
+      for (const [key] of Object.entries(input.env)) {
+        if (!ENV_KEY_RE.test(key)) {
+          yield* Effect.fail(
+            new TmuxError({ step: "export-env", stderr: `invalid env key: ${key}` }),
+          );
+        }
+      }
+      const exports = Object.entries(input.env)
+        .map(([key, value]) => `export ${key}=${sqEscape(value)}`)
+        .join(" && ");
+      yield* tmuxStep(
+        "export-env",
+        () => $`tmux send-keys -t ${input.session} ${exports} Enter`,
+      );
+    }
     yield* tmuxStep(
       "start-claude",
       () => $`tmux send-keys -t ${input.session} ${"claude --dangerously-skip-permissions"} Enter`,

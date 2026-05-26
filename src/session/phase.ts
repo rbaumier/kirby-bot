@@ -3,114 +3,22 @@
  *
  * `runPhaseSession` is the load-bearing helper. It writes the
  * Stop-hook config, renders the prompt, and drives a tmux session
- * to a verdict. The session is held in an `acquireUseRelease`
- * bracket so it is always killed on every exit path (verdict
- * returned, timeout, defect, or Ctrl-C).
+ * to a verdict via {@link runOneClaudeSession}. The session-lifecycle
+ * bracket and the sentinel poll live in `./phase-primitives` so the
+ * per-agent fan-out runner can share them.
  *
  * Every failure is one of the typed errors in `./errors`.
  */
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { Console, Effect } from "effect";
+import { writeFile } from "node:fs/promises";
+import { Effect } from "effect";
 import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
-import {
-  BudgetExhausted,
-  NoVerdict,
-  SessionTimedOut,
-  UnexpectedVerdictError,
-  WorkspaceError,
-} from "./errors";
+import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "./errors";
+import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
 import { renderPrompt } from "./prompt";
-import { bootClaudeSession, createSession, killSession } from "./tmux";
 import type { VerdictToken } from "./verdict";
-import { parseVerdict } from "./verdict";
-
-/** Absolute path to the Stop-hook handler script — resolved at module load. */
-const STOP_HOOK_SCRIPT = join(import.meta.dirname, "stop-hook.ts");
-
-/**
- * Write the Claude Code Stop-hook config into a worktree's `.claude/`.
- *
- * On every Stop, Claude Code invokes our `stop-hook.ts` with the sentinel
- * path. The script reads the Stop payload on stdin, finds the last assistant
- * entry in the transcript JSONL, and either (a) writes the sentinel
- * atomically when `stop_reason === "end_turn"`, or (b) emits a
- * `{"decision":"block"}` response to ask Claude to resume the agent loop —
- * see the script's header for the full contract. Registered for both `Stop`
- * and `StopFailure`. Every path is double-quoted — the command runs through
- * a shell and worktree paths may contain spaces.
- */
-const writeStopHookConfig = (
-  phase: Phase,
-  worktree: string,
-  sentinel: string,
-): Effect.Effect<void, WorkspaceError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const claudeDir = join(worktree, ".claude");
-      await mkdir(claudeDir, { recursive: true });
-      const command = `bun "${STOP_HOOK_SCRIPT}" "${sentinel}"`;
-      const hookEntry = [{ matcher: "", hooks: [{ type: "command", command }] }];
-      await writeFile(
-        join(claudeDir, "settings.local.json"),
-        JSON.stringify({ hooks: { Stop: hookEntry, StopFailure: hookEntry } }, null, 2),
-      );
-    },
-    catch: (cause) =>
-      new WorkspaceError({ phase, operation: "write the Stop-hook config", reason: String(cause) }),
-  });
-
-/** Input for {@link pollSentinel}. */
-type PollSentinelInput = {
-  readonly phase: Phase;
-  readonly sentinel: string;
-  readonly startedAt: number;
-  readonly timeoutMs: number;
-};
-
-/**
- * Poll `sentinel` every {@link SENTINEL_POLL_MS} until it appears
- * or the timeout elapses. Returns the verdict, or fails with
- * {@link SessionTimedOut} / {@link NoVerdict}.
- *
- * Killing the tmux session is not this function's job. The bracket
- * in `runPhaseSession` owns the session and kills it on every exit.
- */
-const pollSentinel = (
-  input: PollSentinelInput,
-): Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError> =>
-  Effect.gen(function* () {
-    const { phase, sentinel, startedAt, timeoutMs } = input;
-
-    // Stack-safe poll loop: sleep one interval per tick until the
-    // sentinel appears or the timeout elapses. The interruptible
-    // sleep also lets a Ctrl-C unwind the wait promptly.
-    yield* Effect.iterate(0, {
-      while: () => !existsSync(sentinel) && Date.now() - startedAt <= timeoutMs,
-      body: (tick) => Effect.as(Effect.sleep(`${SENTINEL_POLL_MS} millis`), tick + 1),
-    });
-
-    if (!existsSync(sentinel)) {
-      return yield* Effect.fail(new SessionTimedOut({ phase, elapsedMs: Date.now() - startedAt }));
-    }
-
-    const message = yield* Effect.tryPromise({
-      try: () => readFile(sentinel, "utf8"),
-      catch: (cause) =>
-        new WorkspaceError({ phase, operation: "read the sentinel", reason: String(cause) }),
-    });
-    const verdict = parseVerdict(message);
-    if (verdict === null) {
-      return yield* Effect.fail(
-        new NoVerdict({ phase, captured: message.trim().replaceAll("\n", " ") }),
-      );
-    }
-    return verdict;
-  });
 
 /** Input for {@link runPhaseSession}. */
 export type RunPhaseSessionInput = {
@@ -126,8 +34,8 @@ export type RunPhaseSessionInput = {
  * Run one phase as a fresh `claude` tmux session and return a verdict narrowed
  * to the expected set.
  *
- * The tmux session is an `acquireUseRelease` resource. `createSession` is the
- * acquire, `killSession` the release — guaranteed to run on every exit of
+ * The tmux session is an `acquireUseRelease` resource (see
+ * {@link runOneClaudeSession}) — guaranteed to be killed on every exit of
  * `use` (verdict, timeout, defect, or interruption).
  *
  * An out-of-set verdict fails with `UnexpectedVerdictError` so callers route
@@ -153,33 +61,27 @@ export const runPhaseSession = <const V extends VerdictToken>(
     const ref = { issueIid, phase, iteration };
     const session = artifacts.sessionName(ref);
     const sentinel = artifacts.sentinelPath(ref);
-    const tmuxLog = artifacts.tmuxLogPath(ref);
+    const tmuxLogPath = artifacts.tmuxLogPath(ref);
     const promptFile = artifacts.promptFilePath(ref);
 
-    yield* writeStopHookConfig(phase, worktree, sentinel);
+    yield* writeStopHookConfig(phase, worktree);
     const rendered = yield* renderPrompt(phase, replacements);
     yield* Effect.tryPromise({
       try: () => writeFile(promptFile, rendered),
       catch: (cause) =>
         new WorkspaceError({ phase, operation: "write the prompt file", reason: String(cause) }),
     });
-    // Clear any stale session of the same name from a crashed prior run.
-    yield* killSession(session);
 
-    const verdict = yield* Effect.acquireUseRelease(
-      createSession(session, worktree),
-      () =>
-        Effect.gen(function* () {
-          // Start the phase clock before booting claude — the TUI-readiness
-          // wait counts against the budget, so the cap is a true wall-clock
-          // bound on the whole session.
-          const startedAt = Date.now();
-          yield* bootClaudeSession({ session, tmuxLogPath: tmuxLog, promptFile });
-          yield* Console.log(`  ↳ ${phase}: tmux attach -r -t ${session}   ·   tail -f ${tmuxLog}`);
-          return yield* pollSentinel({ phase, sentinel, startedAt, timeoutMs });
-        }),
-      () => killSession(session),
-    );
+    const verdict = yield* runOneClaudeSession({
+      phase,
+      worktree,
+      session,
+      tmuxLogPath,
+      promptFile,
+      sentinel,
+      timeoutMs,
+      logContext: { issueIid, iteration },
+    });
 
     const narrowed = expected.find((candidate) => candidate === verdict);
     if (narrowed === undefined) {

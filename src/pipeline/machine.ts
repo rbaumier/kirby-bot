@@ -5,6 +5,7 @@
  * transition, repeat until the machine reaches `end`.
  */
 import { Clock, Console, Effect } from "effect";
+import { formatDuration } from "../duration";
 import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
@@ -18,25 +19,6 @@ type MachineServices = GitProvider | RunArtifacts;
 /** Shorten `text` to at most `maxLength` characters, with an ellipsis. */
 const truncate = (text: string, maxLength: number): string =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
-
-/**
- * Render a millisecond duration as a compact human string (`1m05s`, `4.2s`).
- *
- * Effect's `Duration.format` ships a different style (`"1m 5s"`, `"4s 200ms"`)
- * that breaks the single-line transition log this is for — keep the bespoke
- * compact form.
- */
-const formatDuration = (milliseconds: number): string => {
-  if (milliseconds < 1000) {
-    return `${milliseconds}ms`;
-  }
-  if (milliseconds < 60_000) {
-    return `${(milliseconds / 1000).toFixed(1)}s`;
-  }
-  const minutes = Math.floor(milliseconds / 60_000);
-  const seconds = Math.floor((milliseconds % 60_000) / 1000);
-  return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
-};
 
 type TransitionSummary = {
   readonly issue: IssueRef | null;

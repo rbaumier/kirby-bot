@@ -64,6 +64,24 @@ describe("RunArtifacts", () => {
     );
   });
 
+  it("agent suffix disambiguates per-agent path helpers", async () => {
+    const out = await Effect.runPromise(buildAt(1_700_000_000_000, 42));
+    const ref = { issueIid: 7, phase: "review", iteration: 2, agent: "correctness" } as const;
+    expect(out.sessionName(ref)).toBe("afk-7-review-2-correctness");
+    expect(out.sentinelPath(ref).endsWith("sentinel-7-review-2-correctness.flag")).toBe(true);
+    expect(out.tmuxLogPath(ref).endsWith("tmux-7-review-2-correctness.log")).toBe(true);
+    expect(out.promptFilePath(ref).endsWith("prompt-7-review-2-correctness.md")).toBe(true);
+  });
+
+  it("absent agent → filenames unchanged from pre-fan-out format", async () => {
+    const out = await Effect.runPromise(buildAt(1_700_000_000_000, 42));
+    const ref = { issueIid: 7, phase: "review", iteration: 2 } as const;
+    expect(out.sessionName(ref)).toBe("afk-7-review-2");
+    expect(out.sentinelPath(ref).endsWith("sentinel-7-review-2.flag")).toBe(true);
+    expect(out.tmuxLogPath(ref).endsWith("tmux-7-review-2.log")).toBe(true);
+    expect(out.promptFilePath(ref).endsWith("prompt-7-review-2.md")).toBe(true);
+  });
+
   it("logEvent swallows write failures when the dir does not exist", async () => {
     // buildRunArtifacts does NOT mkdir its own dir — appendFile will fail with ENOENT.
     // Effect.ignore must swallow that failure so a run never aborts on logging.

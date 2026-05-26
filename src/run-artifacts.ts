@@ -15,11 +15,20 @@ import { Clock, Console, Context, Effect, Layer, Random } from "effect";
 import type { Phase } from "./config";
 import { RUNS_DIR } from "./config";
 
-/** Identifies one phase run — unique per issue, phase, iteration. */
+/**
+ * Identifies one phase run — unique per issue, phase, iteration.
+ *
+ * `agent` disambiguates per-agent sessions in a fan-out phase: when set, every
+ * path helper suffixes its filename with the agent name so N parallel `claude`
+ * sessions never collide on a sentinel/log/prompt/tmux name. Absent for the
+ * single-prompt phases (run_impl, evaluate, fix, run_dogfood) — filenames stay
+ * identical to before the field was added.
+ */
 export type PhaseRef = {
   readonly issueIid: number;
   readonly phase: Phase;
   readonly iteration: number;
+  readonly agent?: string;
 };
 
 /** The shape provided by {@link RunArtifacts}. */
@@ -58,17 +67,19 @@ const RANDOM_SUFFIX_LEN = 6;
 /** Build the shape from a precomputed `dir` so the helpers can close over it. */
 const shapeFor = (dir: string): RunArtifactsShape => {
   const logPath = join(dir, "run.jsonl");
+  // When `agent` is set, the suffix gets a trailing `-<agent>` so per-agent
+  // fan-out files don't collide. Absent → identical to the pre-fan-out format.
+  const refSuffix = ({ issueIid, phase, iteration, agent }: PhaseRef) =>
+    agent === undefined
+      ? `${issueIid}-${phase}-${iteration}`
+      : `${issueIid}-${phase}-${iteration}-${agent}`;
   return {
     dir,
     logPath,
-    sentinelPath: ({ issueIid, phase, iteration }) =>
-      join(dir, `sentinel-${issueIid}-${phase}-${iteration}.flag`),
-    tmuxLogPath: ({ issueIid, phase, iteration }) =>
-      join(dir, `tmux-${issueIid}-${phase}-${iteration}.log`),
-    promptFilePath: ({ issueIid, phase, iteration }) =>
-      join(dir, `prompt-${issueIid}-${phase}-${iteration}.md`),
-    sessionName: ({ issueIid, phase, iteration }) =>
-      `afk-${issueIid}-${phase}-${iteration}`,
+    sentinelPath: (ref) => join(dir, `sentinel-${refSuffix(ref)}.flag`),
+    tmuxLogPath: (ref) => join(dir, `tmux-${refSuffix(ref)}.log`),
+    promptFilePath: (ref) => join(dir, `prompt-${refSuffix(ref)}.md`),
+    sessionName: (ref) => `afk-${refSuffix(ref)}`,
     logEvent: (event) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
