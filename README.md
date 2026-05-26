@@ -71,11 +71,22 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
 - [`claude`](https://docs.claude.com/en/docs/claude-code) on your `$PATH`
 - A GitLab project with the orchestrator's labels configured (`ready-for-agent`, `picked-by-agent`, `failed-by-agent`, `code-review`, …)
 - A long-lived GitLab personal access token (`api` scope)
-- The two Claude Code skills the phase prompts invoke via the `Skill` tool — installed locally under `~/.claude/skills/`. Both live in my [rbaumier/skills](https://github.com/rbaumier/skills) repo:
+- The Claude Code skills the phase prompts (and their transitive fan-out) invoke via the `Skill` tool. All live in my [rbaumier/skills](https://github.com/rbaumier/skills) repo and must be installed under `~/.claude/skills/`.
+
+  **Directly invoked by the phase prompts:**
   - `code-review` — invoked by the `review` phase to fan reviewer subagents over the diff.
   - `dogfood` — loaded by the persona subagents the `run_dogfood` phase spawns.
 
-  Without these, those two phases will fail at the `Skill` tool call.
+  **Transitively invoked by `code-review`'s fan-out.** The `code-review` skill spawns ~15+ reviewer subagents per Full-tier run; each loads its own skill via the `Skill` tool. The full set:
+
+  | Bucket | Skills loaded |
+  |---|---|
+  | Always-spawn (Full tier) | `simplify`, `matt-improve-codebase-architecture`, `matt-review`, `thermo-nuclear-code-quality-review`, `security-defensive`, `coding-standards` (+ `:design`, `:errors`, `:hygiene`, `:style`), `testing`, `matt-tdd` |
+  | By language extension | `language-typescript`, `language-rust`, `language-swift`, `vue` |
+  | By import detected | `better-result-adopt`, `database`, `docker`, `drizzle-orm`, `i18n`, `kubernetes`, `react`, `shadcn`, `tailwind`, `tanstack-query`, `tanstack-start-best-practices`, `ui-animations`, `vue`, `zod` |
+  | By surface touched (path globs) | `ui-ux`, `frontend`, `make-interfaces-feel-better`, `web-performance`, `api-design` |
+
+  Missing a transitively-spawned skill won't crash the phase — the spawning subagent fails its own `Skill` load and that agent's slot is dropped from the review object — but the review will be silently shallower than intended. Easiest path: clone the whole `rbaumier/skills` repo into `~/.claude/skills/`.
 
 > [!IMPORTANT]
 > **OAuth2 tokens are not supported.** A single AFK run (several issues × 90-min budget) outlives the few-hour TTL of an OAuth2 token. The orchestrator reads `$GITLAB_TOKEN` first; if absent, it falls back to `~/.config/glab-cli/config.yml` but **skips** any host block flagged `is_oauth2: true`. If your only credential is the one `glab auth login` writes by default, the run fails at startup with a clear `ProviderConfigError`.
