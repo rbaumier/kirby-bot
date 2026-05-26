@@ -23,7 +23,7 @@ Known tokens: `READY_FOR_REVIEW`, `BLOCKER_SUSPECTED`, `REVIEW_DONE`, `CONVERGED
 
 ### Session
 
-The mechanism a Phase uses to run a single `claude` invocation in isolation: spawn a tmux session with the rendered prompt, register a Stop hook that writes the last assistant message to a sentinel, poll the sentinel, parse the Verdict, kill the tmux. The Session Module hides tmux/sentinel/verdict-parsing behind a small interface; the Phase only sees `runPhaseSession(input, expected) → Effect<V, PhaseError, RunArtifacts>`, where `V extends VerdictToken` is narrowed to the expected set and an off-set verdict fails with `UnexpectedVerdictError`.
+The mechanism a Phase uses to run a single `claude` invocation in isolation: spawn a tmux session with the rendered prompt, register a Stop hook (`src/session/stop-hook.ts`) that writes the last assistant message to a sentinel **iff `stop_reason === "end_turn"`** (or the event is `StopFailure`), poll the sentinel, parse the Verdict, kill the tmux. On any other `stop_reason` the hook emits `{"decision":"block"}` on stdout so Claude Code resumes the agent loop instead of stopping prematurely — that branch is what catches mid-turn Stops while subagents or `tool_use` rounds are still in flight (see #29). The Session Module hides tmux/sentinel/verdict-parsing behind a small interface; the Phase only sees `runPhaseSession(input, expected) → Effect<V, PhaseError, RunArtifacts>`, where `V extends VerdictToken` is narrowed to the expected set and an off-set verdict fails with `UnexpectedVerdictError`.
 
 A Session is per-Phase — there is no long-lived Session across Phases. Each Phase mints one.
 

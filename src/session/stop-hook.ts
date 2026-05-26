@@ -41,22 +41,53 @@ if (sentinel === undefined) {
 }
 
 type StopPayload = {
-  readonly transcript_path?: string;
-  readonly hook_event_name?: string;
-};
-
-type ContentBlock = {
-  readonly type?: string;
-  readonly text?: string;
+  readonly transcript_path: string | undefined;
+  readonly hook_event_name: string | undefined;
 };
 
 type TranscriptEntry = {
-  readonly type?: string;
-  readonly message?: {
-    readonly content?: unknown;
-    readonly stop_reason?: string;
-  };
+  readonly type: string | undefined;
+  readonly message: { readonly content: unknown; readonly stop_reason: string | undefined } | undefined;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const parseStopPayload = (raw: string): StopPayload | null => {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return null;
+    return {
+      transcript_path: typeof parsed.transcript_path === "string" ? parsed.transcript_path : undefined,
+      hook_event_name: typeof parsed.hook_event_name === "string" ? parsed.hook_event_name : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const parseTranscriptEntry = (raw: string): TranscriptEntry | null => {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return null;
+    const message = isRecord(parsed.message)
+      ? {
+          content: parsed.message.content,
+          stop_reason:
+            typeof parsed.message.stop_reason === "string" ? parsed.message.stop_reason : undefined,
+        }
+      : undefined;
+    return {
+      type: typeof parsed.type === "string" ? parsed.type : undefined,
+      message,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const isTextBlock = (block: unknown): block is { type: "text"; text: string } =>
+  isRecord(block) && block.type === "text" && typeof block.text === "string";
 
 const tryRead = (label: string, fn: () => string): string | null => {
   try {
@@ -67,18 +98,10 @@ const tryRead = (label: string, fn: () => string): string | null => {
   }
 };
 
-const tryParse = <T>(raw: string): T | null => {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-};
-
 const rawPayload = tryRead("read stdin", () => readFileSync(0, "utf8"));
 if (rawPayload === null) process.exit(0);
 
-const payload = tryParse<StopPayload>(rawPayload);
+const payload = parseStopPayload(rawPayload);
 if (payload === null || payload.transcript_path === undefined) {
   process.stderr.write("stop-hook.ts: payload missing transcript_path\n");
   process.exit(0);
@@ -93,17 +116,11 @@ if (rawTranscript === null) process.exit(0);
 const entries: TranscriptEntry[] = [];
 for (const line of rawTranscript.split("\n")) {
   if (line.trim() === "") continue;
-  const entry = tryParse<TranscriptEntry>(line);
+  const entry = parseTranscriptEntry(line);
   if (entry !== null) entries.push(entry);
 }
 
-let lastAssistant: TranscriptEntry | null = null;
-for (let i = entries.length - 1; i >= 0; i--) {
-  if (entries[i]?.type === "assistant") {
-    lastAssistant = entries[i] ?? null;
-    break;
-  }
-}
+const lastAssistant = entries.findLast((e) => e.type === "assistant") ?? null;
 
 const isStopFailure = payload.hook_event_name === "StopFailure";
 const stopReason = lastAssistant?.message?.stop_reason;
@@ -121,14 +138,8 @@ if (!isStopFailure && stopReason !== "end_turn") {
 }
 
 const rawContent = lastAssistant?.message?.content;
-const blocks: ReadonlyArray<ContentBlock> = Array.isArray(rawContent) ? (rawContent as ContentBlock[]) : [];
-
-const textPieces: string[] = [];
-for (const block of blocks) {
-  if (block.type === "text" && typeof block.text === "string") {
-    textPieces.push(block.text);
-  }
-}
+const blocks: readonly unknown[] = Array.isArray(rawContent) ? rawContent : [];
+const textPieces = blocks.filter(isTextBlock).map((b) => b.text);
 
 // PID-suffixed tmp path — two overlapping Stop hook invocations (possible if
 // Claude Code ever issues a Stop and a StopFailure back-to-back) won't race

@@ -132,13 +132,39 @@ describe("stop-hook", () => {
     expect(existsSync(sentinelPath)).toBe(false);
   });
 
-  test("non-array content (e.g. plain-string user message) does not crash", () => {
+  test("non-array assistant content on end_turn writes empty sentinel (no crash)", () => {
     const transcript = [
-      JSON.stringify({ type: "user", message: { content: "free-form prompt text" } }),
-      assistantText("Done.\n\nVERDICT: FIX_DONE"),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: "plain string content", stop_reason: "end_turn" },
+      }),
     ];
     const { sentinelContent } = runHook({ hook_event_name: "Stop" }, transcript);
-    expect(sentinelContent).toBe("Done.\n\nVERDICT: FIX_DONE");
+    expect(sentinelContent).toBe("");
+  });
+
+  test("missing stop_reason blocks with '(missing)' reason", () => {
+    const transcript = [
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "no stop reason here" }] },
+      }),
+    ];
+    const { sentinelContent, stdout } = runHook({ hook_event_name: "Stop" }, transcript);
+    expect(sentinelContent).toBeNull();
+    const decision = JSON.parse(stdout) as { decision: string; reason: string };
+    expect(decision.decision).toBe("block");
+    expect(decision.reason).toContain("(missing)");
+  });
+
+  test("empty transcript + Stop blocks; empty transcript + StopFailure writes empty sentinel", () => {
+    const blocked = runHook({ hook_event_name: "Stop" }, []);
+    expect(blocked.sentinelContent).toBeNull();
+    const decision = JSON.parse(blocked.stdout) as { decision: string };
+    expect(decision.decision).toBe("block");
+
+    const failed = runHook({ hook_event_name: "StopFailure" }, []);
+    expect(failed.sentinelContent).toBe("");
   });
 
 });
