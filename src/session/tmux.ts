@@ -156,8 +156,19 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
       () => $`tmux send-keys -t ${input.session} ${claudeCmd} Enter`,
     );
     yield* waitForTuiReady(input.session);
-    yield* tmuxStep("load-buffer", () => $`tmux load-buffer ${input.promptFile}`);
-    yield* tmuxStep("paste-buffer", () => $`tmux paste-buffer -t ${input.session}`);
-    yield* Effect.sleep("500 millis");
+    // Use a named buffer (keyed by session name) to avoid the global-buffer race
+    // when N sessions concurrently call load-buffer + paste-buffer: without -b,
+    // every concurrent load-buffer overwrites the same anonymous slot, so most
+    // sessions end up pasting another agent's prompt (or an empty buffer).
+    yield* tmuxStep("load-buffer", () => $`tmux load-buffer -b ${input.session} ${input.promptFile}`);
+    yield* tmuxStep("paste-buffer", () => $`tmux paste-buffer -b ${input.session} -t ${input.session}`);
+    // Wait for the pane to stabilise again after the paste: tmux paste-buffer
+    // enqueues the write with the server and returns immediately, but the
+    // server may be backlogged when N sessions paste concurrently. Sending
+    // Enter before all content arrives submits an empty (or partial) prompt
+    // and leaves the rest of the paste in the input area, waiting forever.
+    // Re-using waitForTuiReady ensures the pane is stable (paste complete)
+    // before Enter is delivered.
+    yield* waitForTuiReady(input.session);
     yield* tmuxStep("send-enter", () => $`tmux send-keys -t ${input.session} Enter`);
   });
