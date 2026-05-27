@@ -8,7 +8,7 @@
  * bracket in phase.ts.
  */
 import { $ } from "bun";
-import { Effect } from "effect";
+import { Console, Effect } from "effect";
 import { describeShellError, runShell } from "../shell";
 import { TmuxError } from "./errors";
 
@@ -74,6 +74,67 @@ const waitForTuiReady = (session: string): Effect.Effect<void> =>
         ),
     },
   ).pipe(Effect.asVoid);
+
+/**
+ * Collapsed-paste marker the Claude TUI renders once a multi-line prompt has
+ * landed in the input area (`[Pasted text #N +M lines]`). kirby-bot prompts
+ * are always large and multi-line, so the TUI always collapses them — the
+ * marker's presence is a reliable proxy for "the paste actually arrived",
+ * which pane stability alone is NOT under tmux-server backlog (issue #30).
+ */
+export const TUI_PASTE_MARKER = "[Pasted text";
+
+/** Whether the pane shows a delivered (collapsed) paste in the input area. */
+export const paneShowsPaste = (pane: string): boolean => pane.includes(TUI_PASTE_MARKER);
+
+/** Bounded load+paste attempts before falling through to Enter regardless. */
+const PASTE_MAX_ATTEMPTS = 3;
+
+/**
+ * Load the prompt into the session's named buffer, paste it into the pane, and
+ * verify the paste actually landed before returning. Retries up to
+ * {@link PASTE_MAX_ATTEMPTS} times.
+ *
+ * Two races stack here:
+ *
+ *  1. **Global-buffer cross-paste.** Without `-b ${session}`, N concurrent
+ *     `load-buffer` calls overwrite the same anonymous slot, so most sessions
+ *     paste another agent's prompt (or an empty buffer). The named buffer
+ *     (keyed by session) isolates each session's payload.
+ *
+ *  2. **Async delivery (issue #30).** `tmux paste-buffer` only *enqueues* the
+ *     write with the tmux server, which drains its queue asynchronously. Under
+ *     high concurrency (15+ sessions) the server backlogs: `waitForTuiReady`
+ *     observes a visually-stable pane (still the empty-input placeholder) and
+ *     returns before the bytes reach the application. The caller then sends
+ *     Enter on an empty input and the session idles at 0% forever.
+ *
+ * After each paste we wait for the TUI to settle, then check the pane for the
+ * collapsed-paste marker. Absent → re-load + re-paste. We verify with the
+ * positive marker (not placeholder-absence) so the check biases toward
+ * retrying: a false "not delivered" costs at worst a benign double-paste (the
+ * agent reads its prompt twice and still emits one verdict), whereas a false
+ * "delivered" would send Enter on an empty input — the exact stuck-session
+ * bug. If every attempt fails we fall through; the caller sends Enter and the
+ * session degrades to the pre-fix NoVerdict path, never worse.
+ */
+const loadAndPastePrompt = (
+  session: string,
+  promptFile: string,
+): Effect.Effect<void, TmuxError> =>
+  Effect.gen(function* () {
+    for (let attempt = 1; attempt <= PASTE_MAX_ATTEMPTS; attempt++) {
+      yield* tmuxStep("load-buffer", () => $`tmux load-buffer -b ${session} ${promptFile}`);
+      yield* tmuxStep("paste-buffer", () => $`tmux paste-buffer -b ${session} -t ${session}`);
+      yield* waitForTuiReady(session);
+      const pane = yield* capturePane(session);
+      if (paneShowsPaste(pane)) return;
+      yield* Console.log(
+        `[tmux ${session}] paste not delivered (attempt ${attempt}/${PASTE_MAX_ATTEMPTS})` +
+          (attempt < PASTE_MAX_ATTEMPTS ? " — re-pasting" : " — sending Enter anyway"),
+      );
+    }
+  });
 
 /** Input for {@link bootClaudeSession}. */
 type BootClaudeSessionInput = {
@@ -156,19 +217,9 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
       () => $`tmux send-keys -t ${input.session} ${claudeCmd} Enter`,
     );
     yield* waitForTuiReady(input.session);
-    // Use a named buffer (keyed by session name) to avoid the global-buffer race
-    // when N sessions concurrently call load-buffer + paste-buffer: without -b,
-    // every concurrent load-buffer overwrites the same anonymous slot, so most
-    // sessions end up pasting another agent's prompt (or an empty buffer).
-    yield* tmuxStep("load-buffer", () => $`tmux load-buffer -b ${input.session} ${input.promptFile}`);
-    yield* tmuxStep("paste-buffer", () => $`tmux paste-buffer -b ${input.session} -t ${input.session}`);
-    // Wait for the pane to stabilise again after the paste: tmux paste-buffer
-    // enqueues the write with the server and returns immediately, but the
-    // server may be backlogged when N sessions paste concurrently. Sending
-    // Enter before all content arrives submits an empty (or partial) prompt
-    // and leaves the rest of the paste in the input area, waiting forever.
-    // Re-using waitForTuiReady ensures the pane is stable (paste complete)
-    // before Enter is delivered.
-    yield* waitForTuiReady(input.session);
+    // Load + paste the prompt, verifying the paste actually landed before we
+    // send Enter. See {@link loadAndPastePrompt} for the two races this guards
+    // against (global-buffer cross-paste, async delivery under backlog — #30).
+    yield* loadAndPastePrompt(input.session, input.promptFile);
     yield* tmuxStep("send-enter", () => $`tmux send-keys -t ${input.session} Enter`);
   });

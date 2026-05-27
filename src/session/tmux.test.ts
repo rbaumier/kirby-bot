@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { ENV_KEY_RE, MODEL_ALIAS_RE, sqEscape } from "./tmux";
+import { ENV_KEY_RE, MODEL_ALIAS_RE, paneShowsPaste, sqEscape, TUI_PASTE_MARKER } from "./tmux";
 
 describe("sqEscape", () => {
   it("wraps a normal string in single quotes", () => {
@@ -62,5 +62,33 @@ describe("MODEL_ALIAS_RE", () => {
 
   it("rejects an empty string", () => {
     expect(MODEL_ALIAS_RE.test("")).toBe(false);
+  });
+});
+
+describe("paneShowsPaste", () => {
+  it("detects a collapsed paste marker", () => {
+    const pane = [
+      "╭─────────────────────────────────╮",
+      "│ > [Pasted text #1 +312 lines]   │",
+      "╰─────────────────────────────────╯",
+    ].join("\n");
+    expect(paneShowsPaste(pane)).toBe(true);
+  });
+
+  it("returns false for an empty input area showing the placeholder", () => {
+    const pane = [
+      "╭─────────────────────────────────╮",
+      '│ > Try "fix typecheck errors"    │',
+      "╰─────────────────────────────────╯",
+    ].join("\n");
+    expect(paneShowsPaste(pane)).toBe(false);
+  });
+
+  it("returns false for an empty pane (capture failure)", () => {
+    expect(paneShowsPaste("")).toBe(false);
+  });
+
+  it("keys off the exported marker constant", () => {
+    expect(paneShowsPaste(`prefix ${TUI_PASTE_MARKER} #2 +9 lines] suffix`)).toBe(true);
   });
 });
