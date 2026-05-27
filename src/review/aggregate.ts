@@ -38,14 +38,16 @@ export type LineAnchoredFinding = {
   readonly confidence: "high" | "medium" | "low";
   readonly signature: string;
   readonly title: string;
-  readonly analysisChain: ReadonlyArray<string>;
+  readonly analysisChain: readonly string[];
   readonly fixPrompt: string;
 };
+
+type Severity = "must" | "suggestion";
 
 /** One prose finding emitted by a self-contained agent. */
 export type ProseFinding = {
   readonly agent: AgentName;
-  readonly tag: "must" | "suggestion";
+  readonly tag: Severity;
   readonly text: string;
 };
 
@@ -72,9 +74,9 @@ export type AgentResult =
 
 /** Aggregated review object — the contract `postReviewToMr` consumes. */
 export type AggregatedReview = {
-  readonly agents: ReadonlyArray<AgentResult>;
-  readonly lineAnchoredFindings: ReadonlyArray<LineAnchoredFinding>;
-  readonly proseFindings: ReadonlyArray<ProseFinding>;
+  readonly agents: readonly AgentResult[];
+  readonly lineAnchoredFindings: readonly LineAnchoredFinding[];
+  readonly proseFindings: readonly ProseFinding[];
 };
 
 const PROSE_TAG_RE = /^\[(must|suggestion)\]\s+(.+)$/;
@@ -106,7 +108,7 @@ const asConfidence = (value: unknown): LineAnchoredFinding["confidence"] =>
 const parseAgentOutput = (
   agent: AgentName,
   content: string,
-): { readonly lineAnchored: ReadonlyArray<LineAnchoredFinding>; readonly prose: ReadonlyArray<ProseFinding> } => {
+): { readonly lineAnchored: readonly LineAnchoredFinding[]; readonly prose: readonly ProseFinding[] } => {
   const trimmed = content.trim();
   if (trimmed === "" || trimmed === "No findings.") {
     return { lineAnchored: [], prose: [] };
@@ -115,7 +117,7 @@ const parseAgentOutput = (
   // JSON envelope (line-anchored agent). Must start with `{` per the scaffold.
   if (trimmed.startsWith("{")) {
     try {
-      const parsed = JSON.parse(trimmed) as { readonly findings?: ReadonlyArray<unknown> };
+      const parsed = JSON.parse(trimmed) as { readonly findings?: readonly unknown[] };
       const raw = Array.isArray(parsed.findings) ? parsed.findings : [];
       const lineAnchored = raw
         .filter((f): f is Record<string, unknown> => typeof f === "object" && f !== null)
@@ -146,8 +148,8 @@ const parseAgentOutput = (
     .map((line) => line.trim())
     .flatMap((line): ProseFinding[] => {
       const match = PROSE_TAG_RE.exec(line);
-      if (match === null) return [];
-      const tag = match[1] as "must" | "suggestion";
+      if (match === null) { return []; }
+      const tag = match[1] as Severity;
       const text = match[2] ?? "";
       return text === "" ? [] : [{ agent, tag, text }];
     });

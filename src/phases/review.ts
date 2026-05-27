@@ -24,7 +24,7 @@ import type { State } from "../pipeline/state";
 import type { Environment } from "../preflight";
 import { describeProviderError } from "../provider/types";
 import type { RunArtifacts } from "../run-artifacts";
-import { GitProvider } from "../provider/provider";
+import type { GitProvider } from "../provider/provider";
 import { aggregateFindings } from "../review/aggregate";
 import { postReviewToMr } from "../review/post";
 import { readChangedFiles } from "../review/read-changed-files";

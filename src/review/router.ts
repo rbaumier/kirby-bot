@@ -6,8 +6,8 @@
  * Replaces every static spawn heuristic (path substring, extension list,
  * import substring) with semantic judgment from a cheap model. The router
  * runs as a regular `claude` tmux session — same Stop-hook contract, same
- * sentinel + findings JSON contract as any fan-out agent, just with a
- * dedicated prompt and a `ROUTING_DONE` verdict.
+ * sentinel + findings JSON contract as any fan-out agent, with a dedicated
+ * prompt and a `ROUTING_DONE` verdict.
  *
  * Failure modes are strict: a malformed JSON output, an unknown agent name,
  * or an empty agent list aborts the review phase. Per user direction (the
@@ -24,9 +24,11 @@ import { Clock, Console, Data, Effect, ParseResult, Schema } from "effect";
 import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
-import { BudgetExhausted, type PhaseError, UnexpectedVerdictError, WorkspaceError } from "../session/errors";
+import type { PhaseError } from "../session/errors";
+import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "../session/errors";
 import { runOneClaudeSession } from "../session/phase-primitives";
-import { AGENTS, ALL_AGENT_NAMES, type AgentName, isAgentName } from "./agents";
+import type { AgentName } from "./agents";
+import { AGENTS, ALL_AGENT_NAMES, isAgentName } from "./agents";
 import type { ChangedFile } from "./detect";
 
 /** Total budget for the truncated diff sent to the router, in bytes. */
@@ -58,7 +60,7 @@ export type RouteAgentsInput = {
   /** Wall-clock deadline (absolute ms from epoch) for the whole review phase. */
   readonly deadline: number;
   /** The file roster the router decides over — paths + metadata. */
-  readonly files: ReadonlyArray<ChangedFile>;
+  readonly files: readonly ChangedFile[];
   /** The full diff text (will be truncated to ~100KB before being sent). */
   readonly fullDiff: string;
 };
@@ -71,12 +73,12 @@ export type RoutedAgent = {
    * restriction — pass the full diff". Non-empty means "scope this agent to
    * these files only" (the orchestrator slices the diff accordingly).
    */
-  readonly files: ReadonlyArray<string>;
+  readonly files: readonly string[];
 };
 
 /** Aggregate result of one routing pass. */
 export type RouteAgentsResult = {
-  readonly agents: ReadonlyArray<RoutedAgent>;
+  readonly agents: readonly RoutedAgent[];
   /** Whether the diff fed to the router was head-truncated. */
   readonly truncated: boolean;
   /** Raw bytes of diff that survived truncation — useful for logs. */
@@ -97,7 +99,7 @@ export const truncateDiff = (
   maxBytes: number = ROUTER_DIFF_MAX_BYTES,
 ): { readonly text: string; readonly truncated: boolean } => {
   const bytes = Buffer.byteLength(fullDiff, "utf8");
-  if (bytes <= maxBytes) return { text: fullDiff, truncated: false };
+  if (bytes <= maxBytes) { return { text: fullDiff, truncated: false }; }
 
   // Split on `diff --git ` boundary — keep the boundary on each hunk.
   const parts = fullDiff.split(/^(?=diff --git )/m).filter((part) => part !== "");
@@ -113,10 +115,10 @@ export const truncateDiff = (
   let truncatedAny = false;
   const truncatedParts = parts.map((hunk) => {
     const hunkBytes = Buffer.byteLength(hunk, "utf8");
-    if (hunkBytes <= perFileBudget) return hunk;
+    if (hunkBytes <= perFileBudget) { return hunk; }
     truncatedAny = true;
     const headRoom = perFileBudget - TRUNCATION_MARKER.length;
-    if (headRoom <= 0) return TRUNCATION_MARKER;
+    if (headRoom <= 0) { return TRUNCATION_MARKER; }
     return Buffer.from(hunk, "utf8").slice(0, headRoom).toString("utf8") + TRUNCATION_MARKER;
   });
 
@@ -128,13 +130,15 @@ export const truncateDiff = (
  * JSON output contract. Inline string — small enough that vendoring as a
  * template would add more ceremony than it saves.
  */
-const buildRouterPrompt = (input: {
+type BuildRouterPromptInput = {
   readonly findingsFile: string;
   readonly agentCatalog: string;
   readonly fileRoster: string;
   readonly diffText: string;
   readonly truncated: boolean;
-}): string =>
+};
+
+const buildRouterPrompt = (input: BuildRouterPromptInput): string =>
   [
     "# kirby-bot routing pass",
     "",
@@ -208,7 +212,7 @@ const renderAgentCatalog = (): string =>
   ALL_AGENT_NAMES.map((name) => `- \`${name}\`: ${AGENTS[name].description}`).join("\n");
 
 /** Render the file roster — small per-file summaries; no diff content here. */
-const renderFileRoster = (files: ReadonlyArray<ChangedFile>): string =>
+const renderFileRoster = (files: readonly ChangedFile[]): string =>
   files
     .map((file) => {
       const importsField =
@@ -244,7 +248,7 @@ const RouterOutputSchema = Schema.parseJson(
 /** Decode and validate the router's findings JSON. */
 const parseRouterOutput = (
   raw: string,
-): Effect.Effect<ReadonlyArray<RoutedAgent>, RouterMalformedOutput> =>
+): Effect.Effect<readonly RoutedAgent[], RouterMalformedOutput> =>
   Schema.decodeUnknown(RouterOutputSchema, { errors: "all" })(raw.trim()).pipe(
     Effect.map((output) => output.agents),
     Effect.mapError(

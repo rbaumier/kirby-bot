@@ -22,7 +22,7 @@ type RunResult = {
 
 const runHook = (
   payloadExtra: Record<string, unknown>,
-  transcriptLines: ReadonlyArray<string>,
+  transcriptLines: readonly string[],
 ): RunResult => {
   const tmp = mkdtempSync(join(tmpdir(), "kirby-stop-hook-"));
   const transcriptPath = join(tmp, "transcript.jsonl");
@@ -73,7 +73,7 @@ describe("stop-hook", () => {
     expect(stdout).toBe("");
   });
 
-  test("tool_use stop_reason blocks and does NOT write the sentinel", () => {
+  test("tool_use stop_reason blocks without writing the sentinel", () => {
     // Reproduction of the #29 case: last assistant entry is a tool_use spawn,
     // all prior tool_results landed, but the model hasn't been re-prompted
     // so the verdict was never emitted.

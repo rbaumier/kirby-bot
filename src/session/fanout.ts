@@ -30,14 +30,19 @@ import { join } from "node:path";
 import { Cause, Clock, Console, Effect, Exit } from "effect";
 import type { Phase } from "../config";
 import { MAX_CONCURRENT_AGENTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
-import { type AgentName, getAgentModel } from "../review/agents";
+import type { AgentName } from "../review/agents";
+import { getAgentModel } from "../review/agents";
 import { getChangedFilesSince } from "../review/delta-files";
-import { analyzeReviewInputs, type ChangedFile, type ReviewAnalysis } from "../review/detect";
+import type { ChangedFile, ReviewAnalysis } from "../review/detect";
+import { analyzeReviewInputs } from "../review/detect";
 import { writeDiffSlices, writeFullDiff } from "../review/diff-slices";
-import { renderAgentPrompt, type RenderError } from "../review/render-prompt";
-import { routeAgents, type RoutedAgent, RouterMalformedOutput } from "../review/router";
+import type { RenderError } from "../review/render-prompt";
+import { renderAgentPrompt } from "../review/render-prompt";
+import type { RoutedAgent, RouterMalformedOutput } from "../review/router";
+import { routeAgents } from "../review/router";
 import { RunArtifacts } from "../run-artifacts";
-import { BudgetExhausted, type PhaseError, WorkspaceError } from "./errors";
+import type { PhaseError } from "./errors";
+import { BudgetExhausted, WorkspaceError } from "./errors";
 import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
 
 /** Outcome for one agent in the fan-out. */
@@ -50,11 +55,11 @@ export type FanOutResult = {
   /** Deterministic-analysis output: trust boundaries, dogfood, totals. */
   readonly analysis: ReviewAnalysis;
   /** The router's decision: which agents fire + each one's file scope. */
-  readonly routes: ReadonlyArray<RoutedAgent>;
+  readonly routes: readonly RoutedAgent[];
   /** Whether the router's input diff was head-truncated. */
   readonly routerTruncated: boolean;
   /** Per-agent best-effort outcomes. */
-  readonly outcomes: ReadonlyArray<AgentOutcome>;
+  readonly outcomes: readonly AgentOutcome[];
   /** Path to the shared full-diff patch, reused by every full-diff agent. */
   readonly fullDiffPath: string;
 };
@@ -70,7 +75,7 @@ export type RunFanOutPhaseInput = {
   /** Default branch for `git diff $default...HEAD`. */
   readonly defaultBranch: string;
   /** The diff file-set the review pass consumes. Drives analysis + routing. */
-  readonly files: ReadonlyArray<ChangedFile>;
+  readonly files: readonly ChangedFile[];
   /** Path to the vendored templates directory (assets/code-review-templates). */
   readonly templatesDir: string;
   /**
@@ -135,15 +140,17 @@ const renderErrorToWorkspace = (phase: Phase) => (error: RenderError): Workspace
  * Per-agent best-effort: a timeout or render error becomes `{ kind: "error" }`
  * so the surviving N-1 agents still produce findings.
  */
-const runOneAgent = (params: {
+type RunOneAgentParams = {
   readonly input: RunFanOutPhaseInput;
   readonly agent: AgentName;
   readonly analysis: ReviewAnalysis;
-  readonly scopedFiles: ReadonlyArray<string>;
+  readonly scopedFiles: readonly string[];
   readonly diffFile: string;
   readonly perAgentTimeoutMs: number;
   readonly previousFindingsBlock: string;
-}): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
+};
+
+const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
   Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
     const { input, agent, analysis, scopedFiles, diffFile, perAgentTimeoutMs, previousFindingsBlock } =
@@ -218,17 +225,17 @@ const runOneAgent = (params: {
  * perturb anywhere.
  */
 const applyDeltaScope = (
-  routes: ReadonlyArray<RoutedAgent>,
+  routes: readonly RoutedAgent[],
   delta: ReadonlySet<string>,
-): { readonly kept: ReadonlyArray<RoutedAgent>; readonly skipped: ReadonlyArray<AgentName> } => {
+): { readonly kept: readonly RoutedAgent[]; readonly skipped: readonly AgentName[] } => {
   const kept: RoutedAgent[] = [];
   const skipped: AgentName[] = [];
   for (const route of routes) {
     const intersects =
       route.files.length === 0 ||
       route.files.some((path) => delta.has(path));
-    if (intersects) kept.push(route);
-    else skipped.push(route.name);
+    if (intersects) { kept.push(route); }
+    else { skipped.push(route.name); }
   }
   return { kept, skipped };
 };
@@ -338,8 +345,8 @@ export const runFanOutPhase = (
     // an ancestor of the current HEAD. Failure of `getChangedFilesSince`
     // (e.g. shallow clone) silently disables the filter — the whole router
     // output ships intact.
-    let routes: ReadonlyArray<RoutedAgent> = routerResult.agents;
-    let skipped: ReadonlyArray<AgentName> = [];
+    let routes: readonly RoutedAgent[] = routerResult.agents;
+    let skipped: readonly AgentName[] = [];
     if (input.lastReviewedSha !== undefined) {
       const delta = yield* getChangedFilesSince({
         worktree: input.worktree,
@@ -357,10 +364,13 @@ export const runFanOutPhase = (
       }
     }
 
+    const routeCount = routes.length;
+    const skippedCount = skipped.length;
+    const boundaryCount = analysis.trustBoundaries.length;
     yield* Console.log(
       `[#${input.issueIid} ${input.phase}[${input.iteration}]] fan-out planned: ` +
-        `agents=${routes.length} (skipped ${skipped.length}) ` +
-        `boundaries=${analysis.trustBoundaries.length}`,
+        `agents=${routeCount} (skipped ${skippedCount}) ` +
+        `boundaries=${boundaryCount}`,
     );
     yield* artifacts.logEvent({
       event: "fanout_plan",
@@ -409,9 +419,10 @@ export const runFanOutPhase = (
     );
 
     const okCount = outcomes.filter((outcome) => outcome.kind === "ok").length;
+    const totalCount = outcomes.length;
     yield* Console.log(
       `[#${input.issueIid} ${input.phase}[${input.iteration}]] fan-out complete: ` +
-        `${okCount}/${outcomes.length} agents reached AGENT_DONE`,
+        `${okCount}/${totalCount} agents reached AGENT_DONE`,
     );
     yield* artifacts.logEvent({
       event: "fanout_complete",
@@ -419,7 +430,7 @@ export const runFanOutPhase = (
       iteration: input.iteration,
       issueIid: input.issueIid,
       okCount,
-      total: outcomes.length,
+      total: totalCount,
       outcomes: outcomes.map((outcome) => ({
         agent: outcome.agent,
         kind: outcome.kind,

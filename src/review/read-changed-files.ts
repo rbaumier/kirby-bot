@@ -38,10 +38,10 @@ export class ReadChangedFilesError extends Data.TaggedError("ReadChangedFilesErr
 const IMPORT_RE =
   /(?:import(?:\s+[\s\S]*?from)?\s*|require\(\s*|import\(\s*)["']([^"']+)["']/g;
 
-const extractImports = (content: string): ReadonlyArray<string> => {
+const extractImports = (content: string): readonly string[] => {
   const out: string[] = [];
   for (const match of content.matchAll(IMPORT_RE)) {
-    if (match[1] !== undefined) out.push(match[1]);
+    if (match[1] !== undefined) { out.push(match[1]); }
   }
   return out;
 };
@@ -56,12 +56,12 @@ const parseNumstatLine = (
   line: string,
 ): { readonly added: number; readonly removed: number; readonly path: string } | null => {
   const parts = line.split("\t");
-  if (parts.length < 3) return null;
+  if (parts.length < 3) { return null; }
   const [addedRaw, removedRaw, pathRaw] = parts as [string, string, string];
   // Binary files show `-` instead of numbers — treat as 0-line for tier math.
   const added = addedRaw === "-" ? 0 : Number(addedRaw);
   const removed = removedRaw === "-" ? 0 : Number(removedRaw);
-  if (Number.isNaN(added) || Number.isNaN(removed)) return null;
+  if (Number.isNaN(added) || Number.isNaN(removed)) { return null; }
   // Renames render as `{old => new}` or `old\0new` — keep the new path only.
   // `git diff --numstat` without `-M` doesn't emit these; we still strip them
   // defensively. The Step 12 caller doesn't pass `-M`, so this is a paranoia hedge.
@@ -84,7 +84,7 @@ export type ReadChangedFilesInput = {
  */
 export const readChangedFiles = (
   input: ReadChangedFilesInput,
-): Effect.Effect<ReadonlyArray<ChangedFile>, ReadChangedFilesError> =>
+): Effect.Effect<readonly ChangedFile[], ReadChangedFilesError> =>
   Effect.gen(function* () {
     const { worktree, defaultBranch } = input;
     const range = `${defaultBranch}...HEAD`;
@@ -134,6 +134,3 @@ export const readChangedFiles = (
     return files;
   });
 
-/** Exported for tests. */
-export const _extractImports = extractImports;
-export const _parseNumstatLine = parseNumstatLine;

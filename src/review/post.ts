@@ -54,14 +54,14 @@ const formatLineAnchoredBody = (finding: LineAnchoredFinding): string => {
  * Group prose findings by emitting agent for legibility, then collapse into
  * one discussion body keyed with the synthetic `review-summary:0` location.
  */
-const formatProseSummary = (findings: ReadonlyArray<ProseFinding>): string => {
+const formatProseSummary = (findings: readonly ProseFinding[]): string => {
   const grouped = new Map<string, ProseFinding[]>();
   for (const finding of findings) {
     const list = grouped.get(finding.agent) ?? [];
     list.push(finding);
     grouped.set(finding.agent, list);
   }
-  const sections = [...grouped.entries()].map(([agent, items]) =>
+  const sections = Array.from(grouped.entries(), ([agent, items]) =>
     [
       `### ${agent}`,
       ...items.map((item) => `- [${item.tag}] ${item.text}`),
@@ -80,13 +80,13 @@ const formatProseSummary = (findings: ReadonlyArray<ProseFinding>): string => {
 
 /** Collapse prose findings into per-Agent counts for the `review_findings` event. */
 const countByAgent = (
-  findings: ReadonlyArray<ProseFinding>,
+  findings: readonly ProseFinding[],
 ): { agent: string; count: number }[] => {
   const counts = new Map<string, number>();
   for (const finding of findings) {
     counts.set(finding.agent, (counts.get(finding.agent) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([agent, count]) => ({ agent, count }));
+  return Array.from(counts.entries(), ([agent, count]) => ({ agent, count }));
 };
 
 /** Input for {@link postReviewToMr}. */
@@ -181,6 +181,3 @@ export const postReviewToMr = (
     return { posted, resolvedStale: stale.length };
   });
 
-/** Exported for tests. */
-export const _formatLineAnchoredBody = formatLineAnchoredBody;
-export const _formatProseSummary = formatProseSummary;

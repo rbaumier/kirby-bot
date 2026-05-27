@@ -16,7 +16,8 @@ import type { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
-import { parseTriageFile, type TriageRow } from "../stats/events";
+import type { TriageRow } from "../stats/events";
+import { parseTriageFile } from "../stats/events";
 import { mrPhaseOptions, phaseHandlerError, pipelineContext, toFixUnlessCapped } from "./runner";
 
 /** Read and tolerantly parse the session's `triage.json`; never fails. */

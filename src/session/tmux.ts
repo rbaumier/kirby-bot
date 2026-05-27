@@ -128,7 +128,7 @@ const loadAndPastePrompt = (
       yield* tmuxStep("paste-buffer", () => $`tmux paste-buffer -b ${session} -t ${session}`);
       yield* waitForTuiReady(session);
       const pane = yield* capturePane(session);
-      if (paneShowsPaste(pane)) return;
+      if (paneShowsPaste(pane)) { return; }
       yield* Console.log(
         `[tmux ${session}] paste not delivered (attempt ${attempt}/${PASTE_MAX_ATTEMPTS})` +
           (attempt < PASTE_MAX_ATTEMPTS ? " — re-pasting" : " — sending Enter anyway"),

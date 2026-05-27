@@ -56,7 +56,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const parseStopPayload = (raw: string): StopPayload | null => {
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return null;
+    if (!isRecord(parsed)) { return null; }
     return {
       transcript_path: typeof parsed.transcript_path === "string" ? parsed.transcript_path : undefined,
       hook_event_name: typeof parsed.hook_event_name === "string" ? parsed.hook_event_name : undefined,
@@ -69,7 +69,7 @@ const parseStopPayload = (raw: string): StopPayload | null => {
 const parseTranscriptEntry = (raw: string): TranscriptEntry | null => {
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return null;
+    if (!isRecord(parsed)) { return null; }
     const message = isRecord(parsed.message)
       ? {
           content: parsed.message.content,
@@ -99,7 +99,7 @@ const tryRead = (label: string, fn: () => string): string | null => {
 };
 
 const rawPayload = tryRead("read stdin", () => readFileSync(0, "utf8"));
-if (rawPayload === null) process.exit(0);
+if (rawPayload === null) { process.exit(0); }
 
 const payload = parseStopPayload(rawPayload);
 if (payload === null || payload.transcript_path === undefined) {
@@ -111,16 +111,16 @@ const transcriptPath = payload.transcript_path;
 const rawTranscript = tryRead(`read transcript ${transcriptPath}`, () =>
   readFileSync(transcriptPath, "utf8"),
 );
-if (rawTranscript === null) process.exit(0);
+if (rawTranscript === null) { process.exit(0); }
 
-const entries: TranscriptEntry[] = [];
+const ENTRIES: TranscriptEntry[] = [];
 for (const line of rawTranscript.split("\n")) {
-  if (line.trim() === "") continue;
+  if (line.trim() === "") { continue; }
   const entry = parseTranscriptEntry(line);
-  if (entry !== null) entries.push(entry);
+  if (entry !== null) { ENTRIES.push(entry); }
 }
 
-const lastAssistant = entries.findLast((e) => e.type === "assistant") ?? null;
+const lastAssistant = ENTRIES.findLast((e) => e.type === "assistant") ?? null;
 
 const isStopFailure = payload.hook_event_name === "StopFailure";
 const stopReason = lastAssistant?.message?.stop_reason;

@@ -27,7 +27,8 @@ import type { Phase } from "../config";
 import { SENTINEL_POLL_MS } from "../config";
 import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
-import { NoVerdict, SessionTimedOut, type TmuxError, WorkspaceError } from "./errors";
+import type { TmuxError } from "./errors";
+import { NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
 import { bootClaudeSession, createSession, killSession } from "./tmux";
 import type { VerdictToken } from "./verdict";
 import { parseVerdict } from "./verdict";
@@ -238,7 +239,7 @@ export const runOneClaudeSession = (
             tmuxLogPath,
             promptFile,
             // The Stop hook reads AGENT_SENTINEL — single-session phases get
-            // the same env var as fan-out, just with one value each.
+            // the same env var as fan-out, each with one value.
             env: { [AGENT_SENTINEL_VAR]: sentinel },
             ...(input.model === undefined ? {} : { model: input.model }),
           });

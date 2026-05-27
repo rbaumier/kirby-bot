@@ -41,6 +41,9 @@ export type RoutingSnapshot = {
   dogfoodSurfaces: string[];
 };
 
+type TerminalStatus = "done" | "failed" | "incomplete";
+type QaStatus = "pass" | "fail" | "none";
+
 /** Everything the projection knows about one issue. */
 export type IssueStats = {
   iid: number;
@@ -48,9 +51,9 @@ export type IssueStats = {
   totalMs: number;
   phaseDurations: { phase: string; ms: number }[];
   fixCycles: number;
-  terminal: "done" | "failed" | "incomplete";
+  terminal: TerminalStatus;
   failureReason?: string;
-  qa: "pass" | "fail" | "none";
+  qa: QaStatus;
   agents: AgentStats[];
   routing: RoutingSnapshot[];
 };
@@ -85,9 +88,9 @@ type IssueAcc = {
   totalMs: number;
   phaseMs: Map<string, number>;
   fixCycles: number;
-  terminal: "done" | "failed" | "incomplete";
+  terminal: TerminalStatus;
   failureReason: string | undefined;
-  qa: "pass" | "fail" | "none";
+  qa: QaStatus;
   agents: Map<string, AgentStats>;
   routing: RoutingSnapshot[];
   /** discussionId → triage, keyed by iteration, for the offline join. */
@@ -229,15 +232,19 @@ const applyEvent = (event: Record<string, unknown>, issues: Map<number, IssueAcc
     if (iid === undefined) {
       return;
     }
-    get(iid).routing.push({
-      iteration: asNum(event.iteration) ?? 0,
-      routed: asStrArr(event.agents),
-      skipped: asStrArr(event.skippedAgents),
-      routerTruncated: event.routerTruncated === true,
-      trustBoundaries: asStrArr(event.trustBoundaries),
-      dogfoodRequired: event.dogfoodRequired === true,
-      dogfoodSurfaces: asStrArr(event.dogfoodSurfaces),
-    });
+    const planAcc = get(iid);
+    planAcc.routing = [
+      ...planAcc.routing,
+      {
+        iteration: asNum(event.iteration) ?? 0,
+        routed: asStrArr(event.agents),
+        skipped: asStrArr(event.skippedAgents),
+        routerTruncated: event.routerTruncated === true,
+        trustBoundaries: asStrArr(event.trustBoundaries),
+        dogfoodRequired: event.dogfoodRequired === true,
+        dogfoodSurfaces: asStrArr(event.dogfoodSurfaces),
+      },
+    ];
     return;
   }
 
@@ -246,7 +253,8 @@ const applyEvent = (event: Record<string, unknown>, issues: Map<number, IssueAcc
     if (iid === undefined) {
       return;
     }
-    get(iid).reviewFindings.push(event as unknown as ReviewFindingsEvent);
+    const findingsAcc = get(iid);
+    findingsAcc.reviewFindings = [...findingsAcc.reviewFindings, event as unknown as ReviewFindingsEvent];
     return;
   }
 
@@ -268,14 +276,13 @@ const finalize = (acc: IssueAcc): IssueStats => ({
   iid: acc.iid,
   title: acc.title,
   totalMs: acc.totalMs,
-  phaseDurations: [...acc.phaseMs.entries()]
-    .map(([phase, ms]) => ({ phase, ms }))
-    .sort((a, b) => b.ms - a.ms),
+  phaseDurations: Array.from(acc.phaseMs.entries(), ([phase, ms]) => ({ phase, ms }))
+    .toSorted((a, b) => b.ms - a.ms),
   fixCycles: acc.fixCycles,
   terminal: acc.terminal,
   ...(acc.failureReason === undefined ? {} : { failureReason: acc.failureReason }),
   qa: acc.qa,
-  agents: [...acc.agents.values()].sort((a, b) => b.findings - a.findings || a.agent.localeCompare(b.agent)),
+  agents: [...acc.agents.values()].toSorted((a, b) => b.findings - a.findings || a.agent.localeCompare(b.agent)),
   routing: acc.routing,
 });
 
@@ -283,22 +290,23 @@ const finalize = (acc: IssueAcc): IssueStats => ({
  * Fold a run's `run.jsonl` lines into {@link RunStats}. Lines that do not parse
  * as JSON are skipped — a torn final line never aborts the projection.
  */
-export const projectRunStats = (lines: ReadonlyArray<string>): RunStats => {
+export const projectRunStats = (lines: readonly string[]): RunStats => {
   const issues = new Map<number, IssueAcc>();
-  let repo: string | undefined;
-  let defaultBranch: string | undefined;
+  let repo: string | undefined = undefined;
+  let defaultBranch: string | undefined = undefined;
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed === "") {
       continue;
     }
-    let parsed: Record<string, unknown>;
+    let parsed: Record<string, unknown> | null = null;
     try {
       parsed = JSON.parse(trimmed) as Record<string, unknown>;
     } catch {
       continue;
     }
+    if (parsed === null) { continue; }
     if (parsed.event === "run_start") {
       repo = asStr(parsed.repo);
       defaultBranch = asStr(parsed.defaultBranch);
@@ -306,7 +314,7 @@ export const projectRunStats = (lines: ReadonlyArray<string>): RunStats => {
     applyEvent(parsed, issues);
   }
 
-  const ordered = [...issues.values()].sort((a, b) => a.iid - b.iid);
+  const ordered = [...issues.values()].toSorted((a, b) => a.iid - b.iid);
   for (const acc of ordered) {
     resolveFindings(acc);
   }

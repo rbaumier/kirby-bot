@@ -131,7 +131,8 @@ describe("_renderAgentCatalog", () => {
   test("emits exactly one line per active agent, with its name + description", () => {
     const out = _renderAgentCatalog();
     const lines = out.split("\n").filter((line) => line !== "");
-    expect(lines).toHaveLength(ALL_AGENT_NAMES.length);
+    const agentCount = ALL_AGENT_NAMES.length;
+    expect(lines).toHaveLength(agentCount);
     for (const name of ALL_AGENT_NAMES) {
       expect(out).toContain(`- \`${name}\`: ${AGENTS[name].description}`);
     }
@@ -140,7 +141,7 @@ describe("_renderAgentCatalog", () => {
 
 describe("_renderFileRoster", () => {
   const file = (overrides: Partial<ChangedFile> & { path: string }): ChangedFile => ({
-    ext: overrides.path.split(".").pop() ?? "",
+    ext: overrides.path.split(".").at(-1) ?? "",
     lineCount: 10,
     content: "",
     imports: [],

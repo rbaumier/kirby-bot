@@ -12,12 +12,8 @@
  * Pure and deterministic on the inputs. No filesystem reads, no shell-outs —
  * the caller passes the diff metadata in, this returns the analysis out.
  */
-import {
-  type DogfoodCategory,
-  DOGFOOD_TRIGGERS,
-  TRUST_BOUNDARY_SIGNALS,
-  type TrustBoundary,
-} from "./detect-tables";
+import type { DogfoodCategory, TrustBoundary } from "./detect-tables";
+import { DOGFOOD_TRIGGERS, TRUST_BOUNDARY_SIGNALS } from "./detect-tables";
 
 /** Metadata for one file in the diff that detection consumes. */
 export type ChangedFile = {
@@ -30,7 +26,7 @@ export type ChangedFile = {
   /** File body — used for code-pattern matching and to extract import specs. */
   readonly content: string;
   /** Import specifiers extracted from `import … from "X"` lines. */
-  readonly imports: ReadonlyArray<string>;
+  readonly imports: readonly string[];
 };
 
 /**
@@ -39,9 +35,9 @@ export type ChangedFile = {
  * runtime gate should validate, and totals for logging.
  */
 export type ReviewAnalysis = {
-  readonly trustBoundaries: ReadonlyArray<TrustBoundary>;
+  readonly trustBoundaries: readonly TrustBoundary[];
   readonly dogfoodRequired: boolean;
-  readonly dogfoodSurfaces: ReadonlyArray<DogfoodCategory>;
+  readonly dogfoodSurfaces: readonly DogfoodCategory[];
   readonly totalLines: number;
   readonly fileCount: number;
 };
@@ -54,7 +50,7 @@ export type ReviewAnalysis = {
  * plus totals for the run log.
  */
 export const analyzeReviewInputs = (
-  files: ReadonlyArray<ChangedFile>,
+  files: readonly ChangedFile[],
 ): ReviewAnalysis => {
   const totalLines = files.reduce((sum, file) => sum + file.lineCount, 0);
   const fileCount = files.length;
@@ -69,7 +65,7 @@ export const analyzeReviewInputs = (
     const hit =
       row.signals.some((needle) => allImports.some((haystack) => haystack.includes(needle))) ||
       row.signals.some((needle) => contents.some((haystack) => haystack.includes(needle)));
-    if (hit) trustBoundaries.push(row.boundary);
+    if (hit) { trustBoundaries.push(row.boundary); }
   }
 
   // Dogfood surfaces — path/extension/import triggers. Broad on purpose so the
@@ -83,7 +79,7 @@ export const analyzeReviewInputs = (
     const importHit = row.imports.some((needle) =>
       allImports.some((haystack) => haystack.includes(needle)),
     );
-    if (pathHit || extHit || importHit) dogfoodSurfaces.push(row.category);
+    if (pathHit || extHit || importHit) { dogfoodSurfaces.push(row.category); }
   }
 
   return {

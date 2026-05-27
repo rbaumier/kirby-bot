@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { analyzeReviewInputs, type ChangedFile } from "./detect";
+import type { ChangedFile } from "./detect";
+import { analyzeReviewInputs } from "./detect";
 
 /** Build a `ChangedFile` with sensible defaults for tests. */
 const file = (overrides: Partial<ChangedFile> & { path: string }): ChangedFile => ({
-  ext: overrides.path.split(".").pop() ?? "",
+  ext: overrides.path.split(".").at(-1) ?? "",
   lineCount: 10,
   content: "",
   imports: [],

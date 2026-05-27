@@ -15,17 +15,19 @@ const buildRepo = async (): Promise<{ worktree: string; firstSha: string; second
   writeFileSync(join(worktree, "a.ts"), "a");
   await $`git -C ${worktree} add a.ts`;
   await $`git -C ${worktree} commit -q -m c1`;
-  const firstSha = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
+  const rawFirst = await $`git -C ${worktree} rev-parse HEAD`.text();
+  const firstSha = rawFirst.trim();
   writeFileSync(join(worktree, "b.ts"), "b");
   writeFileSync(join(worktree, "a.ts"), "a updated");
   await $`git -C ${worktree} add a.ts b.ts`;
   await $`git -C ${worktree} commit -q -m c2`;
-  const secondSha = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
+  const rawSecond = await $`git -C ${worktree} rev-parse HEAD`.text();
+  const secondSha = rawSecond.trim();
   return { worktree, firstSha, secondSha };
 };
 
 describe("getChangedFilesSince", () => {
-  test("returns files touched between lastSha and HEAD", async () => {
+  test("returns files touched since the previous commit", async () => {
     const { worktree, firstSha } = await buildRepo();
     const result = await Effect.runPromise(getChangedFilesSince({ worktree, lastSha: firstSha }));
     expect(result).not.toBeNull();
@@ -53,7 +55,8 @@ describe("getChangedFilesSince", () => {
     writeFileSync(join(worktree, "d.ts"), "d");
     await $`git -C ${worktree} add d.ts`;
     await $`git -C ${worktree} commit -q -m c-side`;
-    const sideSha = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
+    const rawSide = await $`git -C ${worktree} rev-parse HEAD`.text();
+    const sideSha = rawSide.trim();
     await $`git -C ${worktree} checkout -q main`;
     const result = await Effect.runPromise(getChangedFilesSince({ worktree, lastSha: sideSha }));
     expect(result).toBeNull();

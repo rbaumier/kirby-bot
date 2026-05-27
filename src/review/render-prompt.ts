@@ -29,7 +29,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { AGENTS, type AgentName, type PromptSpec } from "./agents";
+import type { AgentName, PromptSpec } from "./agents";
+import { AGENTS } from "./agents";
 import type { TrustBoundary } from "./detect-tables";
 
 /** Errors surfaced when a template is missing or a placeholder cannot be filled. */
@@ -47,9 +48,9 @@ export type RenderAgentPromptInput = {
   /** Absolute path to the agent's diff slice (`{diff_file}`). */
   readonly diffFile: string;
   /** Files this agent owns (`{file_list}`). Joined by `, `. */
-  readonly fileList: ReadonlyArray<string>;
+  readonly fileList: readonly string[];
   /** Active trust boundaries (`{trust_boundaries}`). Empty → `none`. */
-  readonly trustBoundaries: ReadonlyArray<TrustBoundary>;
+  readonly trustBoundaries: readonly TrustBoundary[];
   /**
    * Re-review only — the per-agent `previous_findings_block` body. Inserted
    * into the scaffold's `{previous_findings_block}` placeholder. Pass empty

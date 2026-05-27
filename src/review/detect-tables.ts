@@ -44,10 +44,10 @@ export type TrustBoundary =
  * trust boundary. Matching is loose — a false positive costs one extra token
  * in a prompt; a false negative misses a security lens.
  */
-export const TRUST_BOUNDARY_SIGNALS: ReadonlyArray<{
+export const TRUST_BOUNDARY_SIGNALS: readonly {
   readonly boundary: TrustBoundary;
-  readonly signals: ReadonlyArray<string>;
-}> = [
+  readonly signals: readonly string[];
+}[] = [
   {
     boundary: "user-input",
     signals: ["req.body", "req.query", "req.params", "formData", "parseBody"],
@@ -100,12 +100,12 @@ export type DogfoodCategory = "web-ui" | "http-api" | "cli" | "native";
 /** A dogfood-category trigger row. */
 export type DogfoodRow = {
   readonly category: DogfoodCategory;
-  readonly pathFragments: ReadonlyArray<string>;
-  readonly extensions: ReadonlyArray<string>;
-  readonly imports: ReadonlyArray<string>;
+  readonly pathFragments: readonly string[];
+  readonly extensions: readonly string[];
+  readonly imports: readonly string[];
 };
 
-export const DOGFOOD_TRIGGERS: ReadonlyArray<DogfoodRow> = [
+export const DOGFOOD_TRIGGERS: readonly DogfoodRow[] = [
   {
     category: "web-ui",
     pathFragments: ["/app/", "/pages/", "/src/routes/", "tokens.", "theme.", "/public/"],

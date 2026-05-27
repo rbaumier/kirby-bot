@@ -7,7 +7,7 @@
  *   bun src/stats.ts <path/run.jsonl>
  *
  * Pure read: it only parses an existing `run.jsonl` (ADR 0002). The fold and
- * the rendering live in `src/stats/` so they stay testable; this file is just
+ * the rendering live in `src/stats/` so they stay testable; this file is
  * the entry point that locates the log and prints.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -27,7 +27,7 @@ const latestRunDir = (): string => {
         return false;
       }
     });
-  const latest = dirs.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  const latest = dirs.toSorted((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (latest === undefined) {
     throw new Error(`no runs found under ${RUNS_DIR}`);
   }

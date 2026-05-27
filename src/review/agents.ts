@@ -408,7 +408,7 @@ export type AgentName = keyof typeof AGENTS_DATA;
 export const getAgentModel = (agent: AgentName): AgentModel => AGENTS[agent].model;
 
 /** All agent names, stable insertion order. */
-export const ALL_AGENT_NAMES = Object.keys(AGENTS_DATA) as ReadonlyArray<AgentName>;
+export const ALL_AGENT_NAMES = Object.keys(AGENTS_DATA) as readonly AgentName[];
 
 /** Type guard: is the string a known agent name? */
 export const isAgentName = (value: string): value is AgentName => value in AGENTS_DATA;

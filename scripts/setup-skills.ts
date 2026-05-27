@@ -79,7 +79,7 @@ mkdirSync(PROJECT_SKILLS_DIR, { recursive: true });
 
 let cachedClone: string | null = null;
 const ensureClone = (): string => {
-  if (cachedClone) return cachedClone;
+  if (cachedClone) { return cachedClone; }
   cachedClone = mkdtempSync(join(tmpdir(), "kirby-bot-skills-"));
   console.log(`Cloning ${SKILLS_REPO} (shallow) into ${cachedClone}…`);
   execSync(`git clone --depth 1 --quiet ${SKILLS_REPO} "${cachedClone}"`, {
@@ -91,7 +91,7 @@ const ensureClone = (): string => {
 let linked = 0;
 let copied = 0;
 let skipped = 0;
-const missing: string[] = [];
+const MISSING: string[] = [];
 
 try {
   for (const name of REQUIRED_SKILLS) {
@@ -113,11 +113,11 @@ try {
       cpSync(cachePath, target, { recursive: true });
       copied++;
     } else {
-      missing.push(name);
+      MISSING.push(name);
     }
   }
 } finally {
-  if (cachedClone) rmSync(cachedClone, { recursive: true, force: true });
+  if (cachedClone) { rmSync(cachedClone, { recursive: true, force: true }); }
 }
 
 console.log(
@@ -125,9 +125,9 @@ console.log(
     `${copied} copied from ${SKILLS_REPO}, ${skipped} already in place.`,
 );
 
-if (missing.length > 0) {
+if (MISSING.length > 0) {
   console.error(
-    `\nMissing in both ~/.claude/skills/ AND ${SKILLS_REPO}: ${missing.join(", ")}\n` +
+    `\nMissing in both ~/.claude/skills/ AND ${SKILLS_REPO}: ${MISSING.join(", ")}\n` +
       `Update REQUIRED_SKILLS in scripts/setup-skills.ts.`,
   );
   process.exit(1);

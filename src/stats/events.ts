@@ -49,7 +49,7 @@ export type ReviewFindingRow = {
 export type ProseSummaryRow = {
   readonly discussionId: string;
   /** Per-Agent prose finding counts collapsed into the single summary thread. */
-  readonly byAgent: ReadonlyArray<{ readonly agent: string; readonly count: number }>;
+  readonly byAgent: readonly { readonly agent: string; readonly count: number }[];
 };
 
 /** The `review_findings` event — one per review iteration that posted threads. */
@@ -57,7 +57,7 @@ export type ReviewFindingsEvent = {
   readonly event: "review_findings";
   readonly issueIid: number;
   readonly iteration: number;
-  readonly findings: ReadonlyArray<ReviewFindingRow>;
+  readonly findings: readonly ReviewFindingRow[];
   readonly prose?: ProseSummaryRow;
 };
 
@@ -72,7 +72,7 @@ export type TriageResultsEvent = {
   readonly event: "triage_results";
   readonly issueIid: number;
   readonly iteration: number;
-  readonly triages: ReadonlyArray<TriageRow>;
+  readonly triages: readonly TriageRow[];
 };
 
 /**
@@ -85,7 +85,7 @@ export type TriageResultsEvent = {
  * `"unknown"` so it still counts as a triaged thread.
  */
 export const parseTriageFile = (content: string): TriageRow[] => {
-  let parsed: unknown;
+  let parsed: unknown = null;
   try {
     parsed = JSON.parse(content);
   } catch {

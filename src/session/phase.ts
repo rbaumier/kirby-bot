@@ -16,7 +16,8 @@ import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
 import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "./errors";
 import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
-import { renderPrompt, type PromptablePhase } from "./prompt";
+import type { PromptablePhase } from "./prompt";
+import { renderPrompt } from "./prompt";
 import type { VerdictToken } from "./verdict";
 
 /** Input for {@link runPhaseSession}. */

@@ -14,7 +14,7 @@ import { pollSentinel } from "./phase-primitives";
 const ABSENT_SENTINEL = "/kirby-bot-test-no-such-sentinel-xyz.flag";
 
 describe("pollSentinel under a virtual clock", () => {
-  it("fails SessionTimedOut once the clock passes the timeout and the sentinel never appears", async () => {
+  it("fails SessionTimedOut when the clock passes the timeout with no sentinel", async () => {
     const timeoutMs = SENTINEL_POLL_MS * 3;
     const program = Effect.gen(function* () {
       const fiber = yield* Effect.fork(

@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { DiscussionId, type DiscussionSummary } from "../provider/types";
+import type { DiscussionSummary } from "../provider/types";
+import { DiscussionId } from "../provider/types";
 import { buildPreviousFindingsBlock } from "./previous-findings";
 
-const discussion = (overrides: {
+type DiscussionOverrides = {
   id: string;
   isResolved?: boolean;
   firstNote: string;
-  extraNotes?: ReadonlyArray<string>;
-}): DiscussionSummary => ({
+  extraNotes?: readonly string[];
+};
+
+const discussion = (overrides: DiscussionOverrides): DiscussionSummary => ({
   id: DiscussionId(overrides.id),
   isResolved: overrides.isResolved ?? false,
   notes: [

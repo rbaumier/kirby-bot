@@ -22,27 +22,28 @@ const agentLine = (agent: AgentStats): string => {
 };
 
 const issueBlock = (issue: IssueStats): string => {
-  const lines: string[] = [];
+  let lines: string[] = [];
   const terminal =
     issue.terminal === "failed" && issue.failureReason !== undefined
       ? `failed (${issue.failureReason})`
       : issue.terminal;
-  lines.push(
+  lines = [
+    ...lines,
     `#${issue.iid} "${issue.title}" — ${formatDuration(issue.totalMs)}  ` +
       `[${terminal}, ${issue.fixCycles} fix-cycle(s), qa: ${issue.qa}]`,
-  );
+  ];
 
   const phases = issue.phaseDurations
     .map((phase) => `${phase.phase} ${formatDuration(phase.ms)}`)
     .join("  ");
   if (phases !== "") {
-    lines.push(`  phases: ${phases}`);
+    lines = [...lines, `  phases: ${phases}`];
   }
 
   if (issue.agents.length > 0) {
-    lines.push("  agents:");
+    lines = [...lines, "  agents:"];
     for (const agent of issue.agents) {
-      lines.push(agentLine(agent));
+      lines = [...lines, agentLine(agent)];
     }
   }
 
@@ -50,11 +51,12 @@ const issueBlock = (issue: IssueStats): string => {
     const skipped = snapshot.skipped.length > 0 ? `, skipped ${snapshot.skipped.join("/")}` : "";
     const truncated = snapshot.routerTruncated ? ", router-truncated" : "";
     const dogfood = snapshot.dogfoodRequired ? `, dogfood[${snapshot.dogfoodSurfaces.join("/")}]` : "";
-    lines.push(
+    lines = [
+      ...lines,
       `  routing[iter ${snapshot.iteration}]: ${snapshot.routed.length} routed` +
         `${skipped}${truncated}` +
         `, boundaries=${snapshot.trustBoundaries.length}${dogfood}`,
-    );
+    ];
   }
 
   return lines.join("\n");

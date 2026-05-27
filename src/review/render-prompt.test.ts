@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
-import { AGENTS, ALL_AGENT_NAMES, type AgentName, type PromptSpec } from "./agents";
+import type { AgentName, PromptSpec } from "./agents";
+import { AGENTS, ALL_AGENT_NAMES } from "./agents";
 import { renderAgentPrompt } from "./render-prompt";
 
 const TEMPLATES_DIR = join(import.meta.dirname, "..", "..", "assets", "code-review-templates");
@@ -36,7 +37,7 @@ const subsystemAgent = firstAgent((s) => s.kind === "line-anchored" && s.subsyst
 
 describe("renderAgentPrompt — kirby-bot preamble", () => {
   test("line-anchored prompt carries preamble + VERDICT marker + findings path", async () => {
-    if (plainLineAnchored === undefined) return;
+    if (plainLineAnchored === undefined) { return; }
     const prompt = await run(renderAgentPrompt({ ...baseInput, agent: plainLineAnchored }));
     expect(prompt).toStartWith("# kirby-bot per-agent review session");
     expect(prompt).toContain("Do NOT use the Task / Agent tool.");
@@ -45,7 +46,7 @@ describe("renderAgentPrompt — kirby-bot preamble", () => {
   });
 
   test("self-contained agent also gets the preamble", async () => {
-    if (selfContainedAgent === undefined) return;
+    if (selfContainedAgent === undefined) { return; }
     const prompt = await run(renderAgentPrompt({ ...baseInput, agent: selfContainedAgent }));
     expect(prompt).toContain("# kirby-bot per-agent review session");
     expect(prompt).toContain("VERDICT: AGENT_DONE");
@@ -54,7 +55,7 @@ describe("renderAgentPrompt — kirby-bot preamble", () => {
 
 describe("renderAgentPrompt — line-anchored", () => {
   test("scaffold mechanics: diff file, file list, trust boundaries, no leaked placeholders", async () => {
-    if (plainLineAnchored === undefined) return;
+    if (plainLineAnchored === undefined) { return; }
     const prompt = await run(renderAgentPrompt({ ...baseInput, agent: plainLineAnchored }));
     // Scaffold sentinels — agent-independent (come from _line-anchored-scaffold.md).
     expect(prompt).toContain("Read diff from /tmp/diff-slice.patch");
@@ -67,18 +68,18 @@ describe("renderAgentPrompt — line-anchored", () => {
   });
 
   test("skill-agent: {skill_name} substituted from the registry", async () => {
-    if (skillAgent === undefined) return;
+    if (skillAgent === undefined) { return; }
     const spec = AGENTS[skillAgent].prompt;
-    if (spec.kind !== "line-anchored" || spec.skillName === undefined) return;
+    if (spec.kind !== "line-anchored" || spec.skillName === undefined) { return; }
     const prompt = await run(renderAgentPrompt({ ...baseInput, agent: skillAgent }));
     expect(prompt).toContain(`Load skill \`${spec.skillName}\` via Skill tool.`);
     expect(prompt).not.toContain("{skill_name}");
   });
 
   test("subsystem: {subsystem_name} + {failure_modes} substituted from the registry", async () => {
-    if (subsystemAgent === undefined) return;
+    if (subsystemAgent === undefined) { return; }
     const spec = AGENTS[subsystemAgent].prompt;
-    if (spec.kind !== "line-anchored" || spec.subsystemName === undefined) return;
+    if (spec.kind !== "line-anchored" || spec.subsystemName === undefined) { return; }
     const prompt = await run(renderAgentPrompt({ ...baseInput, agent: subsystemAgent }));
     expect(prompt).toContain(`framed as the **${spec.subsystemName}** reviewer`);
     if (spec.failureModes !== undefined) {
@@ -89,7 +90,7 @@ describe("renderAgentPrompt — line-anchored", () => {
   });
 
   test("empty trust boundaries → 'none'", async () => {
-    if (plainLineAnchored === undefined) return;
+    if (plainLineAnchored === undefined) { return; }
     const prompt = await run(
       renderAgentPrompt({ ...baseInput, trustBoundaries: [], agent: plainLineAnchored }),
     );
@@ -97,7 +98,7 @@ describe("renderAgentPrompt — line-anchored", () => {
   });
 
   test("previous_findings_block substituted on re-review", async () => {
-    if (plainLineAnchored === undefined) return;
+    if (plainLineAnchored === undefined) { return; }
     const prevBlock = "## Previous-pass findings — verify resolution\n- src/foo.ts:42 …";
     const prompt = await run(
       renderAgentPrompt({ ...baseInput, previousFindingsBlock: prevBlock, agent: plainLineAnchored }),
@@ -109,7 +110,7 @@ describe("renderAgentPrompt — line-anchored", () => {
 
 describe("renderAgentPrompt — self-contained", () => {
   test("self-contained skips the line-anchored scaffold", async () => {
-    if (selfContainedAgent === undefined) return;
+    if (selfContainedAgent === undefined) { return; }
     const prompt = await run(renderAgentPrompt({ ...baseInput, agent: selfContainedAgent }));
     expect(prompt).toContain("# kirby-bot per-agent review session");
     expect(prompt).toContain("VERDICT: AGENT_DONE");
@@ -132,7 +133,7 @@ describe("renderAgentPrompt — failure modes", () => {
   });
 
   test("missing template dir fails with RenderError", async () => {
-    if (plainLineAnchored === undefined) return;
+    if (plainLineAnchored === undefined) { return; }
     const exit = await Effect.runPromiseExit(
       renderAgentPrompt({ ...baseInput, templatesDir: "/nonexistent/path", agent: plainLineAnchored }),
     );

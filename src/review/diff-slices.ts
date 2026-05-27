@@ -1,7 +1,7 @@
 /**
  * Review/diff-slices.ts — write per-agent diff slices to disk.
  *
- * Each fan-out agent gets its own diff slice — a `git diff` filtered to just
+ * Each fan-out agent gets its own diff slice — a `git diff` filtered to only
  * the files the router scoped it to — so its prompt's `{diff_file}` placeholder
  * points at a tight per-agent patch instead of the full cross-cutting diff.
  * Measured on the upstream `code-review` skill: ~30× less diff payload per
@@ -24,9 +24,11 @@ import { describeShellError, runShell } from "../shell";
 import type { AgentName } from "./agents";
 import type { RoutedAgent } from "./router";
 
+type AgentNameOrFull = AgentName | "full";
+
 /** Failure when a diff slice cannot be written. */
 export class DiffSliceError extends Data.TaggedError("DiffSliceError")<{
-  readonly agent: AgentName | "full";
+  readonly agent: AgentNameOrFull;
   readonly reason: string;
 }> {}
 
@@ -35,10 +37,10 @@ export class DiffSliceError extends Data.TaggedError("DiffSliceError")<{
  * `outPath` atomically (via `.tmp` + rename).
  */
 const writeGitDiff = (
-  agent: AgentName | "full",
+  agent: AgentNameOrFull,
   defaultBranch: string,
   outPath: string,
-  files: ReadonlyArray<string>,
+  files: readonly string[],
 ): Effect.Effect<string, DiffSliceError> =>
   Effect.gen(function* () {
     const range = `${defaultBranch}...HEAD`;
@@ -73,15 +75,17 @@ const writeGitDiff = (
  * single path. Used both as the input to the routing haiku and as the
  * shared `{diff_file}` for every full-diff agent the router picks.
  */
-export const writeFullDiff = (input: {
+type WriteFullDiffInput = {
   readonly defaultBranch: string;
   readonly outPath: string;
-}): Effect.Effect<string, DiffSliceError> =>
+};
+
+export const writeFullDiff = (input: WriteFullDiffInput): Effect.Effect<string, DiffSliceError> =>
   writeGitDiff("full", input.defaultBranch, input.outPath, []);
 
 /** Input for {@link writeDiffSlices}. */
 export type WriteDiffSlicesInput = {
-  readonly routes: ReadonlyArray<RoutedAgent>;
+  readonly routes: readonly RoutedAgent[];
   /** Path to the already-written full diff — reused for full-diff agents. */
   readonly fullDiffPath: string;
   readonly defaultBranch: string;
@@ -111,7 +115,7 @@ export const writeDiffSlices = (
   input: WriteDiffSlicesInput,
 ): Effect.Effect<DiffSliceMap, DiffSliceError> =>
   Effect.gen(function* () {
-    const agentsNeedingSlice: Array<{ readonly agent: AgentName; readonly scope: ReadonlyArray<string> }> = [];
+    const agentsNeedingSlice: { readonly agent: AgentName; readonly scope: readonly string[] }[] = [];
     const agentsUsingFull: AgentName[] = [];
     for (const route of input.routes) {
       if (route.files.length === 0) {
@@ -133,8 +137,8 @@ export const writeDiffSlices = (
     );
 
     const perAgent = new Map<AgentName, string>();
-    for (const agent of agentsUsingFull) perAgent.set(agent, input.fullDiffPath);
-    for (const [agent, path] of sliceResults) perAgent.set(agent, path);
+    for (const agent of agentsUsingFull) { perAgent.set(agent, input.fullDiffPath); }
+    for (const [agent, path] of sliceResults) { perAgent.set(agent, path); }
 
     return { fullDiffPath: input.fullDiffPath, perAgent };
   });

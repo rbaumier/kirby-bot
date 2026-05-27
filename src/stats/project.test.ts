@@ -50,7 +50,7 @@ describe("projectRunStats", () => {
     expect(evaluate?.ms).toBe(800);
   });
 
-  it("joins findings to triage per (issue, iteration) and attributes by agent", () => {
+  it("joins findings to triage per (issue, iteration), attributes by agent", () => {
     const correctness = issue?.agents.find((agent) => agent.agent === "correctness");
     expect(correctness).toMatchObject({
       ran: 1,
