@@ -17,8 +17,8 @@ export const VERDICT_TOKENS = [
   "CONVERGED",
   "NEEDS_FIX",
   "FIX_DONE",
-  "DOGFOOD_PASS",
-  "DOGFOOD_FAIL",
+  "QA_PASS",
+  "QA_FAIL",
   "AGENT_DONE",
   "ROUTING_DONE",
 ] as const;

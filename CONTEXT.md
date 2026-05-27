@@ -10,7 +10,7 @@ Provider-specific vocabulary (Issue, PullRequestRef, Discussion, Adapter asymmet
 
 A unit of work the orchestrator drives through one state transition. Phases divide into two shapes:
 
-- **Interactive Phase** — spawns a fresh `claude` tmux Session, runs a prompt, waits for a Verdict. Today: `run_impl`, `review`, `evaluate`, `fix`, `run_dogfood`. These are the load-bearing Phases — each is a candidate for a deep Module.
+- **Interactive Phase** — spawns a fresh `claude` tmux Session, runs a prompt, waits for a Verdict. Today: `implementation`, `review`, `evaluate`, `fix`, `qa`. These are the load-bearing Phases — each is a candidate for a deep Module.
 - **Script Phase** — pure shell work, no `claude` session. Today: `open_draft_mr`, `merge`. Also setup/cleanup transitions: `fetch_queue`, `claim_issue`, `branch_worktree`, `done`, `failed`. These remain inline in the orchestrator's state machine — extracting them as Modules would be uniformity for its own sake.
 
 A Phase Module's interface is `Effect<State, HandlerError, R>` — it runs the Phase Session, narrows the Verdict to the expected set, and resolves the next `State` itself. Post-verdict policy that depends on Phase-internal data (the `MAX_FIX_CYCLES` cap in `evaluate`, the `fixCycles` increment in `fix`) stays cohesive with the Phase that owns it; the state machine's dispatcher only routes on `state.kind`.
@@ -19,7 +19,7 @@ A Phase Module's interface is `Effect<State, HandlerError, R>` — it runs the P
 
 A typed token emitted by an Interactive Phase to signal what happened. Captured by a Claude Code Stop hook, written to a per-phase sentinel file, read by the orchestrator as the last non-empty line matching `^VERDICT: TOKEN$`.
 
-Known tokens: `READY_FOR_REVIEW`, `BLOCKER_SUSPECTED`, `REVIEW_DONE`, `CONVERGED`, `NEEDS_FIX`, `FIX_DONE`, `DOGFOOD_PASS`, `DOGFOOD_FAIL`. Each Phase declares the subset it can emit; the state machine routes on the Verdict.
+Known tokens: `READY_FOR_REVIEW`, `BLOCKER_SUSPECTED`, `REVIEW_DONE`, `CONVERGED`, `NEEDS_FIX`, `FIX_DONE`, `QA_PASS`, `QA_FAIL`. Each Phase declares the subset it can emit; the state machine routes on the Verdict.
 
 ### Finding
 

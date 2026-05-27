@@ -18,7 +18,7 @@ export const LABELS = {
 } as const;
 
 /** The five pipeline phases — each runs as a fresh `claude` tmux session. */
-export const PHASES = ["run_impl", "review", "evaluate", "fix", "run_dogfood"] as const;
+export const PHASES = ["implementation", "review", "evaluate", "fix", "qa"] as const;
 
 /** One of the five session-driven pipeline phases. */
 export type Phase = (typeof PHASES)[number];
@@ -28,20 +28,20 @@ export type Phase = (typeof PHASES)[number];
  *
  * The 4-hour per-issue budget (below) is the overall bound. These caps are the
  * *secondary* guard: they stop a single hung phase from silently eating the
- * whole budget. `run_impl` carries by far the largest cap — implementation is
+ * whole budget. `implementation` carries by far the largest cap — implementation is
  * the heavy phase and a hard issue can legitimately run for hours — while the
- * review/evaluate/fix/dogfood loop stays tight. Their sum (300) deliberately
+ * review/evaluate/fix/qa loop stays tight. Their sum (300) deliberately
  * exceeds the budget, so a healthy run never reaches every cap.
  */
 export const PHASE_CAP_MINUTES: Record<Phase, number> = {
-  run_impl: 180,
+  implementation: 180,
   review: 35,
   evaluate: 30,
   fix: 30,
-  run_dogfood: 25,
+  qa: 25,
 };
 
-/** Total wall-clock an issue may take, from `run_impl` through `run_dogfood`. */
+/** Total wall-clock an issue may take, from `implementation` through `qa`. */
 export const ISSUE_BUDGET_MS = 240 * 60 * 1000;
 
 /** How often the orchestrator polls a phase's sentinel file. */

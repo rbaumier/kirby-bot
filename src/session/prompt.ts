@@ -18,10 +18,10 @@ export type PromptablePhase = Exclude<Phase, "review">;
 
 /** The template file backing each promptable phase. */
 const TEMPLATE_FILE: Record<PromptablePhase, string> = {
-  run_impl: "run-impl.md",
+  implementation: "implementation.md",
   evaluate: "evaluate.md",
   fix: "fix.md",
-  run_dogfood: "run-dogfood.md",
+  qa: "qa.md",
 };
 
 /** A `{placeholder}` token — lowercase letters and underscores between braces. */

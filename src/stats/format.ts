@@ -29,7 +29,7 @@ const issueBlock = (issue: IssueStats): string => {
       : issue.terminal;
   lines.push(
     `#${issue.iid} "${issue.title}" — ${formatDuration(issue.totalMs)}  ` +
-      `[${terminal}, ${issue.fixCycles} fix-cycle(s), dogfood: ${issue.dogfood}]`,
+      `[${terminal}, ${issue.fixCycles} fix-cycle(s), qa: ${issue.qa}]`,
   );
 
   const phases = issue.phaseDurations

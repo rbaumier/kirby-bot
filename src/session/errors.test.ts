@@ -40,7 +40,7 @@ describe("describePhaseError", () => {
 
   it("formats WorkspaceError with the operation plus reason", () => {
     const error = new WorkspaceError({
-      phase: "run_impl",
+      phase: "implementation",
       operation: "write the prompt file",
       reason: "EACCES",
     });

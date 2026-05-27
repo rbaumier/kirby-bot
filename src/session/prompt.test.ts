@@ -19,7 +19,7 @@ const RUN_IMPL_KEYS = {
 describe("renderPrompt", () => {
   it("does not flag ${…} literals in a replacement value as unresolved (#32)", async () => {
     const rendered = await Effect.runPromise(
-      renderPrompt("run_impl", {
+      renderPrompt("implementation", {
         ...RUN_IMPL_KEYS,
         body: "Sort dispatch uses exhaustive `switch` on `${column}:${direction}`",
       }),
@@ -29,7 +29,7 @@ describe("renderPrompt", () => {
 
   it("still fails when one of the template's own placeholders has no replacement", async () => {
     const { body: _omitted, ...withoutBody } = RUN_IMPL_KEYS;
-    const error = await Effect.runPromise(renderPrompt("run_impl", withoutBody).pipe(Effect.flip));
+    const error = await Effect.runPromise(renderPrompt("implementation", withoutBody).pipe(Effect.flip));
     expect(error._tag).toBe("PromptError");
     expect(error.reason).toContain("{body}");
   });

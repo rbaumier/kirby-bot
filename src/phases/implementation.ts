@@ -14,9 +14,9 @@ import type { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
 import { phaseHandlerError } from "./runner";
 
-/** Run_impl Phase Module — implements the run_impl state's transition. */
-export const runImplPhase = (
-  state: Extract<State, { kind: "run_impl" }>,
+/** Run_impl Phase Module — implements the implementation state's transition. */
+export const implementationPhase = (
+  state: Extract<State, { kind: "implementation" }>,
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { issue, branch, worktree } = state;
@@ -24,7 +24,7 @@ export const runImplPhase = (
 
     const verdict = yield* runPhaseSession(
       {
-        phase: "run_impl",
+        phase: "implementation",
         issueIid: issue.iid,
         worktree,
         deadline,
@@ -38,12 +38,12 @@ export const runImplPhase = (
         },
       },
       ["READY_FOR_REVIEW", "BLOCKER_SUSPECTED"],
-    ).pipe(Effect.mapError(phaseHandlerError("run_impl")));
+    ).pipe(Effect.mapError(phaseHandlerError("implementation")));
 
     if (verdict === "READY_FOR_REVIEW") {
       return { kind: "open_draft_mr", issue, branch, worktree, deadline };
     }
     return yield* Effect.fail(
-      new HandlerError({ reason: "run_impl: the implementer reported a blocker" }),
+      new HandlerError({ reason: "implementation: the implementer reported a blocker" }),
     );
   });

@@ -24,7 +24,7 @@ mobile entry points).
 Decide: **could this diff change the observable runtime behaviour of a
 user-facing surface** — directly, OR through a shared module/library that
 backs one? If clearly not (docs, comments, internal tooling, tests only),
-end now with the `DOGFOOD_PASS` verdict. **If unsure, continue to Step 2** —
+end now with the `QA_PASS` verdict. **If unsure, continue to Step 2** —
 running the personas needlessly only wastes time; skipping the gate on a
 real regression ships a bug.
 
@@ -62,8 +62,8 @@ The orchestrator reads your final assistant message to learn how this phase
 ended. Two mandatory rules:
 
 - The **last line** of your message is the word `VERDICT:`, a space, then one
-  token — `DOGFOOD_PASS` (no in-scope bug: clean, or only out-of-scope filed)
-  or `DOGFOOD_FAIL` (at least one in-scope runtime bug). Nothing after it.
+  token — `QA_PASS` (no in-scope bug: clean, or only out-of-scope filed)
+  or `QA_FAIL` (at least one in-scope runtime bug). Nothing after it.
 - The text `VERDICT:` must appear **exactly once** in your whole message —
   only on that last line. Zero, or more than one, and the orchestrator fails
   the issue.

@@ -11,8 +11,8 @@ import { Console, Effect } from "effect";
 import { evaluatePhase } from "../phases/evaluate";
 import { fixPhase } from "../phases/fix";
 import { reviewPhase } from "../phases/review";
-import { runDogfoodPhase } from "../phases/run-dogfood";
-import { runImplPhase } from "../phases/run-impl";
+import { qaPhase } from "../phases/qa";
+import { implementationPhase } from "../phases/implementation";
 import { LABELS } from "../config";
 import { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
@@ -90,8 +90,8 @@ const dispatchHandler = (
     case "branch_push": {
       return onBranchPush(current);
     }
-    case "run_impl": {
-      return runImplPhase(current);
+    case "implementation": {
+      return implementationPhase(current);
     }
     case "open_draft_mr": {
       return onOpenDraftMr(current, env);
@@ -105,8 +105,8 @@ const dispatchHandler = (
     case "fix": {
       return fixPhase(current);
     }
-    case "run_dogfood": {
-      return runDogfoodPhase(current);
+    case "qa": {
+      return qaPhase(current);
     }
     case "merge": {
       return onMerge(current);
@@ -150,7 +150,7 @@ export const failedFieldsOf = (
       };
     }
     case "branch_push":
-    case "run_impl": {
+    case "implementation": {
       return {
         issue: state.issue,
         branch: state.branch,
@@ -179,7 +179,15 @@ export const failedFieldsOf = (
         fixCycles: state.fixCycles,
       };
     }
-    case "run_dogfood":
+    case "qa": {
+      return {
+        issue: state.issue,
+        branch: state.branch,
+        worktree: state.worktree,
+        pullRequestIid: state.pullRequestIid,
+        fixCycles: state.fixCycles,
+      };
+    }
     case "merge": {
       return {
         issue: state.issue,

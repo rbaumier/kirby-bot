@@ -1,7 +1,7 @@
 /**
  * Evaluate Phase — the sole convergence authority.
  *
- * `CONVERGED` → `run_dogfood`. `NEEDS_FIX` → `fix`, unless the fix-cycle cap
+ * `CONVERGED` → `qa`. `NEEDS_FIX` → `fix`, unless the fix-cycle cap
  * is reached. A 4th NEEDS_FIX is a structural disagreement, not a slow fix;
  * end the issue for a human to look at.
  *
@@ -57,7 +57,7 @@ export const evaluatePhase = (
     }
 
     if (verdict === "CONVERGED") {
-      return { kind: "run_dogfood", ...pipelineContext(state) };
+      return { kind: "qa", ...pipelineContext(state), fixCycles };
     }
     if (MAX_FIX_CYCLES <= fixCycles) {
       return yield* Effect.fail(

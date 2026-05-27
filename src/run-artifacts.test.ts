@@ -17,7 +17,7 @@ const buildAt = (clockMs: number, seed: number) =>
     return yield* buildRunArtifacts;
   }).pipe(Effect.withRandom(Random.make(seed)), Effect.provide(TestContext.TestContext));
 
-const fixedRef = { issueIid: 1, phase: "run_impl", iteration: 0 } as const;
+const fixedRef = { issueIid: 1, phase: "implementation", iteration: 0 } as const;
 /** ISO-8601 timestamp followed by a hex suffix — colons/dots replaced. */
 const DIR_PATTERN = /\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{6}/;
 

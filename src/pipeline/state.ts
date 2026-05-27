@@ -51,7 +51,7 @@ export type State =
       readonly worktree: string;
     }
   | {
-      readonly kind: "run_impl";
+      readonly kind: "implementation";
       readonly issue: IssueRef;
       readonly branch: string;
       readonly worktree: string;
@@ -66,7 +66,7 @@ export type State =
   | ({ readonly kind: "review" } & PipelineContext & { readonly fixCycles: number })
   | ({ readonly kind: "evaluate" } & PipelineContext & { readonly fixCycles: number })
   | ({ readonly kind: "fix" } & PipelineContext & { readonly fixCycles: number })
-  | ({ readonly kind: "run_dogfood" } & PipelineContext)
+  | ({ readonly kind: "qa" } & PipelineContext & { readonly fixCycles: number })
   | ({ readonly kind: "merge" } & PipelineContext)
   | {
       readonly kind: "done";

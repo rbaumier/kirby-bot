@@ -5,8 +5,8 @@
  *   - `merge` — un-draft the PR and merge it, verifying on a non-zero exit.
  *   - `done` — unlabel the issue, remove the worktree, loop back to the queue.
  *
- * The five interactive Phase handlers (run_impl, review, evaluate, fix,
- * run_dogfood) live in `src/phases/*` — each Phase owns its own verdict
+ * The five interactive Phase handlers (implementation, review, evaluate, fix,
+ * qa) live in `src/phases/*` — each Phase owns its own verdict
  * narrowing and verdict-to-state routing.
  */
 import { $ } from "bun";

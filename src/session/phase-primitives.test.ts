@@ -18,7 +18,7 @@ describe("pollSentinel under a virtual clock", () => {
     const timeoutMs = SENTINEL_POLL_MS * 3;
     const program = Effect.gen(function* () {
       const fiber = yield* Effect.fork(
-        pollSentinel({ phase: "run_impl", sentinel: ABSENT_SENTINEL, startedAt: 0, timeoutMs }),
+        pollSentinel({ phase: "implementation", sentinel: ABSENT_SENTINEL, startedAt: 0, timeoutMs }),
       );
       // One push past the budget: every queued poll sleep fires in sequence
       // until the elapsed-time predicate trips. A real clock could not do this
@@ -40,7 +40,7 @@ describe("runPhaseSession budget guard under a virtual clock", () => {
       const artifacts = yield* buildRunArtifacts;
       return yield* runPhaseSession(
         {
-          phase: "run_impl",
+          phase: "implementation",
           issueIid: 1,
           worktree: "/tmp/kirby-test-worktree",
           iteration: 0,

@@ -50,7 +50,7 @@ export type IssueStats = {
   fixCycles: number;
   terminal: "done" | "failed" | "incomplete";
   failureReason?: string;
-  dogfood: "pass" | "fail" | "none";
+  qa: "pass" | "fail" | "none";
   agents: AgentStats[];
   routing: RoutingSnapshot[];
 };
@@ -77,7 +77,7 @@ type IssueAcc = {
   fixCycles: number;
   terminal: "done" | "failed" | "incomplete";
   failureReason: string | undefined;
-  dogfood: "pass" | "fail" | "none";
+  qa: "pass" | "fail" | "none";
   agents: Map<string, AgentStats>;
   routing: RoutingSnapshot[];
   /** discussionId → triage, keyed by iteration, for the offline join. */
@@ -106,7 +106,7 @@ const issueAcc = (iid: number): IssueAcc => ({
   fixCycles: 0,
   terminal: "incomplete",
   failureReason: undefined,
-  dogfood: "none",
+  qa: "none",
   agents: new Map(),
   routing: [],
   triageByIteration: new Map(),
@@ -191,8 +191,8 @@ const applyEvent = (event: Record<string, unknown>, issues: Map<number, IssueAcc
       acc.terminal = "failed";
       acc.failureReason = asStr(event.note);
     }
-    if (from === "run_dogfood") {
-      acc.dogfood = to === "merge" ? "pass" : "fail";
+    if (from === "qa") {
+      acc.qa = to === "merge" ? "pass" : "fail";
     }
     return;
   }
@@ -272,7 +272,7 @@ const finalize = (acc: IssueAcc): IssueStats => ({
   fixCycles: acc.fixCycles,
   terminal: acc.terminal,
   ...(acc.failureReason === undefined ? {} : { failureReason: acc.failureReason }),
-  dogfood: acc.dogfood,
+  qa: acc.qa,
   agents: [...acc.agents.values()].sort((a, b) => b.findings - a.findings || a.agent.localeCompare(b.agent)),
   routing: acc.routing,
 });

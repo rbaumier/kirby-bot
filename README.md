@@ -15,7 +15,7 @@
 
 ---
 
-kirby-bot picks an issue off your GitLab board, spins up a fresh `claude` session in tmux for each phase of the work (implement, review, evaluate, fix, dogfood), parses the verdict from the session, then opens an MR and merges it. If the reviewer disagrees, it loops back to `fix` until either the reviewer is satisfied or the cap is hit.
+kirby-bot picks an issue off your GitLab board, spins up a fresh `claude` session in tmux for each phase of the work (implementation, review, evaluate, fix, qa), parses the verdict from the session, then opens an MR and merges it. If the reviewer disagrees, it loops back to `fix` until either the reviewer is satisfied or the cap is hit.
 
 The bot is named after Kirby because, like Kirby, it eats issues whole and spits out merge requests.
 
@@ -37,15 +37,17 @@ For each issue the bot picks up, it transitions through the following phases:
 flowchart TD
     A[fetch_queue] --> B[claim_issue]
     B --> C[branch_worktree]
-    C --> D[run_impl]
-    D --> E[review]
+    C --> D[implementation]
+    D --> I[open_draft_mr]
+    I --> E[review]
     E --> F{evaluate}
-    F -->|approved| G[run_dogfood]
+    F -->|approved| G{qa}
     F -->|changes requested| H[fix]
-    H --> E
     F -->|MAX_FIX_CYCLES hit| X[failed]
-    G --> I[open_draft_mr]
-    I --> J[merge]
+    H --> E
+    G -->|clean| J[merge]
+    G -->|bug found| H
+    G -->|MAX_FIX_CYCLES hit| X
     J --> K[done]
 
     classDef interactive fill:#ffd6e7,stroke:#d63384,color:#000
@@ -56,7 +58,7 @@ flowchart TD
     class K,X terminal
 ```
 
-- **Interactive phases** (`run_impl`, `review`, `evaluate`, `fix`, `run_dogfood`) spawn a fresh `claude` tmux session with a rendered prompt and wait for a verdict.
+- **Interactive phases** (`implementation`, `review`, `evaluate`, `fix`, `qa`) spawn a fresh `claude` tmux session with a rendered prompt and wait for a verdict.
 - **Script phases** (`open_draft_mr`, `merge`, plus setup/cleanup transitions) are pure shell work — no `claude` session.
 - A **Stop hook** writes each session's last assistant message to a sentinel file; the orchestrator polls the sentinel and parses the verdict.
 
@@ -80,7 +82,7 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
 
   **Directly invoked by the phase prompts:**
   - [`code-review`](https://github.com/rbaumier/skills/blob/main/code-review/SKILL.md) — invoked by the `review` phase to fan reviewer subagents over the diff.
-  - [`dogfood`](https://github.com/rbaumier/skills/blob/main/dogfood/SKILL.md) — loaded by the persona subagents the `run_dogfood` phase spawns.
+  - [`dogfood`](https://github.com/rbaumier/skills/blob/main/dogfood/SKILL.md) — loaded by the persona subagents the `qa` phase spawns.
 
   **Transitively invoked by `code-review`'s fan-out.** The `code-review` skill spawns ~15+ reviewer subagents per Full-tier run; each loads its own skill via the `Skill` tool. The full set:
 
@@ -134,8 +136,8 @@ Every tunable constant lives in [`src/config.ts`](src/config.ts) — no scattere
 
 | Constant | Default | What it caps |
 |---|---|---|
-| `ISSUE_BUDGET_MS` | 90 min | Total wall-clock per issue, from `run_impl` through `run_dogfood`. |
-| `PHASE_CAP_MINUTES` | 25–45 min | Per-phase wall-clock cap. Secondary guard — the issue budget normally trips first. |
+| `ISSUE_BUDGET_MS` | 4 h | Total wall-clock per issue, from `implementation` through `qa`. |
+| `PHASE_CAP_MINUTES` | 25–180 min | Per-phase wall-clock cap. Secondary guard — the issue budget normally trips first. |
 | `MAX_FIX_CYCLES` | 10 | Max review→fix loops before the issue is failed for a human. |
 | `COMMAND_TIMEOUT_MS` | 2 min | Hard ceiling on any single shell-out (git, glab, jq, tmux). |
 | `SENTINEL_POLL_MS` | 5 s | How often the orchestrator polls a phase's sentinel file. |

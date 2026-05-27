@@ -180,5 +180,5 @@ export const onBranchPush = (
           }),
       ),
     );
-    return { kind: "run_impl", issue, branch, worktree };
+    return { kind: "implementation", issue, branch, worktree };
   });

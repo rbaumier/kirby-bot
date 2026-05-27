@@ -21,7 +21,7 @@ import { RUNS_DIR } from "./config";
  * `agent` disambiguates per-agent sessions in a fan-out phase: when set, every
  * path helper suffixes its filename with the agent name so N parallel `claude`
  * sessions never collide on a sentinel/log/prompt/tmux name. Absent for the
- * single-prompt phases (run_impl, evaluate, fix, run_dogfood) — filenames stay
+ * single-prompt phases (implementation, evaluate, fix, qa) — filenames stay
  * identical to before the field was added.
  */
 export type PhaseRef = {

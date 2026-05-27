@@ -43,9 +43,9 @@ describe("failedFieldsOf", () => {
     });
   });
 
-  it("run_impl exposes branch + worktree (pullRequestIid + fixCycles stay null)", () => {
-    const runImpl: Extract<State, { kind: "run_impl" }> = {
-      kind: "run_impl",
+  it("implementation exposes branch + worktree (pullRequestIid + fixCycles stay null)", () => {
+    const runImpl: Extract<State, { kind: "implementation" }> = {
+      kind: "implementation",
       issue,
       branch: "issue-42",
       worktree: "/wt/42",
