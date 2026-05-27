@@ -13,22 +13,26 @@
  */
 import { Effect, Layer, Option } from "effect";
 import {
-  addIssueNote as glAddIssueNote,
-  createDraftMergeRequest as glCreateDraftMergeRequest,
-  findOpenMergeRequestBySource as glFindOpenMergeRequestBySource,
   listDiscussions as glListDiscussions,
-  listIssuesByLabels as glListIssuesByLabels,
-  markMergeRequestReady as glMarkMergeRequestReady,
-  mergeMergeRequest as glMergeMergeRequest,
   postDiscussion as glPostDiscussion,
   replyToDiscussion as glReplyToDiscussion,
   resolveDiscussion as glResolveDiscussion,
+} from "../gitlab/discussion";
+import type { DiscussionSummary as GitLabDiscussionSummary } from "../gitlab/discussion";
+import {
+  addIssueNote as glAddIssueNote,
+  listIssuesByLabels as glListIssuesByLabels,
   updateIssueLabels as glUpdateIssueLabels,
   viewIssue as glViewIssue,
+} from "../gitlab/issue";
+import type { GitLabIssue } from "../gitlab/issue";
+import {
+  createDraftMergeRequest as glCreateDraftMergeRequest,
+  findOpenMergeRequestBySource as glFindOpenMergeRequestBySource,
+  markMergeRequestReady as glMarkMergeRequestReady,
+  mergeMergeRequest as glMergeMergeRequest,
   viewMergeRequest as glViewMergeRequest,
-} from "../gitlab/api";
-import type { GitLabIssue } from "../gitlab/api";
-import type { DiscussionSummary as GitLabDiscussionSummary } from "../gitlab/discussion";
+} from "../gitlab/merge-request";
 import type { GitLabMergeRequest } from "../gitlab/schema";
 import { GitProvider } from "./provider";
 import { DiscussionId } from "./types";

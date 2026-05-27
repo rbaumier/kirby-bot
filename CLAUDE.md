@@ -65,20 +65,21 @@ When spawning subagents (Agent/Task tool), the routing block is automatically in
 
 # kirby-bot — operating notes
 
-## Auth: personal access tokens only
+## Auth & config: environment variables only
 
-kirby-bot reaches GitLab through the `PRIVATE-TOKEN` header. OAuth2 access
-tokens are **not** supported: they expire within hours and a single AFK run
-(several issues × 4-hour budget) outlives them.
+kirby-bot reaches GitLab through the `PRIVATE-TOKEN` header. The connection is
+resolved entirely from environment variables — no `glab` config file, no
+git-remote sniffing. All three are required, and a missing one fails fast at
+startup with a clear `ProviderConfigError`:
 
-- The orchestrator reads `$KIRBY_GITLAB_TOKEN` first; if absent, it falls back to
-  `~/.config/glab-cli/config.yml`, but **skips** any host block flagged
-  `is_oauth2: true`.
-- If the only credential you have is the OAuth2 one `glab auth login` writes
-  by default, the run fails at startup with a clear `ProviderConfigError`.
-  Fix: create a long-lived personal access token (e.g. via
-  `glab api -X POST user/personal_access_tokens` with the `api` scope) and
-  export it as `KIRBY_GITLAB_TOKEN` before launching.
+- `KIRBY_GITLAB_TOKEN` — a personal access token (PAT) with the `api` scope.
+- `GITLAB_HOST` — the instance base URL, e.g. `https://gitlab.com`.
+- `GITLAB_PROJECT_PATH` — the `owner/repo` project path.
+
+OAuth2 access tokens are **not** supported: they expire within hours and a
+single AFK run (several issues × 4-hour budget) outlives them. Create a
+long-lived PAT (e.g. `glab api -X POST user/personal_access_tokens` with the
+`api` scope) and export it as `KIRBY_GITLAB_TOKEN` before launching.
 
 ## Diagnosing slow phases via Claude session transcripts
 

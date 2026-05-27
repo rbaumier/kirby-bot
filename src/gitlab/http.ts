@@ -4,19 +4,18 @@
  * Two runners, deliberately kept separate.
  * `runGitLabRead` retries transient failures — safe only for reads since a
  * retry after a lost response is harmless.
- * `runGitLabWrite` never retries; it is used for mutations (`mr create`,
- * `issue note`, discussion post/reply). If the request succeeded but its
- * response was lost, a retry would duplicate the mutation.
+ * `runGitLabWrite` retries idempotent mutations (PUT/DELETE) but never a POST:
+ * a POST creates a new resource each time, so a retry after a lost response
+ * would duplicate it. The rare non-idempotent PUT (`merge`, which errors if
+ * replayed on an already-merged MR) opts out via `nonIdempotent`.
  *
- * Configuration comes from three sources, in this priority order:
- *   1. `$KIRBY_GITLAB_TOKEN`, `$GITLAB_HOST`, `$GITLAB_PROJECT_PATH` env vars.
- *   2. The `~/.config/glab-cli/config.yml` `token:` field for the host
- *      (a documented fallback layer for the legacy `glab`-based wiring).
- *   3. The git remote URL of `origin` (host + project path).
+ * Configuration is read from environment variables only — no `glab` config
+ * file, no git-remote sniffing:
+ *   - `$KIRBY_GITLAB_TOKEN`   — a personal access token (PAT) with `api` scope.
+ *   - `$GITLAB_HOST`          — the instance base URL, e.g. `https://gitlab.com`.
+ *   - `$GITLAB_PROJECT_PATH`  — the `owner/repo` project path.
+ * A missing one fails fast with a {@link ProviderConfigError} at startup.
  */
-import { $ } from "bun";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { Effect, ParseResult, Schedule, Schema } from "effect";
 import {
   ProviderConfigError,
@@ -33,223 +32,43 @@ type GitLabConfig = {
   readonly projectRef: string;
 };
 
-/** Parsed git remote — the host and the owner/repo path. */
-type Remote = { readonly host: string; readonly path: string };
-
-/** Strip a trailing `.git` from a remote URL. */
-const DOT_GIT_SUFFIX = /\.git$/;
-
-/** SSH form: `git@<host>:<owner>/<repo>` — captures host and path. */
-const SSH_REMOTE = /^git@([^:]+):(.+)$/;
-
-/**
- * HTTPS form: `https?://[user[:pass]@]<host>/<path>` — captures host and
- * path. The optional credentials group is non-capturing.
- */
-const HTTPS_REMOTE = /^https?:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/;
-
-/** YAML host header: `  hostname:` — captures the indent and the host name. */
-const YAML_HOST_HEADER = /^(\s*)([\w.-]+):\s*$/;
-
-/** YAML token line under a host block: `    token: <value>` — captures value. */
-const YAML_TOKEN_LINE = /^\s+token:\s+(.+)$/;
-
-/**
- * YAML `is_oauth2: <value>` line — captures value.
- * Used solely to refuse OAuth2 credentials. Personal access tokens only.
- */
-const YAML_OAUTH2_LINE = /^\s+is_oauth2:\s+(.+)$/;
-
-/** Leading `"` or `'` to strip from a YAML scalar value. */
-const LEADING_QUOTE = /^["']/;
-
-/** Trailing `"` or `'` to strip from a YAML scalar value. */
-const TRAILING_QUOTE = /["']$/;
-
-/** Trailing `/` to strip from a host URL. */
+/** Trailing `/` to strip from `$GITLAB_HOST` before composing the API base URL. */
 const TRAILING_SLASH = /\/$/;
 
-/** Strip `http://` or `https://` from a URL to recover the bare hostname. */
-const URL_SCHEME = /^https?:\/\//;
-
-/** Parse the `git remote get-url origin` output. Accepts ssh and https forms. */
-const parseRemoteUrl = (url: string): Remote | null => {
-  const trimmed = url.trim().replace(DOT_GIT_SUFFIX, "");
-  const ssh = SSH_REMOTE.exec(trimmed);
-  if (ssh !== null) {
-    return { host: ssh[1] ?? "", path: ssh[2] ?? "" };
+/** Read a required env var, failing with a clear {@link ProviderConfigError} if unset. */
+const requireEnv = (name: string, hint: string): string => {
+  const value = process.env[name];
+  if (value === undefined || value === "") {
+    throw new ProviderConfigError({ detail: `${name} is not set — ${hint}` });
   }
-  const https = HTTPS_REMOTE.exec(trimmed);
-  if (https !== null) {
-    return { host: https[1] ?? "", path: https[2] ?? "" };
-  }
-  return null;
+  return value;
 };
 
-/** YAML host header parse result. */
-type HostHeader = { readonly indent: number; readonly host: string };
-
-const matchHostHeader = (line: string): HostHeader | null => {
-  const parts = YAML_HOST_HEADER.exec(line);
-  if (parts === null) {
-    return null;
-  }
-  return { indent: parts[1]?.length ?? 0, host: parts[2] ?? "" };
-};
-
-/** Strip wrapping single/double quotes and surrounding whitespace from a YAML scalar. */
-const unquote = (raw: string): string =>
-  raw.trim().replace(LEADING_QUOTE, "").replace(TRAILING_QUOTE, "");
-
-const matchTokenLine = (line: string): string | null => {
-  const parts = YAML_TOKEN_LINE.exec(line);
-  return parts === null ? null : unquote(parts[1] ?? "");
-};
-
-const matchOAuth2Line = (line: string): boolean | null => {
-  const parts = YAML_OAUTH2_LINE.exec(line);
-  return parts === null ? null : unquote(parts[1] ?? "").toLowerCase() === "true";
-};
-
-/** Update the block-indent state when a YAML header line is seen. */
-const advanceOnHeader = (
-  blockIndent: number | null,
-  header: HostHeader,
-  host: string,
-): number | null => {
-  if (header.host === host) {
-    return header.indent;
-  }
-  if (blockIndent !== null && header.indent <= blockIndent) {
-    return null;
-  }
-  return blockIndent;
-};
-
-/** Scanner state: which host block we're inside, plus collected fields. */
-type ScanState = {
-  readonly blockIndent: number | null;
-  readonly token: string | null;
-  readonly isOAuth2: boolean;
-};
-
-/** Fold one YAML line into the scanner state. */
-const stepScan = (state: ScanState, line: string, host: string): ScanState => {
-  const header = matchHostHeader(line);
-  if (header !== null) {
-    return { ...state, blockIndent: advanceOnHeader(state.blockIndent, header, host) };
-  }
-  if (state.blockIndent === null) {
-    return state;
-  }
-  const token = state.token ?? matchTokenLine(line);
-  const flag = matchOAuth2Line(line);
-  return { ...state, token, isOAuth2: flag ?? state.isOAuth2 };
-};
-
-/**
- * Scan a glab-cli YAML config for the PAT of a given host.
- *
- * Returns the token only when the host block is **not** OAuth2.
- * OAuth2 access tokens are short-lived. Multi-hour AFK runs outlive them.
- * Refusing them here forces the operator to set `$KIRBY_GITLAB_TOKEN` with a PAT.
- *
- * The file's shape is small and stable enough to read line-by-line.
- * Two indentation levels supported: `hosts.<host>.token` and `<host>.token`.
- */
-const parseTokenFromYaml = (yaml: string, host: string): string | null => {
-  let state: ScanState = { blockIndent: null, token: null, isOAuth2: false };
-  for (const line of yaml.split("\n")) {
-    state = stepScan(state, line, host);
-  }
-  return state.token === null || state.isOAuth2 ? null : state.token;
-};
-
-/** Look up the personal-access token in `~/.config/glab-cli/config.yml` for `host`. */
-const readTokenFromGlabConfig = (host: string): string | null => {
-  const path = `${homedir()}/.config/glab-cli/config.yml`;
-  if (!existsSync(path)) {
-    return null;
-  }
-  return parseTokenFromYaml(readFileSync(path, "utf8"), host);
-};
-
-/** Detect `origin`'s remote URL and parse it. */
-const detectRemote = async (): Promise<Remote> => {
-  const output = await $`git remote get-url origin`.quiet().text();
-  const parsed = parseRemoteUrl(output);
-  if (parsed === null) {
-    throw new ProviderConfigError({
-      detail: `unparseable origin URL: ${output.trim().slice(0, 120)}`,
-    });
-  }
-  return parsed;
-};
-
-/** Compute the full GitLab config from env + glab config + git remote. */
-const computeConfig = async (): Promise<GitLabConfig> => {
-  const envHost = process.env.GITLAB_HOST?.replace(TRAILING_SLASH, "");
-  const envProject = process.env.GITLAB_PROJECT_PATH;
-  const envToken = process.env.KIRBY_GITLAB_TOKEN;
-
-  // Only call out to git when env vars don't already supply both pieces.
-  const remote = envHost !== undefined && envProject !== undefined ? null : await detectRemote();
-  const hostUrl = envHost ?? `https://${remote?.host ?? ""}`;
-  const projectPath = envProject ?? remote?.path ?? "";
-  if (projectPath === "") {
-    throw new ProviderConfigError({ detail: "no project path resolved from env or git remote" });
-  }
-  const hostName = hostUrl.replace(URL_SCHEME, "");
-  // Auth is PAT-only by design — see `parseTokenFromYaml` for why OAuth2 is
-  // refused upstream. Env var takes precedence and is treated as a PAT.
-  const token =
-    envToken !== undefined && envToken !== "" ? envToken : readTokenFromGlabConfig(hostName);
-  if (token === null || token === "") {
-    throw new ProviderConfigError({
-      detail:
-        `no personal access token in $KIRBY_GITLAB_TOKEN or ~/.config/glab-cli/config.yml ` +
-        `for host ${hostName} (OAuth2 entries are ignored — export $KIRBY_GITLAB_TOKEN with a PAT)`,
-    });
-  }
+/** Resolve the GitLab config from environment variables. PAT-only by design. */
+const computeConfig = (): GitLabConfig => {
+  const host = requireEnv("GITLAB_HOST", "the instance base URL, e.g. https://gitlab.com").replace(
+    TRAILING_SLASH,
+    "",
+  );
+  const projectPath = requireEnv("GITLAB_PROJECT_PATH", "the owner/repo project path");
+  const token = requireEnv(
+    "KIRBY_GITLAB_TOKEN",
+    "a personal access token with the `api` scope (OAuth2 tokens are not supported)",
+  );
   return {
-    baseUrl: `${hostUrl}/api/v4`,
+    baseUrl: `${host}/api/v4`,
     token,
     projectRef: encodeURIComponent(projectPath),
   };
 };
 
-/**
- * Process-wide cache of the resolved config. Resolved once on first call.
- * `null` means uncached; a transient failure clears the cache so the next
- * call retries the resolution.
- */
-let configPromise: Promise<GitLabConfig> | null = null;
-
-/** Lazily resolve, then cache, the GitLab config. Re-tries on failure. */
-const gitLabConfig: Effect.Effect<GitLabConfig, ProviderConfigError> = Effect.tryPromise({
-  try: async () => {
-    if (configPromise !== null) {
-      return configPromise;
-    }
-    const pending = computeConfig();
-    configPromise = pending;
-    try {
-      return await pending;
-    } catch (error: unknown) {
-      // A transient failure must not poison the cache — drop it so the
-      // next caller re-tries resolution.
-      if (configPromise === pending) {
-        configPromise = null;
-      }
-      throw error;
-    }
-  },
+/** Resolve the GitLab config (pure env read; cheap enough to re-run per call). */
+const gitLabConfig: Effect.Effect<GitLabConfig, ProviderConfigError> = Effect.try({
+  try: computeConfig,
   catch: (error): ProviderConfigError =>
     error instanceof ProviderConfigError
       ? error
-      : new ProviderConfigError({
-          detail: error instanceof Error ? error.message : String(error),
-        }),
+      : new ProviderConfigError({ detail: error instanceof Error ? error.message : String(error) }),
 });
 
 /** A single GitLab REST call: method, project-relative path, and optional query/body. */
@@ -259,19 +78,23 @@ export type GitLabRequest = {
   readonly path: string;
   readonly query?: Readonly<Record<string, string | number | boolean | undefined>>;
   readonly body?: Readonly<Record<string, unknown>>;
+  /**
+   * Force no-retry on an otherwise-idempotent PUT/DELETE. Set only on writes
+   * that transition state and would error if replayed — e.g. `merge`.
+   */
+  readonly nonIdempotent?: boolean;
 };
 
 /** Build the full URL for a request, with `:id` and the query string filled in. */
 const buildUrl = (config: GitLabConfig, request: GitLabRequest): string => {
   const path = request.path.replace(":id", config.projectRef);
-  const entries = Object.entries(request.query ?? {}).filter(([, value]) => value !== undefined);
-  const query =
-    entries.length === 0
-      ? ""
-      : "?" +
-        entries
-          .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
-          .join("&");
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(request.query ?? {})) {
+    if (value !== undefined) {
+      params.set(key, String(value));
+    }
+  }
+  const query = params.size === 0 ? "" : `?${params.toString()}`;
   return `${config.baseUrl}/${path}${query}`;
 };
 
@@ -283,7 +106,7 @@ const buildUrl = (config: GitLabConfig, request: GitLabRequest): string => {
  * The 800-char slice gives `TreeFormatter` room to keep the offending value
  * the previous 300-char limit was cutting away.
  */
-const decodeBodyOrFail = <A, I>(
+const decodeBody = <A, I>(
   request: GitLabRequest,
   schema: Schema.Schema<A, I>,
   parsed: unknown,
@@ -364,19 +187,22 @@ const callOnce = <A, I>(
         }),
     });
 
-    return yield* decodeBodyOrFail(request, schema, parsed);
+    return yield* decodeBody(request, schema, parsed);
   });
 
 /**
- * Retry policy for reads: jittered exponential backoff, 3 attempts total.
- * Transient HTTP / network failures retry. A deterministic boot-time
- * misconfiguration ({@link ProviderConfigError}) does not — retrying
- * only delays a clear error message by ~1 second.
+ * Retry policy for transient failures: jittered exponential backoff, 3 attempts
+ * total. A deterministic boot-time misconfiguration ({@link ProviderConfigError})
+ * does not retry — it only delays a clear error message by ~1 second.
  */
-const readRetryPolicy = Schedule.exponential("200 millis").pipe(
+const transientRetryPolicy = Schedule.exponential("200 millis").pipe(
   Schedule.jittered,
   Schedule.intersect(Schedule.recurs(2)),
 );
+
+/** Retry every transient error; never retry a deterministic config failure. */
+const retryUnlessConfigError = (error: ProviderError): boolean =>
+  error._tag !== "ProviderConfigError";
 
 /**
  * Run a READ request, retrying transient failures.
@@ -387,21 +213,24 @@ export const runGitLabRead = <A, I>(
   schema: Schema.Schema<A, I>,
 ): Effect.Effect<A, ProviderError> =>
   callOnce(request, schema).pipe(
-    Effect.retry({
-      schedule: readRetryPolicy,
-      while: (error: ProviderError) => error._tag !== "ProviderConfigError",
-    }),
+    Effect.retry({ schedule: transientRetryPolicy, while: retryUnlessConfigError }),
   );
 
 /**
- * Run a WRITE request exactly once — no retry.
- * A retry after a lost response would duplicate the mutation; the caller
- * handles a genuine failure instead.
+ * Run a WRITE request. Idempotent writes (PUT/DELETE) retry transient failures;
+ * a POST — or any write flagged `nonIdempotent` — runs exactly once, since a
+ * retry after a lost response would duplicate or wrongly replay the mutation.
  */
 export const runGitLabWrite = <A, I>(
   request: GitLabRequest,
   schema: Schema.Schema<A, I>,
-): Effect.Effect<A, ProviderError> => callOnce(request, schema);
+): Effect.Effect<A, ProviderError> => {
+  const once = callOnce(request, schema);
+  const retryable = request.method !== "POST" && request.nonIdempotent !== true;
+  return retryable
+    ? once.pipe(Effect.retry({ schedule: transientRetryPolicy, while: retryUnlessConfigError }))
+    : once;
+};
 
 /** Exposed for tests — never used in production code. */
-export const __test = { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail };
+export const __test = { decodeBody };

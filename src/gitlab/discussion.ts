@@ -1,10 +1,17 @@
 /**
- * Gitlab/discussion.ts — the pure model of a merge-request discussion.
+ * Gitlab/discussion.ts — merge-request discussions: the pure model plus the
+ * typed REST operations on them.
  *
  * `toDiscussionSummary` maps raw GitLab discussion JSON to the trimmed shape
- * the evaluate/fix phases reason about. Pure and bun-free, so it unit-tests
- * under Node — the `glab api` operations live in `api.ts`.
+ * the evaluate/fix phases reason about — pure and unit-testable on its own. The
+ * REST operations below wrap `./http.ts` for the review medium: `review` posts
+ * findings, `evaluate` replies and resolves, `fix` resolves what it fixed. The
+ * CLI in `scripts/mr-discussion.ts` exposes these to the phase prompts.
  */
+import { Effect, Schema } from "effect";
+import { ProviderResponseError } from "../provider/types";
+import type { ProviderError } from "../provider/types";
+import { runGitLabRead, runGitLabWrite } from "./http";
 
 /** A discussion reduced to what the pipeline reasons about. */
 export type DiscussionSummary = {
@@ -56,3 +63,101 @@ export function toDiscussionSummary(raw: unknown): DiscussionSummary {
     })),
   };
 }
+
+// ─── REST operations ────────────────────────────────────────────────────────
+
+const discussionsPath = (mergeRequestIid: number): string =>
+  `projects/:id/merge_requests/${mergeRequestIid}/discussions`;
+
+/** Confirms a mutation took: the API response carries an `id`. */
+const HasIdSchema = Schema.Struct({
+  id: Schema.Union(Schema.NonEmptyString, Schema.Number),
+});
+
+/** The discussions list endpoint returns an array of opaque objects. */
+const DiscussionListSchema = Schema.Array(Schema.Object);
+
+/** A single discussion comes back as an opaque object (validated by the model). */
+const DiscussionSchema = Schema.Object;
+
+/** List every discussion on a merge request. */
+export const listDiscussions = (
+  mergeRequestIid: number,
+): Effect.Effect<readonly DiscussionSummary[], ProviderError> =>
+  runGitLabRead(
+    {
+      method: "GET",
+      path: discussionsPath(mergeRequestIid),
+      query: { per_page: 100 },
+    },
+    DiscussionListSchema,
+  ).pipe(Effect.map((raw) => raw.map((disc) => toDiscussionSummary(disc))));
+
+/**
+ * Create a new general, resolvable discussion carrying `body`. Returns the
+ * created thread's id (stringified — GitLab discussion ids are string hashes),
+ * which callers join review findings to evaluator triage on.
+ */
+export const postDiscussion = (
+  mergeRequestIid: number,
+  body: string,
+): Effect.Effect<string, ProviderError> =>
+  runGitLabWrite(
+    {
+      method: "POST",
+      path: discussionsPath(mergeRequestIid),
+      body: { body },
+    },
+    HasIdSchema,
+  ).pipe(Effect.map((res) => String(res.id)));
+
+/**
+ * Add a note (a reply) to an existing discussion thread. The response is
+ * verified — a note with an `id` must come back — so a silent half-success
+ * cannot pass for a delivered reply.
+ */
+export const replyToDiscussion = (
+  mergeRequestIid: number,
+  discussionId: string,
+  body: string,
+): Effect.Effect<void, ProviderError> =>
+  runGitLabWrite(
+    {
+      method: "POST",
+      path: `${discussionsPath(mergeRequestIid)}/${discussionId}/notes`,
+      body: { body },
+    },
+    HasIdSchema,
+  ).pipe(Effect.asVoid);
+
+/**
+ * Resolve a discussion thread, then verify it came back resolved.
+ * A 2xx response that no-ops must not pass for a resolved thread.
+ */
+export const resolveDiscussion = (
+  mergeRequestIid: number,
+  discussionId: string,
+): Effect.Effect<void, ProviderError> => {
+  const path = `${discussionsPath(mergeRequestIid)}/${discussionId}`;
+  return runGitLabWrite(
+    {
+      method: "PUT",
+      path,
+      body: { resolved: true },
+    },
+    DiscussionSchema,
+  ).pipe(
+    Effect.flatMap((raw) => {
+      const summary = toDiscussionSummary(raw);
+      return summary.resolved
+        ? Effect.void
+        : Effect.fail(
+            new ProviderResponseError({
+              method: "PUT",
+              path,
+              detail: `discussion ${discussionId} still unresolved after PUT`,
+            }),
+          );
+    }),
+  );
+};

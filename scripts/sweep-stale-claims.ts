@@ -17,7 +17,7 @@ import { $ } from "bun";
 import { BunRuntime } from "@effect/platform-bun";
 import { Console, Effect, Option } from "effect";
 import { LABELS } from "../src/config";
-import { listIssuesByLabels, updateIssueLabels } from "../src/gitlab/api";
+import { listIssuesByLabels, updateIssueLabels } from "../src/gitlab/issue";
 import { describeProviderError } from "../src/provider/types";
 import type { ClaimedIssue } from "../src/recovery/stale";
 import { selectStale, worktreePathsForIssue } from "../src/recovery/stale";

@@ -96,13 +96,18 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
   Missing a transitively-spawned skill won't crash the phase — the spawning subagent fails its own `Skill` load and that slot is dropped from the review object — but the review will be silently shallower than intended.
 
 > [!IMPORTANT]
-> **OAuth2 tokens are not supported.** A single AFK run (several issues × 90-min budget) outlives the few-hour TTL of an OAuth2 token. The orchestrator reads `$KIRBY_GITLAB_TOKEN` first; if absent, it falls back to `~/.config/glab-cli/config.yml` but **skips** any host block flagged `is_oauth2: true`. If your only credential is the one `glab auth login` writes by default, the run fails at startup with a clear `ProviderConfigError`.
+> **The GitLab connection is read from environment variables only** — no `glab` config file, no git-remote sniffing. All three are required, and a missing one fails fast at startup with a clear `ProviderConfigError`:
+> - `KIRBY_GITLAB_TOKEN` — a personal access token (PAT) with the `api` scope.
+> - `GITLAB_HOST` — the instance base URL, e.g. `https://gitlab.com`.
+> - `GITLAB_PROJECT_PATH` — the `owner/repo` project path.
 >
-> Fix: create a long-lived PAT and export it before launching.
+> **OAuth2 tokens are not supported** — a single AFK run outlives their few-hour TTL. Create a long-lived PAT and export it before launching.
 > ```bash
 > glab api -X POST user/personal_access_tokens \
 >   -f name=kirby-bot -f scopes[]=api
 > export KIRBY_GITLAB_TOKEN=<the-returned-token>
+> export GITLAB_HOST=https://gitlab.com
+> export GITLAB_PROJECT_PATH=<owner>/<repo>
 > ```
 
 ## Quick start
@@ -117,7 +122,7 @@ bun run setup-skills
 
 # 3. Check the prerequisites
 which bun tmux claude
-test -n "$KIRBY_GITLAB_TOKEN" && echo "token set"
+test -n "$KIRBY_GITLAB_TOKEN" -a -n "$GITLAB_HOST" -a -n "$GITLAB_PROJECT_PATH" && echo "env set"
 
 # 4. Run
 bun run src/main.ts
