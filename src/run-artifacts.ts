@@ -92,7 +92,12 @@ const shapeFor = (dir: string): RunArtifactsShape => {
     promptFilePath: (ref) => join(dir, `prompt-${refSuffix(ref)}.md`),
     findingsPath: (ref) => join(dir, `findings-${refSuffix(ref)}.json`),
     triagePath: (ref) => join(dir, `triage-${refSuffix(ref)}.json`),
-    sessionName: (ref) => `afk-${refSuffix(ref)}`,
+    // tmux reserves `:` and `.` as `session:window.pane` delimiters and
+    // silently rewrites them in a session name, so `new-session -s` would
+    // create `…_design` while every later `-t …:design` resolves to a missing
+    // window. Sanitize here so create and target always agree (agent names like
+    // `coding-standards:design` keep their `:` everywhere else).
+    sessionName: (ref) => `afk-${refSuffix(ref).replace(COLON_OR_DOT_RE, "_")}`,
     logEvent: (event) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;

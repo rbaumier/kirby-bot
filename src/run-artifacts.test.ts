@@ -73,6 +73,15 @@ describe("RunArtifacts", () => {
     expect(out.promptFilePath(ref).endsWith("prompt-7-review-2-correctness.md")).toBe(true);
   });
 
+  it("sessionName replaces tmux-reserved `:`/`.` in an agent name with `_`", async () => {
+    const out = await Effect.runPromise(buildAt(1_700_000_000_000, 42));
+    const ref = { issueIid: 7, phase: "review", iteration: 2, agent: "coding-standards:design" } as const;
+    const name = out.sessionName(ref);
+    expect(name).toBe("afk-7-review-2-coding-standards_design");
+    expect(name).not.toContain(":");
+    expect(name).not.toContain(".");
+  });
+
   it("absent agent → filenames unchanged from pre-fan-out format", async () => {
     const out = await Effect.runPromise(buildAt(1_700_000_000_000, 42));
     const ref = { issueIid: 7, phase: "review", iteration: 2 } as const;
