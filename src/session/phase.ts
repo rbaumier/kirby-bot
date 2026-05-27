@@ -81,6 +81,7 @@ export const runPhaseSession = <const V extends VerdictToken>(
       sentinel,
       timeoutMs,
       logContext: { issueIid, iteration },
+      model: "sonnet",
     });
 
     const narrowed = expected.find((candidate) => candidate === verdict);
