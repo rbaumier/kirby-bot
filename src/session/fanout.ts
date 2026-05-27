@@ -27,7 +27,7 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Cause, Console, Effect, Exit } from "effect";
+import { Cause, Clock, Console, Effect, Exit } from "effect";
 import type { Phase } from "../config";
 import { MAX_CONCURRENT_AGENTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { type AgentName, getAgentModel } from "../review/agents";
@@ -151,7 +151,7 @@ const runOneAgent = (params: {
   readonly previousFindingsBlock: string;
 }): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
   Effect.gen(function* () {
-    const startedAt = Date.now();
+    const startedAt = yield* Clock.currentTimeMillis;
     const { input, agent, analysis, scopedFiles, diffFile, perAgentTimeoutMs, previousFindingsBlock } =
       params;
     const artifacts = yield* RunArtifacts;
@@ -207,7 +207,7 @@ const runOneAgent = (params: {
       )
       .pipe(Effect.exit);
 
-    const totalMs = Date.now() - startedAt;
+    const totalMs = (yield* Clock.currentTimeMillis) - startedAt;
 
     if (Exit.isSuccess(result)) {
       return { kind: "ok" as const, agent, findingsPath: findingsFile, totalMs };
@@ -301,7 +301,7 @@ export const runFanOutPhase = (
     // — they share the wall-clock, not the budget).
     const perAgentTimeoutMs = Math.min(
       PHASE_CAP_MINUTES[input.phase] * 60 * 1000,
-      input.deadline - Date.now(),
+      input.deadline - (yield* Clock.currentTimeMillis),
     );
     if (perAgentTimeoutMs < SENTINEL_POLL_MS) {
       return yield* Effect.fail(new BudgetExhausted({ phase: input.phase }));

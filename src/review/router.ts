@@ -20,7 +20,7 @@
  * but only enough diff content per file to recognize what each file does.
  */
 import { writeFile } from "node:fs/promises";
-import { Console, Data, Effect } from "effect";
+import { Clock, Console, Data, Effect } from "effect";
 import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
@@ -312,7 +312,7 @@ export const routeAgents = (
     };
 
     // Wall-clock cap = min(router-specific cap, budget left, phase cap).
-    const phaseBudgetMs = input.deadline - Date.now();
+    const phaseBudgetMs = input.deadline - (yield* Clock.currentTimeMillis);
     const timeoutMs = Math.min(
       ROUTER_TIMEOUT_MS,
       phaseBudgetMs,

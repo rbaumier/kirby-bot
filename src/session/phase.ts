@@ -10,7 +10,7 @@
  * Every failure is one of the typed errors in `./errors`.
  */
 import { writeFile } from "node:fs/promises";
-import { Effect } from "effect";
+import { Clock, Effect } from "effect";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
@@ -48,7 +48,8 @@ export const runPhaseSession = <const V extends VerdictToken>(
     const { phase, issueIid, worktree, iteration, deadline, replacements } = input;
     // Phase timeout: the smaller of its per-phase cap and the budget still
     // left for the issue. No floor — below one poll interval we refuse to spawn.
-    const timeoutMs = Math.min(PHASE_CAP_MINUTES[phase] * 60 * 1000, deadline - Date.now());
+    const now = yield* Clock.currentTimeMillis;
+    const timeoutMs = Math.min(PHASE_CAP_MINUTES[phase] * 60 * 1000, deadline - now);
 
     // A budget below one poll interval can never yield a verdict in time —
     // fail now rather than spawn a session that is killed mid-boot.

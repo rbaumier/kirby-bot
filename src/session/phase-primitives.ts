@@ -22,7 +22,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Console, Effect } from "effect";
+import { Clock, Console, Effect } from "effect";
 import type { Phase } from "../config";
 import { SENTINEL_POLL_MS } from "../config";
 import { formatDuration } from "../duration";
@@ -108,14 +108,21 @@ export const pollSentinel = (
 
     // Stack-safe poll loop: sleep one interval per tick until the
     // sentinel appears or the timeout elapses. The interruptible
-    // sleep also lets a Ctrl-C unwind the wait promptly.
-    yield* Effect.iterate(0, {
-      while: () => !existsSync(sentinel) && Date.now() - startedAt <= timeoutMs,
-      body: (tick) => Effect.as(Effect.sleep(`${SENTINEL_POLL_MS} millis`), tick + 1),
+    // sleep also lets a Ctrl-C unwind the wait promptly. The loop
+    // carries the current time as its state — read from `Clock`, not
+    // `Date.now()` — so a virtual clock controls both the sleep and
+    // the elapsed-time predicate together.
+    const lastNow = yield* Effect.iterate(yield* Clock.currentTimeMillis, {
+      while: (now) => !existsSync(sentinel) && now - startedAt <= timeoutMs,
+      body: () =>
+        Effect.gen(function* () {
+          yield* Effect.sleep(`${SENTINEL_POLL_MS} millis`);
+          return yield* Clock.currentTimeMillis;
+        }),
     });
 
     if (!existsSync(sentinel)) {
-      return yield* Effect.fail(new SessionTimedOut({ phase, elapsedMs: Date.now() - startedAt }));
+      return yield* Effect.fail(new SessionTimedOut({ phase, elapsedMs: lastNow - startedAt }));
     }
 
     const message = yield* Effect.tryPromise({
@@ -225,7 +232,7 @@ export const runOneClaudeSession = (
           // Start the phase clock before booting claude — the TUI-readiness
           // wait counts against the budget, so the cap is a true wall-clock
           // bound on the whole session.
-          startedAt = Date.now();
+          startedAt = yield* Clock.currentTimeMillis;
           yield* bootClaudeSession({
             session,
             tmuxLogPath,
@@ -235,7 +242,7 @@ export const runOneClaudeSession = (
             env: { [AGENT_SENTINEL_VAR]: sentinel },
             ...(input.model === undefined ? {} : { model: input.model }),
           });
-          const bootMs = Date.now() - startedAt;
+          const bootMs = (yield* Clock.currentTimeMillis) - startedAt;
           yield* artifacts.logEvent({
             event: "session_boot_complete",
             ...baseEvent,
@@ -247,7 +254,7 @@ export const runOneClaudeSession = (
           );
 
           const verdict = yield* pollSentinel({ phase, sentinel, startedAt, timeoutMs });
-          const totalMs = Date.now() - startedAt;
+          const totalMs = (yield* Clock.currentTimeMillis) - startedAt;
           yield* artifacts.logEvent({
             event: "session_verdict",
             ...baseEvent,
@@ -260,12 +267,15 @@ export const runOneClaudeSession = (
           return verdict;
         }).pipe(
           Effect.tapError((error) =>
-            artifacts.logEvent({
-              event: "session_failed",
-              ...baseEvent,
-              session,
-              totalMs: Date.now() - startedAt,
-              error_tag: error._tag,
+            Effect.gen(function* () {
+              const totalMs = (yield* Clock.currentTimeMillis) - startedAt;
+              yield* artifacts.logEvent({
+                event: "session_failed",
+                ...baseEvent,
+                session,
+                totalMs,
+                error_tag: error._tag,
+              });
             }),
           ),
         ),
