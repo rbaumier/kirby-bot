@@ -7,7 +7,7 @@
  */
 import { Effect, Schema } from "effect";
 import type { ProviderError } from "../provider/types";
-import { runGitLabRead, runGitLabWrite } from "./http";
+import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
 import { IssueSchema } from "./schema";
 
 /** A trimmed issue, as the pipeline consumes it. */
@@ -80,7 +80,7 @@ export const updateIssueLabels = (
   if (Object.keys(body).length === 0) {
     return Effect.void;
   }
-  return runGitLabWrite(
+  return runGitLabIdempotentWrite(
     { method: "PUT", path: `projects/:id/issues/${iid}`, body },
     IssueSchema,
   ).pipe(Effect.asVoid);

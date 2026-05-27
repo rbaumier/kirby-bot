@@ -78,11 +78,6 @@ export type GitLabRequest = {
   readonly path: string;
   readonly query?: Readonly<Record<string, string | number | boolean | undefined>>;
   readonly body?: Readonly<Record<string, unknown>>;
-  /**
-   * Force no-retry on an otherwise-idempotent PUT/DELETE. Set only on writes
-   * that transition state and would error if replayed — e.g. `merge`.
-   */
-  readonly nonIdempotent?: boolean;
 };
 
 /** Build the full URL for a request, with `:id` and the query string filled in. */
@@ -192,17 +187,25 @@ const callOnce = <A, I>(
 
 /**
  * Retry policy for transient failures: jittered exponential backoff, 3 attempts
- * total. A deterministic boot-time misconfiguration ({@link ProviderConfigError})
- * does not retry — it only delays a clear error message by ~1 second.
+ * total.
  */
 const transientRetryPolicy = Schedule.exponential("200 millis").pipe(
   Schedule.jittered,
   Schedule.intersect(Schedule.recurs(2)),
 );
 
-/** Retry every transient error; never retry a deterministic config failure. */
-const retryUnlessConfigError = (error: ProviderError): boolean =>
-  error._tag !== "ProviderConfigError";
+/**
+ * Retry only *transient* failures — a network blip, a 5xx, or a 429. A 4xx,
+ * a decode failure, or a boot-time misconfiguration is deterministic: retrying
+ * only delays the same error, so let it surface at once.
+ */
+const retryTransient = (error: ProviderError): boolean =>
+  error._tag === "ProviderNetworkError" ||
+  (error._tag === "ProviderHttpError" && (error.status >= 500 || error.status === 429));
+
+/** Wrap one call with the transient-retry policy. */
+const withRetry = <A>(call: Effect.Effect<A, ProviderError>): Effect.Effect<A, ProviderError> =>
+  call.pipe(Effect.retry({ schedule: transientRetryPolicy, while: retryTransient }));
 
 /**
  * Run a READ request, retrying transient failures.
@@ -211,26 +214,26 @@ const retryUnlessConfigError = (error: ProviderError): boolean =>
 export const runGitLabRead = <A, I>(
   request: GitLabRequest & { readonly method: "GET" },
   schema: Schema.Schema<A, I>,
-): Effect.Effect<A, ProviderError> =>
-  callOnce(request, schema).pipe(
-    Effect.retry({ schedule: transientRetryPolicy, while: retryUnlessConfigError }),
-  );
+): Effect.Effect<A, ProviderError> => withRetry(callOnce(request, schema));
 
 /**
- * Run a WRITE request. Idempotent writes (PUT/DELETE) retry transient failures;
- * a POST — or any write flagged `nonIdempotent` — runs exactly once, since a
- * retry after a lost response would duplicate or wrongly replay the mutation.
+ * Run an idempotent WRITE (a PUT/DELETE that sets state to a fixed value),
+ * retrying transient failures — repeating it is harmless.
+ */
+export const runGitLabIdempotentWrite = <A, I>(
+  request: GitLabRequest,
+  schema: Schema.Schema<A, I>,
+): Effect.Effect<A, ProviderError> => withRetry(callOnce(request, schema));
+
+/**
+ * Run a WRITE exactly once — no retry. For POSTs (each call creates a new
+ * resource) and state transitions like `merge` (which errors if replayed),
+ * a retry after a lost response would duplicate or wrongly replay the mutation.
  */
 export const runGitLabWrite = <A, I>(
   request: GitLabRequest,
   schema: Schema.Schema<A, I>,
-): Effect.Effect<A, ProviderError> => {
-  const once = callOnce(request, schema);
-  const retryable = request.method !== "POST" && request.nonIdempotent !== true;
-  return retryable
-    ? once.pipe(Effect.retry({ schedule: transientRetryPolicy, while: retryUnlessConfigError }))
-    : once;
-};
+): Effect.Effect<A, ProviderError> => callOnce(request, schema);
 
 /** Exposed for tests — never used in production code. */
 export const __test = { decodeBody };

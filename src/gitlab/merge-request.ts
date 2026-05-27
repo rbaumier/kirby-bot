@@ -7,7 +7,7 @@
  */
 import { Effect, Schema } from "effect";
 import type { ProviderError } from "../provider/types";
-import { runGitLabRead, runGitLabWrite } from "./http";
+import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
 import { MergeRequestSchema } from "./schema";
 import type { GitLabMergeRequest } from "./schema";
 
@@ -86,7 +86,7 @@ export const markMergeRequestReady = (iid: number): Effect.Effect<void, Provider
     if (stripped === current.title) {
       return; // already ready
     }
-    yield* runGitLabWrite(
+    yield* runGitLabIdempotentWrite(
       {
         method: "PUT",
         path: `projects/:id/merge_requests/${iid}`,
@@ -107,9 +107,9 @@ type MergeMergeRequestParams = {
  * Merge a merge request. `autoMerge` requests merge-when-pipeline-succeeds,
  * which falls through to an immediate merge when no pipeline is configured.
  *
- * Flagged `nonIdempotent`: a merge transitions MR state and the API errors if
- * replayed on an already-merged MR, so a retry after a lost response must not
- * turn a successful merge into a reported failure.
+ * Runs exactly once (`runGitLabWrite`, not the idempotent variant): a merge
+ * transitions MR state and the API errors if replayed on an already-merged MR,
+ * so a retry after a lost response must not turn a success into a failure.
  */
 export const mergeMergeRequest = (
   params: MergeMergeRequestParams,
@@ -118,7 +118,6 @@ export const mergeMergeRequest = (
     {
       method: "PUT",
       path: `projects/:id/merge_requests/${params.iid}/merge`,
-      nonIdempotent: true,
       body: {
         squash: params.squash,
         merge_when_pipeline_succeeds: params.autoMerge,

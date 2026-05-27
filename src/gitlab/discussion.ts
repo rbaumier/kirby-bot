@@ -11,7 +11,7 @@
 import { Effect, Schema } from "effect";
 import { ProviderResponseError } from "../provider/types";
 import type { ProviderError } from "../provider/types";
-import { runGitLabRead, runGitLabWrite } from "./http";
+import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
 
 /** A discussion reduced to what the pipeline reasons about. */
 export type DiscussionSummary = {
@@ -139,7 +139,7 @@ export const resolveDiscussion = (
   discussionId: string,
 ): Effect.Effect<void, ProviderError> => {
   const path = `${discussionsPath(mergeRequestIid)}/${discussionId}`;
-  return runGitLabWrite(
+  return runGitLabIdempotentWrite(
     {
       method: "PUT",
       path,
