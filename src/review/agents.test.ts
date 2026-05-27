@@ -1,49 +1,56 @@
 import { describe, expect, test } from "bun:test";
-import { AGENTS, getAgentModel } from "./agents";
+import { AGENTS, ALL_AGENT_NAMES, getAgentModel, isAgentName } from "./agents";
 
-describe("AGENTS — model tier sanity", () => {
-  test("Funnel L1/L2 → haiku (structural prose, no line-anchoring)", () => {
-    expect(getAgentModel("funnel-l1")).toBe("haiku");
-    expect(getAgentModel("funnel-l2")).toBe("haiku");
+const VALID_MODELS = new Set(["haiku", "sonnet", "opus"]);
+
+// These tests assert invariants over WHATEVER subset of agents is active in
+// AGENTS_DATA — they never name a specific agent. Commenting a row out (the
+// supported on/off switch) must not break them: only `AgentName` consumers
+// with a hardcoded reference should fail to compile, and there are none here.
+describe("AGENTS — registry invariants", () => {
+  test("registry is non-empty", () => {
+    expect(ALL_AGENT_NAMES.length).toBeGreaterThan(0);
   });
 
-  test("Correctness / Tests / Occam → sonnet (heavy reasoning)", () => {
-    expect(getAgentModel("correctness")).toBe("sonnet");
-    expect(getAgentModel("tests")).toBe("sonnet");
-    expect(getAgentModel("occam-razor")).toBe("sonnet");
-  });
-
-  test("General Opus → opus", () => {
-    expect(getAgentModel("general-opus")).toBe("opus");
-  });
-
-  test("Light skill (ui-ux, tailwind, i18n) → haiku", () => {
-    expect(getAgentModel("ui-ux")).toBe("haiku");
-    expect(getAgentModel("tailwind")).toBe("haiku");
-    expect(getAgentModel("i18n")).toBe("haiku");
-  });
-
-  test("Heavy skill (security-defensive, language-typescript, drizzle-orm) → sonnet", () => {
-    expect(getAgentModel("security-defensive")).toBe("sonnet");
-    expect(getAgentModel("language-typescript")).toBe("sonnet");
-    expect(getAgentModel("drizzle-orm")).toBe("sonnet");
-  });
-
-  test("All subsystem agents → sonnet", () => {
-    expect(getAgentModel("billing-subsystem")).toBe("sonnet");
-    expect(getAgentModel("auth-subsystem")).toBe("sonnet");
-    expect(getAgentModel("webhook-subsystem")).toBe("sonnet");
-  });
-
-  test("Materiality → haiku (textual lift)", () => {
-    expect(getAgentModel("claude-md-materiality")).toBe("haiku");
-  });
-
-  test("only haiku/sonnet/opus values present across registry", () => {
-    const valid = new Set(["haiku", "sonnet", "opus"]);
-    for (const [agent, entry] of Object.entries(AGENTS)) {
-      expect(valid.has(entry.model)).toBe(true);
-      if (!valid.has(entry.model)) throw new Error(`bad model for ${agent}: ${entry.model}`);
+  test("every agent's model is one of haiku/sonnet/opus", () => {
+    for (const name of ALL_AGENT_NAMES) {
+      expect(VALID_MODELS.has(AGENTS[name].model)).toBe(true);
     }
+  });
+
+  test("getAgentModel agrees with the registry for every agent", () => {
+    for (const name of ALL_AGENT_NAMES) {
+      expect(getAgentModel(name)).toBe(AGENTS[name].model);
+    }
+  });
+
+  test("every agent carries a non-empty router description", () => {
+    for (const name of ALL_AGENT_NAMES) {
+      expect(AGENTS[name].description.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  test("every agent has a usable prompt spec", () => {
+    for (const name of ALL_AGENT_NAMES) {
+      const spec = AGENTS[name].prompt;
+      if (spec.kind === "self-contained") {
+        expect(spec.templateFile.length).toBeGreaterThan(0);
+      } else {
+        expect(spec.roleFile.length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("isAgentName", () => {
+  test("true for every registered agent", () => {
+    for (const name of ALL_AGENT_NAMES) {
+      expect(isAgentName(name)).toBe(true);
+    }
+  });
+
+  test("false for an unregistered name", () => {
+    expect(isAgentName("does-not-exist")).toBe(false);
+    expect(isAgentName("")).toBe(false);
   });
 });

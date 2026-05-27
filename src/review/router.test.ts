@@ -10,6 +10,7 @@ import {
   RouterUnknownAgent,
   truncateDiff,
 } from "./router";
+import { AGENTS, ALL_AGENT_NAMES } from "./agents";
 import type { ChangedFile } from "./detect";
 
 describe("truncateDiff", () => {
@@ -138,17 +139,14 @@ describe("_parseRouterOutput", () => {
 });
 
 describe("_renderAgentCatalog", () => {
-  test("emits one line per agent, prefixed by name", () => {
+  // Asserts over whatever subset of agents is active — never names one.
+  test("emits exactly one line per active agent, with its name + description", () => {
     const out = _renderAgentCatalog();
-    expect(out).toContain("- `funnel-l1`:");
-    expect(out).toContain("- `correctness`:");
-    expect(out).toContain("- `billing-subsystem`:");
-  });
-
-  test("every line carries the agent's description", () => {
-    const out = _renderAgentCatalog();
-    expect(out).toContain("Question the need");
-    expect(out).toContain("OWASP-style security review");
+    const lines = out.split("\n").filter((line) => line !== "");
+    expect(lines).toHaveLength(ALL_AGENT_NAMES.length);
+    for (const name of ALL_AGENT_NAMES) {
+      expect(out).toContain(`- \`${name}\`: ${AGENTS[name].description}`);
+    }
   });
 });
 

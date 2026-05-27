@@ -33,16 +33,16 @@ export type AgentModel = "haiku" | "sonnet" | "opus";
 export type PromptSpec =
   | { readonly kind: "self-contained"; readonly templateFile: string }
   | {
-      readonly kind: "line-anchored";
-      /** Path within `assets/code-review-templates/` for the role body. */
-      readonly roleFile: string;
-      /** Substituted into `{skill_name}` (skill-agent.md). */
-      readonly skillName?: string;
-      /** Substituted into `{subsystem_name}` (subsystem-agent.md). */
-      readonly subsystemName?: string;
-      /** Substituted into `{failure_modes}` (subsystem-agent.md). */
-      readonly failureModes?: string;
-    };
+    readonly kind: "line-anchored";
+    /** Path within `assets/code-review-templates/` for the role body. */
+    readonly roleFile: string;
+    /** Substituted into `{skill_name}` (skill-agent.md). */
+    readonly skillName?: string;
+    /** Substituted into `{subsystem_name}` (subsystem-agent.md). */
+    readonly subsystemName?: string;
+    /** Substituted into `{failure_modes}` (subsystem-agent.md). */
+    readonly failureModes?: string;
+  };
 
 /** One agent's complete declaration — the only place to CRUD an agent. */
 export type AgentEntry = {
@@ -106,11 +106,11 @@ const AGENTS_DATA = {
       skillName: "matt-improve-codebase-architecture",
     },
   },
-  "matt-review": {
-    model: "sonnet",
-    description: "Senior-eng prose review: what's the missing piece, what's the wrong abstraction. Spawn for non-trivial diffs.",
-    prompt: { kind: "self-contained", templateFile: "matt-review.md" },
-  },
+  // "matt-review": {
+  //   model: "sonnet",
+  //   description: "Senior-eng prose review: what's the missing piece, what's the wrong abstraction. Spawn for non-trivial diffs.",
+  //   prompt: { kind: "self-contained", templateFile: "matt-review.md" },
+  // },
   "thermo-nuclear": {
     model: "sonnet",
     description: "Aggressive structural pass: what would a skeptical senior tear apart. Spawn for non-trivial or high-stakes diffs.",
@@ -161,11 +161,11 @@ const AGENTS_DATA = {
       skillName: "coding-standards:style",
     },
   },
-  "general-opus": {
-    model: "opus",
-    description: "Opus generalist pass: catches what the cheaper models miss. Spawn for high-stakes or large diffs only.",
-    prompt: { kind: "line-anchored", roleFile: "correctness.md" },
-  },
+  // "general-opus": {
+  //   model: "opus",
+  //   description: "Opus generalist pass: catches what the cheaper models miss. Spawn for high-stakes or large diffs only.",
+  //   prompt: { kind: "line-anchored", roleFile: "correctness.md" },
+  // },
 
   // ─── CLAUDE.md ─────────────────────────────────────────────────────────
   "claude-md-compliance": {
@@ -194,16 +194,16 @@ const AGENTS_DATA = {
     description: "Rust-specific review: ownership, lifetimes, unsafe, error types. Spawn for .rs files.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "language-rust" },
   },
-  "language-swift": {
-    model: "sonnet",
-    description: "Swift-specific review: optionals, value types, concurrency. Spawn for .swift files.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "language-swift" },
-  },
-  vue: {
-    model: "haiku",
-    description: "Vue-specific review: composition API, reactivity, lifecycle. Spawn for .vue files.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "vue" },
-  },
+  // "language-swift": {
+  //   model: "sonnet",
+  //   description: "Swift-specific review: optionals, value types, concurrency. Spawn for .swift files.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "language-swift" },
+  // },
+  // vue: {
+  //   model: "haiku",
+  //   description: "Vue-specific review: composition API, reactivity, lifecycle. Spawn for .vue files.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "vue" },
+  // },
 
   // ─── Skill by import — heavy (sonnet) ──────────────────────────────────
   react: {
@@ -223,26 +223,26 @@ const AGENTS_DATA = {
   },
 
   // ─── Skill by import — light (haiku) ───────────────────────────────────
-  i18n: {
-    model: "haiku",
-    description: "i18n review: missing keys, locale-specific formatting bugs. Spawn when files import i18next/next-intl/@formatjs/react-i18next.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "i18n" },
-  },
-  tailwind: {
-    model: "haiku",
-    description: "Tailwind utility review: class consistency, no inline overrides. Spawn when files use tw-merge/clsx or have tailwind class strings.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "tailwind" },
-  },
-  "ui-animations": {
-    model: "haiku",
-    description: "Animation review: reduced-motion compliance, perf. Spawn when files import framer-motion/motion/react/@react-spring.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "ui-animations" },
-  },
-  shadcn: {
-    model: "haiku",
-    description: "shadcn/ui review: component composition, accessibility. Spawn when files import @radix-ui or use shadcn components.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "shadcn" },
-  },
+  // i18n: {
+  //   model: "haiku",
+  //   description: "i18n review: missing keys, locale-specific formatting bugs. Spawn when files import i18next/next-intl/@formatjs/react-i18next.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "i18n" },
+  // },
+  // tailwind: {
+  //   model: "haiku",
+  //   description: "Tailwind utility review: class consistency, no inline overrides. Spawn when files use tw-merge/clsx or have tailwind class strings.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "tailwind" },
+  // },
+  // "ui-animations": {
+  //   model: "haiku",
+  //   description: "Animation review: reduced-motion compliance, perf. Spawn when files import framer-motion/motion/react/@react-spring.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "ui-animations" },
+  // },
+  // shadcn: {
+  //   model: "haiku",
+  //   description: "shadcn/ui review: component composition, accessibility. Spawn when files import @radix-ui or use shadcn components.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "shadcn" },
+  // },
   "tanstack-query": {
     model: "haiku",
     description: "TanStack Query review: query keys, invalidation, suspense. Spawn when files import @tanstack/react-query/@tanstack/query-core.",
@@ -302,11 +302,11 @@ const AGENTS_DATA = {
     description: "Frontend architecture review: state management, data flow, bundling. Spawn for non-trivial frontend code (React/Vue/Svelte apps).",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "frontend" },
   },
-  "web-performance": {
-    model: "sonnet",
-    description: "Web-perf review: bundle bloat, render perf, hydration, INP. Spawn for changes affecting client-side runtime.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "web-performance" },
-  },
+  // "web-performance": {
+  //   model: "sonnet",
+  //   description: "Web-perf review: bundle bloat, render perf, hydration, INP. Spawn for changes affecting client-side runtime.",
+  //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "web-performance" },
+  // },
   "api-design": {
     model: "sonnet",
     description: "HTTP API review: route shape, status codes, request validation, idempotency. Spawn for HTTP route handlers (express/fastify/hono/@trpc/server/next route exports).",
@@ -314,83 +314,83 @@ const AGENTS_DATA = {
   },
 
   // ─── Subsystem (high-stakes — all sonnet) ──────────────────────────────
-  "billing-subsystem": {
-    model: "sonnet",
-    description: "Billing-specific review framed for money flows. Spawn when the diff touches charging, refunds, invoices, subscriptions, or imports stripe/paddle/lemonsqueezy.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "billing",
-      failureModes:
-        "idempotency keys reused/missing; Decimal vs float for money; invoice numbering races; refund double-apply; double-charge on retry; currency mismatch",
-    },
-  },
-  "auth-subsystem": {
-    model: "sonnet",
-    description: "Auth-specific review framed for session/token/MFA paths. Spawn when the diff touches login/logout, session handling, JWT/bcrypt/argon2, or auth libraries (better-auth/next-auth/lucia/clerk).",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "auth",
-      failureModes:
-        "session expiry edges; token refresh races; password reset replay; MFA bypass; OAuth state CSRF; downgrade to weaker auth path",
-    },
-  },
-  "schema-migration-subsystem": {
-    model: "sonnet",
-    description: "Schema-migration review framed for data-loss / locking risks. Spawn when the diff touches /migrations/ or contains alterTable/dropColumn/addColumn.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "schema-migration",
-      failureModes:
-        "data loss on DROP; default backfill on a huge table races writes; FK/index drift; rollback impossible without data loss; long-lock blocking",
-    },
-  },
-  "webhook-subsystem": {
-    model: "sonnet",
-    description: "Webhook-specific review framed for signature / replay protection. Spawn when the diff touches webhook handlers, HMAC verification, or createHmac/timingSafeEqual.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "webhook",
-      failureModes:
-        "signature verification not timing-safe; missing replay protection; idempotency by event-id only (payload tamper); HMAC algorithm confusion",
-    },
-  },
-  "rbac-subsystem": {
-    model: "sonnet",
-    description: "RBAC / authorization review framed for privilege boundaries. Spawn when the diff touches policies, permissions, RBAC, hasPermission/canAccess/authorize calls, or @casl imports.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "rbac",
-      failureModes:
-        "policy evaluation order leaks privilege; escalation via permission union; missing scope check on a new endpoint; tenant boundary leak through caller-trusted id",
-    },
-  },
-  "multi-tenant-subsystem": {
-    model: "sonnet",
-    description: "Multi-tenant review framed for tenant-id leakage / cross-tenant data. Spawn when the diff touches tenantId / organizationId / workspaceId paths or queries.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "multi-tenant",
-      failureModes:
-        "row-level scope missing; tenant-id leakage in cache/logs; cross-tenant pagination cursor; default to current tenant when none given",
-    },
-  },
-  "cron-subsystem": {
-    model: "sonnet",
-    description: "Cron / background-job review framed for idempotency + overlap. Spawn when the diff touches /cron/, /jobs/, /workers/, or imports bullmq/bull/agenda/trigger.dev/inngest.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "subsystem-agent.md",
-      subsystemName: "cron",
-      failureModes:
-        "lock not acquired; overlapping runs; partial-failure rerun without idempotency; dead-letter queue not configured; clock-skew misfire",
-    },
-  },
+  // "billing-subsystem": {
+  //   model: "sonnet",
+  //   description: "Billing-specific review framed for money flows. Spawn when the diff touches charging, refunds, invoices, subscriptions, or imports stripe/paddle/lemonsqueezy.",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "billing",
+  //     failureModes:
+  //       "idempotency keys reused/missing; Decimal vs float for money; invoice numbering races; refund double-apply; double-charge on retry; currency mismatch",
+  //   },
+  // },
+  // "auth-subsystem": {
+  //   model: "sonnet",
+  //   description: "Auth-specific review framed for session/token/MFA paths. Spawn when the diff touches login/logout, session handling, JWT/bcrypt/argon2, or auth libraries (better-auth/next-auth/lucia/clerk).",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "auth",
+  //     failureModes:
+  //       "session expiry edges; token refresh races; password reset replay; MFA bypass; OAuth state CSRF; downgrade to weaker auth path",
+  //   },
+  // },
+  // "schema-migration-subsystem": {
+  //   model: "sonnet",
+  //   description: "Schema-migration review framed for data-loss / locking risks. Spawn when the diff touches /migrations/ or contains alterTable/dropColumn/addColumn.",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "schema-migration",
+  //     failureModes:
+  //       "data loss on DROP; default backfill on a huge table races writes; FK/index drift; rollback impossible without data loss; long-lock blocking",
+  //   },
+  // },
+  // "webhook-subsystem": {
+  //   model: "sonnet",
+  //   description: "Webhook-specific review framed for signature / replay protection. Spawn when the diff touches webhook handlers, HMAC verification, or createHmac/timingSafeEqual.",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "webhook",
+  //     failureModes:
+  //       "signature verification not timing-safe; missing replay protection; idempotency by event-id only (payload tamper); HMAC algorithm confusion",
+  //   },
+  // },
+  // "rbac-subsystem": {
+  //   model: "sonnet",
+  //   description: "RBAC / authorization review framed for privilege boundaries. Spawn when the diff touches policies, permissions, RBAC, hasPermission/canAccess/authorize calls, or @casl imports.",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "rbac",
+  //     failureModes:
+  //       "policy evaluation order leaks privilege; escalation via permission union; missing scope check on a new endpoint; tenant boundary leak through caller-trusted id",
+  //   },
+  // },
+  // "multi-tenant-subsystem": {
+  //   model: "sonnet",
+  //   description: "Multi-tenant review framed for tenant-id leakage / cross-tenant data. Spawn when the diff touches tenantId / organizationId / workspaceId paths or queries.",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "multi-tenant",
+  //     failureModes:
+  //       "row-level scope missing; tenant-id leakage in cache/logs; cross-tenant pagination cursor; default to current tenant when none given",
+  //   },
+  // },
+  // "cron-subsystem": {
+  //   model: "sonnet",
+  //   description: "Cron / background-job review framed for idempotency + overlap. Spawn when the diff touches /cron/, /jobs/, /workers/, or imports bullmq/bull/agenda/trigger.dev/inngest.",
+  //   prompt: {
+  //     kind: "line-anchored",
+  //     roleFile: "subsystem-agent.md",
+  //     subsystemName: "cron",
+  //     failureModes:
+  //       "lock not acquired; overlapping runs; partial-failure rerun without idempotency; dead-letter queue not configured; clock-skew misfire",
+  //   },
+  // },
 } as const satisfies Record<string, AgentEntry>;
 
 /**
