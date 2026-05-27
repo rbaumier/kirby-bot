@@ -1,6 +1,8 @@
 import { Effect, Either, Schema } from "effect";
 import { describe, expect, it } from "bun:test";
 import { __test } from "./http";
+import { MergeRequestSchema } from "./schema";
+import { describeProviderError } from "../provider/types";
 
 const { parseRemoteUrl, parseTokenFromYaml, decodeBodyOrFail } = __test;
 
@@ -113,5 +115,22 @@ describe("decodeBodyOrFail", () => {
     expect(detail.length).toBeGreaterThan(0);
     expect(detail.length).toBeLessThanOrEqual(800);
     expect(detail).toMatch(/iid/);
+  });
+
+  // An unknown MR `state` (e.g. a future GitLab value) must fail the read
+  // rather than coerce to "opened" — otherwise the orchestrator could act on a
+  // misread lifecycle state. The boundary turns it into the ProviderError the
+  // pipeline routes to `failed`, and the failure reason must name the value.
+  it("fails an MR read on an unknown state, naming the offending value", async () => {
+    const mrRequest = { method: "GET", path: "projects/:id/merge_requests/7" } as const;
+    const either = await Effect.runPromise(
+      Effect.either(decodeBodyOrFail(mrRequest, MergeRequestSchema, { iid: 7, state: "merging" })),
+    );
+    expect(either).toMatchObject({ _tag: "Left", left: { _tag: "ProviderResponseError" } });
+    const reason = Either.match(either, {
+      onLeft: (error): string => describeProviderError(error),
+      onRight: (): string => "",
+    });
+    expect(reason).toMatch(/merging/);
   });
 });

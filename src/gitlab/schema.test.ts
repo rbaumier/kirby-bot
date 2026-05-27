@@ -15,14 +15,16 @@ describe("MergeRequestSchema", () => {
     });
   }
 
-  it('defaults state to "opened" when the field is absent', () => {
-    const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1 });
-    expect(parsed.state).toBe("opened");
+  it("rejects an unknown state value instead of coercing it", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state: "merging" }),
+    ).toThrow(/merging/);
   });
 
-  it('coerces an unknown state value to "opened" instead of erroring', () => {
-    const parsed = Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1, state: "draft" });
-    expect(parsed.state).toBe("opened");
+  it("rejects a missing state field instead of defaulting it", () => {
+    expect(() => Schema.decodeUnknownSync(MergeRequestSchema)({ iid: 1 })).toThrow(
+      /\bstate\b[\s\S]*is missing/,
+    );
   });
 
   it("rejects when iid is missing", () => {
