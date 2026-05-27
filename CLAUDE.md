@@ -69,7 +69,7 @@ When spawning subagents (Agent/Task tool), the routing block is automatically in
 
 kirby-bot reaches GitLab through the `PRIVATE-TOKEN` header. OAuth2 access
 tokens are **not** supported: they expire within hours and a single AFK run
-(several issues × 90-min budget) outlives them.
+(several issues × 4-hour budget) outlives them.
 
 - The orchestrator reads `$KIRBY_GITLAB_TOKEN` first; if absent, it falls back to
   `~/.config/glab-cli/config.yml`, but **skips** any host block flagged

@@ -26,13 +26,15 @@ export type Phase = (typeof PHASES)[number];
 /**
  * Per-phase wall-clock cap, in minutes.
  *
- * The 90-minute per-issue budget (below) is the *primary* bound and normally
- * trips first. These caps are the *secondary* guard: they stop a single hung
- * phase from silently eating the whole budget. Their sum (165) deliberately
- * exceeds the budget — a healthy run never reaches them.
+ * The 4-hour per-issue budget (below) is the overall bound. These caps are the
+ * *secondary* guard: they stop a single hung phase from silently eating the
+ * whole budget. `run_impl` carries by far the largest cap — implementation is
+ * the heavy phase and a hard issue can legitimately run for hours — while the
+ * review/evaluate/fix/dogfood loop stays tight. Their sum (300) deliberately
+ * exceeds the budget, so a healthy run never reaches every cap.
  */
 export const PHASE_CAP_MINUTES: Record<Phase, number> = {
-  run_impl: 45,
+  run_impl: 180,
   review: 35,
   evaluate: 30,
   fix: 30,
@@ -40,7 +42,7 @@ export const PHASE_CAP_MINUTES: Record<Phase, number> = {
 };
 
 /** Total wall-clock an issue may take, from `run_impl` through `run_dogfood`. */
-export const ISSUE_BUDGET_MS = 90 * 60 * 1000;
+export const ISSUE_BUDGET_MS = 240 * 60 * 1000;
 
 /** How often the orchestrator polls a phase's sentinel file. */
 export const SENTINEL_POLL_MS = 5000;
