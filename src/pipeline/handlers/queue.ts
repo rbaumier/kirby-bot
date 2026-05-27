@@ -22,6 +22,7 @@ import type { ProviderCallError } from "../../provider/types";
 import { describeShellError, runShell } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
 import { branchName, worktreePath } from "../naming";
+import { reclaimAgentBranch } from "./reclaim-branch";
 import type { IssueRef, State } from "../state";
 
 /** Run `git -C <worktree> <args>` and capture the result. */
@@ -132,11 +133,13 @@ export const onBranchCreate = (
     });
 
     // Re-entrancy: a crashed prior run may have left this branch and worktree
-    // behind (the sweep removes only the worktree, not the branch). Clear both
-    // so the `git worktree add -b` below starts from a clean slate.
+    // behind (the sweep removes only the worktree, not the branch). Remove the
+    // worktree, refresh origin, then reclaim the branch — but only if it holds
+    // nothing that isn't already upstream, so a colliding human branch is never
+    // clobbered (#24). The fetch runs first so the containment check below sees
+    // a current origin/<defaultBranch>.
     yield* runShell(() => $`git worktree remove --force ${worktree}`).pipe(Effect.ignore);
     yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
-    yield* runShell(() => $`git branch -D ${branch}`).pipe(Effect.ignore);
 
     yield* runShell(() => $`git fetch origin ${env.defaultBranch}`).pipe(
       Effect.catchAll(() =>
@@ -145,6 +148,9 @@ export const onBranchCreate = (
         ),
       ),
     );
+
+    yield* reclaimAgentBranch({ repoDir: ".", branch, defaultBranch: env.defaultBranch });
+
     yield* runShell(
       () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,
     ).pipe(
