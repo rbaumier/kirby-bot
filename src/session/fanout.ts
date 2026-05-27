@@ -35,13 +35,7 @@ import { getChangedFilesSince } from "../review/delta-files";
 import { analyzeReviewInputs, type ChangedFile, type ReviewAnalysis } from "../review/detect";
 import { writeDiffSlices, writeFullDiff } from "../review/diff-slices";
 import { renderAgentPrompt, type RenderError } from "../review/render-prompt";
-import {
-  routeAgents,
-  type RoutedAgent,
-  RouterEmpty,
-  RouterMalformedOutput,
-  RouterUnknownAgent,
-} from "../review/router";
+import { routeAgents, type RoutedAgent, RouterMalformedOutput } from "../review/router";
 import { RunArtifacts } from "../run-artifacts";
 import { BudgetExhausted, type PhaseError, WorkspaceError } from "./errors";
 import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
@@ -240,34 +234,21 @@ const applyDeltaScope = (
 };
 
 /**
- * Map the router's `PhaseError` / `RouterMalformedOutput` / `RouterUnknownAgent`
- * / `RouterEmpty` failures into the phase-level `PhaseError` channel. The
- * router's three typed failures collapse into one `WorkspaceError` here
- * because the phase boundary only carries `PhaseError` shapes upward — losing
- * the tag at this seam is acceptable since the reason text already names the
- * specific cause.
+ * Map the router's `RouterMalformedOutput` failure into the phase-level
+ * `PhaseError` channel (a `PhaseError` passes through unchanged). The schema's
+ * formatted `reason` already names the specific cause — bad JSON, unknown
+ * agent, empty list — so the single tag loses no diagnostic detail.
  */
-const routerErrorToPhase = (
-  phase: Phase,
-): ((
-  error: PhaseError | RouterMalformedOutput | RouterUnknownAgent | RouterEmpty,
-) => PhaseError) =>
-  (error) => {
-    if (
-      error._tag === "RouterMalformedOutput" ||
-      error._tag === "RouterUnknownAgent" ||
-      error._tag === "RouterEmpty"
-    ) {
-      const reason =
-        error._tag === "RouterMalformedOutput"
-          ? `router emitted malformed JSON — ${error.reason}`
-          : error._tag === "RouterUnknownAgent"
-            ? `router named unknown agent "${error.agent}"`
-            : "router returned an empty agent list";
-      return new WorkspaceError({ phase, operation: "route agents", reason });
-    }
-    return error;
-  };
+const routerErrorToPhase =
+  (phase: Phase) =>
+  (error: PhaseError | RouterMalformedOutput): PhaseError =>
+    error._tag === "RouterMalformedOutput"
+      ? new WorkspaceError({
+          phase,
+          operation: "route agents",
+          reason: `router emitted malformed output — ${error.reason}`,
+        })
+      : error;
 
 /**
  * `runFanOutPhase` — main entry point of the per-agent review fan-out.

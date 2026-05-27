@@ -20,7 +20,7 @@
  * but only enough diff content per file to recognize what each file does.
  */
 import { writeFile } from "node:fs/promises";
-import { Clock, Console, Data, Effect } from "effect";
+import { Clock, Console, Data, Effect, ParseResult, Schema } from "effect";
 import type { Phase } from "../config";
 import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
@@ -38,17 +38,16 @@ const TRUNCATION_MARKER = "\n\n... [truncated by kirby-bot router]";
 /** Haiku cap — the router is fast; this is the wall-clock hedge if it hangs. */
 const ROUTER_TIMEOUT_MS = 5 * 60 * 1000;
 
-/** Failure modes specific to {@link routeAgents}. */
+/**
+ * The router produced output the orchestrator can't act on: unparseable JSON,
+ * a missing or empty `agents` list, an unknown agent name, or a malformed
+ * entry. All collapse to this one tag — the phase boundary maps them to a
+ * single `WorkspaceError` regardless, so the `reason` text carries the cause.
+ */
 export class RouterMalformedOutput extends Data.TaggedError("RouterMalformedOutput")<{
   readonly reason: string;
   readonly raw: string;
 }> {}
-
-export class RouterUnknownAgent extends Data.TaggedError("RouterUnknownAgent")<{
-  readonly agent: string;
-}> {}
-
-export class RouterEmpty extends Data.TaggedError("RouterEmpty")<{}> {}
 
 /** Input for {@link routeAgents}. */
 export type RouteAgentsInput = {
@@ -218,71 +217,44 @@ const renderFileRoster = (files: ReadonlyArray<ChangedFile>): string =>
     })
     .join("\n");
 
-/** Parse and validate the router's findings JSON. */
+/** Agent-name decoder: rejects a value outside the catalog (mirrors `MrStateSchema`). */
+const AgentNameSchema = Schema.String.pipe(
+  Schema.filter(isAgentName, {
+    message: (issue) => `unknown agent name: ${JSON.stringify(issue.actual)}`,
+  }),
+);
+
+/**
+ * Schema for the router's JSON envelope — decodes a JSON string straight to
+ * typed {@link RoutedAgent}s. The agent-name filter rejects an unknown agent,
+ * `NonEmptyArray` rejects an empty list; both surface as a `ParseError` the
+ * caller maps to {@link RouterMalformedOutput}.
+ */
+const RouterOutputSchema = Schema.parseJson(
+  Schema.Struct({
+    agents: Schema.NonEmptyArray(
+      Schema.Struct({
+        name: AgentNameSchema,
+        files: Schema.Array(Schema.String),
+      }),
+    ),
+  }),
+);
+
+/** Decode and validate the router's findings JSON. */
 const parseRouterOutput = (
   raw: string,
-): Effect.Effect<ReadonlyArray<RoutedAgent>, RouterMalformedOutput | RouterUnknownAgent | RouterEmpty> =>
-  Effect.gen(function* () {
-    const trimmed = raw.trim();
-    if (trimmed === "") {
-      return yield* Effect.fail(
-        new RouterMalformedOutput({ reason: "findings file is empty", raw }),
-      );
-    }
-    const parsed: unknown = yield* Effect.try({
-      try: () => JSON.parse(trimmed),
-      catch: (cause) =>
-        new RouterMalformedOutput({ reason: `JSON.parse failed: ${String(cause)}`, raw: trimmed }),
-    });
-    if (parsed === null || typeof parsed !== "object" || !("agents" in parsed)) {
-      return yield* Effect.fail(
-        new RouterMalformedOutput({ reason: "missing top-level 'agents' field", raw: trimmed }),
-      );
-    }
-    const agents = (parsed as { readonly agents: unknown }).agents;
-    if (!Array.isArray(agents)) {
-      return yield* Effect.fail(
-        new RouterMalformedOutput({ reason: "'agents' is not an array", raw: trimmed }),
-      );
-    }
-    if (agents.length === 0) {
-      return yield* Effect.fail(new RouterEmpty());
-    }
-    const routed: RoutedAgent[] = [];
-    for (const item of agents) {
-      if (item === null || typeof item !== "object") {
-        return yield* Effect.fail(
-          new RouterMalformedOutput({ reason: `non-object agent entry: ${JSON.stringify(item)}`, raw: trimmed }),
-        );
-      }
-      const name = (item as { readonly name?: unknown }).name;
-      const files = (item as { readonly files?: unknown }).files;
-      if (typeof name !== "string") {
-        return yield* Effect.fail(
-          new RouterMalformedOutput({ reason: `agent.name is not a string: ${JSON.stringify(item)}`, raw: trimmed }),
-        );
-      }
-      if (!isAgentName(name)) {
-        return yield* Effect.fail(new RouterUnknownAgent({ agent: name }));
-      }
-      if (!Array.isArray(files)) {
-        return yield* Effect.fail(
-          new RouterMalformedOutput({ reason: `agent.files is not an array (agent=${name})`, raw: trimmed }),
-        );
-      }
-      const typedFiles: string[] = [];
-      for (const f of files) {
-        if (typeof f !== "string") {
-          return yield* Effect.fail(
-            new RouterMalformedOutput({ reason: `agent.files contains non-string (agent=${name})`, raw: trimmed }),
-          );
-        }
-        typedFiles.push(f);
-      }
-      routed.push({ name, files: typedFiles });
-    }
-    return routed;
-  });
+): Effect.Effect<ReadonlyArray<RoutedAgent>, RouterMalformedOutput> =>
+  Schema.decodeUnknown(RouterOutputSchema, { errors: "all" })(raw.trim()).pipe(
+    Effect.map((output) => output.agents),
+    Effect.mapError(
+      (error) =>
+        new RouterMalformedOutput({
+          reason: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 800),
+          raw,
+        }),
+    ),
+  );
 
 /**
  * `routeAgents` — spawn one haiku tmux session, hand it the diff + the agent
@@ -297,11 +269,7 @@ const parseRouterOutput = (
  */
 export const routeAgents = (
   input: RouteAgentsInput,
-): Effect.Effect<
-  RouteAgentsResult,
-  PhaseError | RouterMalformedOutput | RouterUnknownAgent | RouterEmpty,
-  RunArtifacts
-> =>
+): Effect.Effect<RouteAgentsResult, PhaseError | RouterMalformedOutput, RunArtifacts> =>
   Effect.gen(function* () {
     const artifacts = yield* RunArtifacts;
     const ref = {

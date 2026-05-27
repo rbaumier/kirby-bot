@@ -5,9 +5,7 @@ import {
   _renderAgentCatalog,
   _renderFileRoster,
   ROUTER_DIFF_MAX_BYTES,
-  RouterEmpty,
   RouterMalformedOutput,
-  RouterUnknownAgent,
   truncateDiff,
 } from "./router";
 import { AGENTS, ALL_AGENT_NAMES } from "./agents";
@@ -90,16 +88,12 @@ describe("_parseRouterOutput", () => {
     expect(Exit.isFailure(exit)).toBe(true);
   });
 
-  test("empty agents array fails with RouterEmpty", () => {
+  test("empty agents array fails with RouterMalformedOutput", () => {
     const exit = run(_parseRouterOutput(JSON.stringify({ agents: [] })));
     expect(Exit.isFailure(exit)).toBe(true);
-    if (Exit.isFailure(exit)) {
-      const failures = Array.from(exit.cause.toString());
-      expect(failures.length).toBeGreaterThan(0);
-    }
   });
 
-  test("unknown agent name fails with RouterUnknownAgent", async () => {
+  test("unknown agent name fails with RouterMalformedOutput", async () => {
     const result = await Effect.runPromiseExit(
       _parseRouterOutput(
         JSON.stringify({ agents: [{ name: "no-such-agent", files: [] }] }),
@@ -126,15 +120,9 @@ describe("_parseRouterOutput", () => {
     expect(Exit.isFailure(exit)).toBe(true);
   });
 
-  // Quiet the lint pass — these classes are exercised via the failure cases above,
-  // referencing them keeps the import honest.
-  test("error class fingerprints stable", () => {
+  test("error class fingerprint stable", () => {
     const m = new RouterMalformedOutput({ reason: "x", raw: "" });
     expect(m._tag).toBe("RouterMalformedOutput");
-    const u = new RouterUnknownAgent({ agent: "x" });
-    expect(u._tag).toBe("RouterUnknownAgent");
-    const e = new RouterEmpty();
-    expect(e._tag).toBe("RouterEmpty");
   });
 });
 
