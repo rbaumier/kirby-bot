@@ -46,6 +46,11 @@ const applyReplacements = (
  * or if any `{placeholder}` is left unresolved. A literal
  * `{worktree}` reaching the claude session would be a silently
  * wrong prompt, caught here instead.
+ *
+ * The unresolved check scans the *template*, not the rendered output:
+ * a replacement value (e.g. an issue body) may legitimately contain
+ * `${column}`-style template literals inside code spans, and those must
+ * not be mistaken for template variables the engine failed to resolve.
  */
 export const renderPrompt = (
   phase: PromptablePhase,
@@ -61,14 +66,18 @@ export const renderPrompt = (
         }),
     });
 
-    const rendered = applyReplacements(template, Object.entries(replacements));
-
-    const unresolved = rendered.match(PLACEHOLDER);
-    if (unresolved !== null) {
-      const distinct = [...new Set(unresolved)].join(", ");
+    const provided = new Set(Object.keys(replacements));
+    const unresolved = [...new Set(template.match(PLACEHOLDER) ?? [])].filter(
+      (token) => !provided.has(token.slice(1, -1)),
+    );
+    if (unresolved.length > 0) {
       return yield* Effect.fail(
-        new PromptError({ phase, reason: `template has unresolved placeholders: ${distinct}` }),
+        new PromptError({
+          phase,
+          reason: `template has unresolved placeholders: ${unresolved.join(", ")}`,
+        }),
       );
     }
-    return rendered;
+
+    return applyReplacements(template, Object.entries(replacements));
   });
