@@ -12,13 +12,12 @@
  */
 import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
-import { MAX_FIX_CYCLES } from "../config";
-import { HandlerError } from "../pipeline/errors";
+import type { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import { RunArtifacts } from "../run-artifacts";
 import { runPhaseSession } from "../session/phase";
 import { parseTriageFile, type TriageRow } from "../stats/events";
-import { mrPhaseOptions, phaseHandlerError, pipelineContext } from "./runner";
+import { mrPhaseOptions, phaseHandlerError, pipelineContext, toFixUnlessCapped } from "./runner";
 
 /** Read and tolerantly parse the session's `triage.json`; never fails. */
 const readTriageRows = (path: string): Effect.Effect<TriageRow[]> =>
@@ -59,12 +58,5 @@ export const evaluatePhase = (
     if (verdict === "CONVERGED") {
       return { kind: "qa", ...pipelineContext(state), fixCycles };
     }
-    if (MAX_FIX_CYCLES <= fixCycles) {
-      return yield* Effect.fail(
-        new HandlerError({
-          reason: `fix_cycle_cap: ${MAX_FIX_CYCLES} fix cycles without convergence`,
-        }),
-      );
-    }
-    return { kind: "fix", ...pipelineContext(state), fixCycles };
+    return yield* toFixUnlessCapped(state, "fix cycles without convergence");
   });

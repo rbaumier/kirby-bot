@@ -66,7 +66,17 @@ const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : u
 const asStrArr = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
-const ACCEPTED: ReadonlySet<TriageValue> = new Set<TriageValue>(["real", "real-but-bloated-remedy"]);
+/** Which `AgentStats` tally a triage value increments (absent triage → untriaged). */
+type TriageBucket = "accepted" | "rejected" | "punted" | "untriaged";
+
+/** Exhaustive map: a new `TriageValue` is a compile error until it picks a bucket. */
+const TRIAGE_BUCKET: Record<TriageValue, TriageBucket> = {
+  real: "accepted",
+  "real-but-bloated-remedy": "accepted",
+  imagined: "rejected",
+  punt: "punted",
+  unknown: "untriaged",
+};
 
 /** Mutable accumulator, one per issue, finalized into IssueStats at the end. */
 type IssueAcc = {
@@ -126,15 +136,7 @@ const agentOf = (acc: IssueAcc, name: string): AgentStats => {
 /** Classify one Finding against its thread's triage, mutating the agent row. */
 const tally = (agent: AgentStats, count: number, triage: TriageValue | undefined): void => {
   agent.findings += count;
-  if (triage === undefined || triage === "unknown") {
-    agent.untriaged += count;
-  } else if (ACCEPTED.has(triage)) {
-    agent.accepted += count;
-  } else if (triage === "imagined") {
-    agent.rejected += count;
-  } else {
-    agent.punted += count;
-  }
+  agent[triage === undefined ? "untriaged" : TRIAGE_BUCKET[triage]] += count;
 };
 
 /** Fold every `review_findings` against the matching iteration's triage map. */
