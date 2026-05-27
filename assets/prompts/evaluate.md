@@ -59,6 +59,26 @@ Every Bash call runs from inside `{worktree}`.
    If a `resolve` call exits non-zero, retry it once; if it still fails, end
    with the `NEEDS_FIX` verdict — a thread you could not resolve still blocks.
 
+4. **Record your triage.** Once you have acted on every thread, write a JSON
+   array to `{triage_file}` — one object per discussion you triaged this
+   session. The run's stats use it to attribute each accept/reject back to the
+   review agent that raised the finding:
+
+       [
+         { "discussionId": "<id>", "triage": "imagined" },
+         { "discussionId": "<id>", "triage": "real" }
+       ]
+
+   Map each thread to exactly one `triage` value, using the `discussionId`
+   verbatim from the `mr-discussion.ts list` output:
+   - `imagined` — subagent verdict `imagined` (you replied why, then resolved).
+   - `real` — subagent verdict `real` (left unresolved for `fix`).
+   - `real-but-bloated-remedy` — subagent verdict `real-but-bloated-remedy`.
+   - `punt` — a `severity: suggestion` thread you left for a human.
+
+   This file is best-effort telemetry. If you cannot write it, do NOT change
+   your verdict — end the session normally.
+
 ## Context-verification protocol (the evaluator subagent's checklist)
 
 For every finding, the subagent answers these. If any answer kills the

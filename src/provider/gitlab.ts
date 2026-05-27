@@ -127,7 +127,7 @@ export const GitLabProviderLive: Layer.Layer<GitProvider> = Layer.succeed(
       ),
 
     postDiscussion: (pullRequestIid: number, body: string) =>
-      adaptCall(glPostDiscussion(pullRequestIid, body)),
+      adaptCall(glPostDiscussion(pullRequestIid, body)).pipe(Effect.map(DiscussionId)),
 
     replyToDiscussion: (pullRequestIid: number, discussionId: DiscussionId, body: string) =>
       adaptCall(glReplyToDiscussion(pullRequestIid, discussionId, body)),

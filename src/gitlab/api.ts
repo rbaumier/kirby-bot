@@ -252,11 +252,15 @@ export const listDiscussions = (
     DiscussionListSchema,
   ).pipe(Effect.map((raw) => raw.map((disc) => toDiscussionSummary(disc))));
 
-/** Create a new general, resolvable discussion carrying `body`. */
+/**
+ * Create a new general, resolvable discussion carrying `body`. Returns the
+ * created thread's id (stringified — GitLab discussion ids are string hashes),
+ * which callers join review findings to evaluator triage on.
+ */
 export const postDiscussion = (
   mergeRequestIid: number,
   body: string,
-): Effect.Effect<void, ProviderError> =>
+): Effect.Effect<string, ProviderError> =>
   runGitLabWrite(
     {
       method: "POST",
@@ -264,7 +268,7 @@ export const postDiscussion = (
       body: { body },
     },
     HasIdSchema,
-  ).pipe(Effect.asVoid);
+  ).pipe(Effect.map((res) => String(res.id)));
 
 /**
  * Add a note (a reply) to an existing discussion thread. The response is

@@ -22,6 +22,7 @@
 import { Console, Effect } from "effect";
 import { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
+import { RunArtifacts } from "../run-artifacts";
 import type { AggregatedReview, LineAnchoredFinding, ProseFinding } from "./aggregate";
 
 /** Parallel discussion-posts per request — keeps GitLab happy on big diffs. */
@@ -77,10 +78,24 @@ const formatProseSummary = (findings: ReadonlyArray<ProseFinding>): string => {
   ].join("\n");
 };
 
+/** Collapse prose findings into per-Agent counts for the `review_findings` event. */
+const countByAgent = (
+  findings: ReadonlyArray<ProseFinding>,
+): { agent: string; count: number }[] => {
+  const counts = new Map<string, number>();
+  for (const finding of findings) {
+    counts.set(finding.agent, (counts.get(finding.agent) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([agent, count]) => ({ agent, count }));
+};
+
 /** Input for {@link postReviewToMr}. */
 export type PostReviewToMrInput = {
   readonly mrIid: number;
   readonly review: AggregatedReview;
+  /** The issue + review iteration this post belongs to — tags `review_findings`. */
+  readonly issueIid: number;
+  readonly iteration: number;
 };
 
 /** Result — how many discussions were posted. */
@@ -100,9 +115,10 @@ export type PostReviewToMrResult = {
  */
 export const postReviewToMr = (
   input: PostReviewToMrInput,
-): Effect.Effect<PostReviewToMrResult, ProviderCallError, GitProvider> =>
+): Effect.Effect<PostReviewToMrResult, ProviderCallError, GitProvider | RunArtifacts> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
+    const artifacts = yield* RunArtifacts;
 
     // 1. Resolve any unresolved discussion from a prior iteration — old
     //    threads would otherwise confuse the evaluator into re-judging them.
@@ -119,26 +135,47 @@ export const postReviewToMr = (
       { concurrency: POST_CONCURRENCY },
     );
 
-    // 2. Post each line-anchored finding as its own resolvable thread.
-    const lineBodies = input.review.lineAnchoredFindings.map(formatLineAnchoredBody);
-    yield* Effect.forEach(
-      lineBodies,
-      (body) => provider.postDiscussion(input.mrIid, body),
+    // 2. Post each line-anchored finding as its own resolvable thread, keeping
+    //    the finding object so the returned thread id stays attributed to its
+    //    emitting Agent (forEach preserves input order).
+    const postedLine = yield* Effect.forEach(
+      input.review.lineAnchoredFindings,
+      (finding) =>
+        provider
+          .postDiscussion(input.mrIid, formatLineAnchoredBody(finding))
+          .pipe(Effect.map((discussionId) => ({ discussionId, finding }))),
       { concurrency: POST_CONCURRENCY },
     );
 
     // 3. Collapse prose findings into one summary thread (if any).
-    const summaryPosted = input.review.proseFindings.length > 0;
-    if (summaryPosted) {
-      yield* provider.postDiscussion(
-        input.mrIid,
-        formatProseSummary(input.review.proseFindings),
-      );
-    }
+    const proseFindings = input.review.proseFindings;
+    const proseDiscussionId =
+      proseFindings.length > 0
+        ? yield* provider.postDiscussion(input.mrIid, formatProseSummary(proseFindings))
+        : undefined;
 
-    const posted = lineBodies.length + (summaryPosted ? 1 : 0);
+    // 4. Log review_findings — kirby-bot owns the Agent attribution here; the
+    //    stats projection joins it to triage_results on discussionId.
+    yield* artifacts.logEvent({
+      event: "review_findings",
+      issueIid: input.issueIid,
+      iteration: input.iteration,
+      findings: postedLine.map(({ discussionId, finding }) => ({
+        discussionId,
+        agent: finding.agent,
+        file: finding.file,
+        line: finding.line,
+        severity: finding.severity,
+      })),
+      ...(proseDiscussionId === undefined
+        ? {}
+        : { prose: { discussionId: proseDiscussionId, byAgent: countByAgent(proseFindings) } }),
+    });
+
+    const summaryPosted = proseDiscussionId !== undefined;
+    const posted = postedLine.length + (summaryPosted ? 1 : 0);
     yield* Console.log(
-      `[review] !${input.mrIid}: posted ${posted} discussions (${lineBodies.length} line-anchored + ${summaryPosted ? 1 : 0} prose summary), resolved ${stale.length} stale`,
+      `[review] !${input.mrIid}: posted ${posted} discussions (${postedLine.length} line-anchored + ${summaryPosted ? 1 : 0} prose summary), resolved ${stale.length} stale`,
     );
 
     return { posted, resolvedStale: stale.length };

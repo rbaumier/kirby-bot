@@ -71,7 +71,7 @@ export const reviewPhase = (
     // Best-effort: posting failures get logged but don't fail the phase. The
     // evaluate phase reads from the MR — if posts dropped, evaluate will see
     // a thinner review, but the pipeline keeps moving instead of stalling.
-    yield* postReviewToMr({ mrIid: pullRequestIid, review }).pipe(
+    yield* postReviewToMr({ mrIid: pullRequestIid, review, issueIid: issue.iid, iteration: fixCycles }).pipe(
       Effect.catchAll((error) =>
         Console.error(`  ⚠ ${tag}: post failed — ${describeProviderError(error)}`),
       ),

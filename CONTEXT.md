@@ -21,6 +21,16 @@ A typed token emitted by an Interactive Phase to signal what happened. Captured 
 
 Known tokens: `READY_FOR_REVIEW`, `BLOCKER_SUSPECTED`, `REVIEW_DONE`, `CONVERGED`, `NEEDS_FIX`, `FIX_DONE`, `DOGFOOD_PASS`, `DOGFOOD_FAIL`. Each Phase declares the subset it can emit; the state machine routes on the Verdict.
 
+### Finding
+
+A single issue raised by a review Agent during the `review` Phase. Line-anchored Findings (file + line + severity + confidence + analysis chain + fix prompt) are each posted as one resolvable MR Discussion; prose Findings (architectural / scope-level) collapse into one summary thread. A Finding carries its emitting Agent in the discussion body.
+_Avoid_: comment, remark, issue (an Issue is the upstream work item).
+
+### Triage
+
+The `evaluate` Phase's per-Finding judgment — one of `real`, `real-but-bloated-remedy`, `imagined`, or a punt (`severity: suggestion` Findings → "left for a human"). `real` / `real-but-bloated-remedy` leave the Discussion unresolved for `fix` (the Finding is *accepted*); `imagined` and suggestions are resolved. Distinct from **Verdict**: a Verdict is the phase-level outcome token, a Triage is per-Finding.
+_Avoid_: verdict (reserved for phase tokens), adjudication, ruling, assessment.
+
 ### Session
 
 The mechanism a Phase uses to run a single `claude` invocation in isolation: spawn a tmux session with the rendered prompt, register a Stop hook (`src/session/stop-hook.ts`) that writes the last assistant message to a sentinel **iff `stop_reason === "end_turn"`** (or the event is `StopFailure`), poll the sentinel, parse the Verdict, kill the tmux. On any other `stop_reason` the hook emits `{"decision":"block"}` on stdout so Claude Code resumes the agent loop instead of stopping prematurely — that branch is what catches mid-turn Stops while subagents or `tool_use` rounds are still in flight (see #29). The Session Module hides tmux/sentinel/verdict-parsing behind a small interface; the Phase only sees `runPhaseSession(input, expected) → Effect<V, PhaseError, RunArtifacts>`, where `V extends VerdictToken` is narrowed to the expected set and an off-set verdict fails with `UnexpectedVerdictError`.

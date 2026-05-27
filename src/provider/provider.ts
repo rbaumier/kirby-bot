@@ -61,7 +61,7 @@ export class GitProvider extends Context.Tag("GitProvider")<
     readonly postDiscussion: (
       pullRequestIid: number,
       body: string,
-    ) => Effect.Effect<void, ProviderCallError>;
+    ) => Effect.Effect<DiscussionId, ProviderCallError>;
 
     readonly replyToDiscussion: (
       pullRequestIid: number,

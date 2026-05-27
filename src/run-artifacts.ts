@@ -52,6 +52,11 @@ export type RunArtifactsShape = {
    * Only meaningful when `ref.agent` is set.
    */
   readonly findingsPath: (ref: PhaseRef) => string;
+  /**
+   * The file the `evaluate` session writes its per-Finding Triage into, keyed
+   * by discussionId. Read back by `evaluatePhase` to log `triage_results`.
+   */
+  readonly triagePath: (ref: PhaseRef) => string;
   /** The tmux session name for one phase run. */
   readonly sessionName: (ref: PhaseRef) => string;
   /**
@@ -86,6 +91,7 @@ const shapeFor = (dir: string): RunArtifactsShape => {
     tmuxLogPath: (ref) => join(dir, `tmux-${refSuffix(ref)}.log`),
     promptFilePath: (ref) => join(dir, `prompt-${refSuffix(ref)}.md`),
     findingsPath: (ref) => join(dir, `findings-${refSuffix(ref)}.json`),
+    triagePath: (ref) => join(dir, `triage-${refSuffix(ref)}.json`),
     sessionName: (ref) => `afk-${refSuffix(ref)}`,
     logEvent: (event) =>
       Effect.gen(function* () {

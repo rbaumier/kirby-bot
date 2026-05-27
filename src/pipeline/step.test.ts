@@ -22,6 +22,7 @@ const noopRunArtifacts: RunArtifactsShape = {
   tmuxLogPath: () => "/tmp/test-run-dir/tmux.log",
   promptFilePath: () => "/tmp/test-run-dir/prompt.md",
   findingsPath: () => "/tmp/test-run-dir/findings.json",
+  triagePath: () => "/tmp/test-run-dir/triage.json",
   sessionName: () => "test-session",
   logEvent: () => Effect.void,
 };
