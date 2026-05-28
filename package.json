@@ -10,7 +10,8 @@
   "scripts": {
     "test": "bun test src/",
     "typecheck": "tsc --noEmit",
-    "setup-skills": "bun scripts/setup-skills.ts"
+    "setup-skills": "bun scripts/setup-skills.ts",
+    "analytics": "bun scripts/analytics.ts"
   },
   "dependencies": {
     "@effect/platform": "^0.96.1",

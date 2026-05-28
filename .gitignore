@@ -11,3 +11,5 @@ node-compile-cache/
 bunx-*/
 v1b-sandbox-setup.ts
 .claude/skills/
+kirby-analytics*.html
+kirby-night-*.html
