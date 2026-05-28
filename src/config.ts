@@ -62,7 +62,21 @@ export const MAX_CONCURRENT_AGENTS = 20;
 export const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 /** The most review→fix cycles allowed before the issue is failed for a human. */
-export const MAX_FIX_CYCLES = 10;
+export const MAX_FIX_CYCLES = 2;
+
+/**
+ * Hard byte-cap on each per-agent diff slice handed to a fan-out reviewer.
+ *
+ * A run-away diff (mass refactor, large generated file, lockfile dropped into
+ * a slice by mistake) explodes prompt size → cache-creation cost → token bill.
+ * Truncating at this cap is a pure cost guard: the reviewer sees the first
+ * {@link MAX_DIFF_SLICE_BYTES} bytes of its scoped diff plus a
+ * `[truncated, N bytes omitted]` marker, and still gets to flag what it sees.
+ *
+ * 40 KB ≈ 10 K input tokens — large enough to host most real diffs after the
+ * router's per-file scoping, small enough to bound the worst case.
+ */
+export const MAX_DIFF_SLICE_BYTES = 40_000;
 
 /** Where per-issue git worktrees live — one subdirectory per repository. */
 export const WORKTREES_DIR = join(homedir(), ".afk-worktrees");
