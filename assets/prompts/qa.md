@@ -94,17 +94,30 @@ corrupt the shared worktree:
 You never fix anything — not even a one-liner. An in-scope bug fails the gate
 to a human; that is deliberate.
 
-## Ending your session
+## Ending your session — strict contract
 
-The orchestrator reads your final assistant message to learn how this phase
-ended. Two mandatory rules:
+The orchestrator parses ONLY a single line from your output. Miss it and the
+phase fails.
 
-- The **last line** of your message is the word `VERDICT:`, a space, then one
-  token — `QA_PASS` (no in-scope bug: clean, or only out-of-scope filed)
-  or `QA_FAIL` (at least one in-scope runtime bug, or boot failed in Step 2).
-  Nothing after it.
-- The text `VERDICT:` must appear **exactly once** in your whole message —
-  only on that last line. Zero, or more than one, and the orchestrator fails
-  the issue.
+**Mandatory final line — literally, exactly one of:**
+
+```
+VERDICT: QA_PASS
+VERDICT: QA_FAIL
+```
+
+Use `QA_PASS` when no in-scope bug remains (clean, or only out-of-scope
+filed). Use `QA_FAIL` when at least one in-scope runtime bug is present, or
+boot failed in Step 2.
+
+These tokens are an **exhaustive enum**. `PASS`, `FAIL`, `DONE`, lowercase
+variants (`Verdict :`), and markdown-bold (`**VERDICT: QA_PASS**`) all
+**FAIL** the parser. No other token, casing, punctuation, or wrapper is
+accepted.
+
+Constraints (each violation = failure):
+- The line must be the **last non-empty line** of your message.
+- The literal text `VERDICT:` must appear **exactly once** in the whole message.
+- Nothing on the line after the token — no period, no parenthetical, no emoji.
 
 Begin now.

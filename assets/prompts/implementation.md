@@ -62,16 +62,28 @@ These are NOT blockers — they mean try harder, not stop:
 - "I don't know how" / "follow-up for human triage"
 - anything resting on the words "complex", "unclear", "should", "probably"
 
-## Ending your session
+## Ending your session — strict contract
 
-The orchestrator reads your final assistant message to learn how this phase
-ended. Two mandatory rules:
+The orchestrator parses ONLY a single line from your output. Miss it and the
+issue is failed, no matter how complete your implementation is.
 
-- The **last line** of your message is the word `VERDICT:`, a space, then one
-  token — `READY_FOR_REVIEW` (implemented, committed, pushed, local tests
-  pass) or `BLOCKER_SUSPECTED` (genuinely blocked). Nothing after it.
-- The text `VERDICT:` must appear **exactly once** in your whole message —
-  only on that last line. Zero, or more than one, and the orchestrator
-  cannot read your verdict and fails the issue.
+**Mandatory final line — literally, exactly one of:**
+
+```
+VERDICT: READY_FOR_REVIEW
+VERDICT: BLOCKER_SUSPECTED
+```
+
+These tokens are an **exhaustive enum**. `DONE`, `SUCCESS`, `COMPLETE`,
+`FIX_DONE`, lowercase variants (`Verdict :`), and markdown-bold
+(`**VERDICT: READY_FOR_REVIEW**`) all **FAIL** the parser. No other token,
+casing, punctuation, or wrapper is accepted.
+
+Constraints (each violation = failure):
+- The line must be the **last non-empty line** of your message.
+- The literal text `VERDICT:` must appear **exactly once** in the whole message.
+- Nothing on the line after the token — no period, no parenthetical, no emoji.
+- Closing prose (MR link, summary) may appear ABOVE the verdict line. Even
+  after writing "MR created: …", append the verdict line as the very last line.
 
 Begin now.

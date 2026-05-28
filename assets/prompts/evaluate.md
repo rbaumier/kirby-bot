@@ -97,19 +97,29 @@ finding, it is `imagined`:
 5. **Type tracing** — for a claimed type mismatch, trace the value through
    the diff. If a conversion exists anywhere on the path → imagined.
 
-## Ending your session
+## Ending your session — strict contract
 
-The orchestrator reads your final assistant message to learn how this phase
-ended. Two mandatory rules:
+The orchestrator parses ONLY a single line from your output. Miss it and the
+phase fails.
 
-- The **last line** of your message is the word `VERDICT:`, a space, then one
-  token:
-  - `CONVERGED` — no unresolved blocking discussion remains (every finding
-    was imagined, a suggestion, or already resolved); nothing for `fix`.
-  - `NEEDS_FIX` — at least one real finding is left unresolved for `fix`.
-  Nothing after that line.
-- The text `VERDICT:` must appear **exactly once** in your whole message —
-  only on that last line. Zero, or more than one, and the orchestrator fails
-  the issue.
+**Mandatory final line — literally, exactly one of:**
+
+```
+VERDICT: CONVERGED
+VERDICT: NEEDS_FIX
+```
+
+Use `CONVERGED` when no unresolved blocking discussion remains (every finding
+was imagined, a suggestion, or already resolved). Use `NEEDS_FIX` when at
+least one real finding is left unresolved for `fix`.
+
+These tokens are an **exhaustive enum**. `DONE`, lowercase variants
+(`Verdict :`), and markdown-bold (`**VERDICT: CONVERGED**`) all **FAIL** the
+parser. No other token, casing, punctuation, or wrapper is accepted.
+
+Constraints (each violation = failure):
+- The line must be the **last non-empty line** of your message.
+- The literal text `VERDICT:` must appear **exactly once** in the whole message.
+- Nothing on the line after the token — no period, no parenthetical, no emoji.
 
 Begin now.

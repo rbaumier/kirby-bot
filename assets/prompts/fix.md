@@ -57,15 +57,24 @@ escape hatch.)
 - Hedge.
 - Apply a fix you have not verified builds and passes the suite.
 
-## Ending your session
+## Ending your session — strict contract
 
-The orchestrator reads your final assistant message to learn how this phase
-ended. Two mandatory rules:
+The orchestrator parses ONLY a single line from your output. Miss it and the
+phase fails.
 
-- The **last line** of your message is the word `VERDICT:`, a space, then the
-  token `FIX_DONE`. Nothing after it.
-- The text `VERDICT:` must appear **exactly once** in your whole message —
-  only on that last line. Zero, or more than one, and the orchestrator fails
-  the issue.
+**Mandatory final line — literally:**
+
+```
+VERDICT: FIX_DONE
+```
+
+`FIX_DONE` is the only accepted token. `DONE`, `SUCCESS`, lowercase variants
+(`Verdict :`), and markdown-bold (`**VERDICT: FIX_DONE**`) all **FAIL** the
+parser. No other token, casing, punctuation, or wrapper is accepted.
+
+Constraints (each violation = failure):
+- The line must be the **last non-empty line** of your message.
+- The literal text `VERDICT:` must appear **exactly once** in the whole message.
+- Nothing on the line after the token — no period, no parenthetical, no emoji.
 
 Begin now.
