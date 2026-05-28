@@ -53,7 +53,7 @@ describe("_parseRouterOutput", () => {
   test("valid JSON with known agents parses to RoutedAgent[]", () => {
     const raw = JSON.stringify({
       agents: [
-        { name: "funnel-l1", files: [] },
+        { name: "funnel", files: [] },
         { name: "language-rust", files: ["src/a.rs", "src/b.rs"] },
       ],
     });
@@ -61,7 +61,7 @@ describe("_parseRouterOutput", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     if (Exit.isSuccess(exit)) {
       expect(exit.value).toHaveLength(2);
-      expect(exit.value[0]).toEqual({ name: "funnel-l1", files: [] });
+      expect(exit.value[0]).toEqual({ name: "funnel", files: [] });
       expect(exit.value[1]).toEqual({
         name: "language-rust",
         files: ["src/a.rs", "src/b.rs"],
@@ -105,7 +105,7 @@ describe("_parseRouterOutput", () => {
   test("non-array files fails with RouterMalformedOutput", () => {
     const exit = run(
       _parseRouterOutput(
-        JSON.stringify({ agents: [{ name: "funnel-l1", files: "src/a.ts" }] }),
+        JSON.stringify({ agents: [{ name: "funnel", files: "src/a.ts" }] }),
       ),
     );
     expect(Exit.isFailure(exit)).toBe(true);
@@ -114,7 +114,7 @@ describe("_parseRouterOutput", () => {
   test("non-string file entry fails with RouterMalformedOutput", () => {
     const exit = run(
       _parseRouterOutput(
-        JSON.stringify({ agents: [{ name: "funnel-l1", files: [42] }] }),
+        JSON.stringify({ agents: [{ name: "funnel", files: [42] }] }),
       ),
     );
     expect(Exit.isFailure(exit)).toBe(true);

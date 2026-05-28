@@ -64,15 +64,10 @@ export type AgentEntry = {
 
 const AGENTS_DATA = {
   // ─── Funnel & generalists ──────────────────────────────────────────────
-  "funnel-l1": {
+  funnel: {
     model: "haiku",
-    description: "Question the need: does this code need to exist at all? Spawn on every diff.",
-    prompt: { kind: "self-contained", templateFile: "funnel-l1.md" },
-  },
-  "funnel-l2": {
-    model: "haiku",
-    description: "Reduce scope: smallest perimeter solving the validated need. Spawn on every diff.",
-    prompt: { kind: "self-contained", templateFile: "funnel-l2.md" },
+    description: "Question the need + reduce scope: does this code need to exist, and is the perimeter the smallest possible? Spawn on every diff.",
+    prompt: { kind: "self-contained", templateFile: "funnel.md" },
   },
   "occam-razor": {
     model: "haiku",

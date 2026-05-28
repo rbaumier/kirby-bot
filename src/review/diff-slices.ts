@@ -20,6 +20,7 @@ import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { $ } from "bun";
 import { Data, Effect } from "effect";
+import { MAX_DIFF_SLICE_BYTES } from "../config";
 import { describeShellError, runShell } from "../shell";
 import type { AgentName } from "./agents";
 import type { RoutedAgent } from "./router";
@@ -33,14 +34,29 @@ export class DiffSliceError extends Data.TaggedError("DiffSliceError")<{
 }> {}
 
 /**
+ * Truncate a diff payload to {@link MAX_DIFF_SLICE_BYTES}, appending a marker
+ * so the reviewer knows bytes were dropped. Exported for testing.
+ */
+export const capDiffPayload = (raw: string): string => {
+  const utf8Bytes = Buffer.byteLength(raw, "utf8");
+  if (utf8Bytes <= MAX_DIFF_SLICE_BYTES) { return raw; }
+  const truncated = Buffer.from(raw, "utf8").subarray(0, MAX_DIFF_SLICE_BYTES).toString("utf8");
+  const omitted = utf8Bytes - Buffer.byteLength(truncated, "utf8");
+  return `${truncated}\n\n[truncated by kirby-bot diff-slice cap: ${omitted} bytes omitted of ${utf8Bytes} total]\n`;
+};
+
+/**
  * Run `git diff $defaultBranch...HEAD -- <files>` and write the output to
- * `outPath` atomically (via `.tmp` + rename).
+ * `outPath` atomically (via `.tmp` + rename). When `cap === true`, the output
+ * is truncated to {@link MAX_DIFF_SLICE_BYTES} so a runaway per-agent slice
+ * cannot blow up the reviewer's prompt cost.
  */
 const writeGitDiff = (
   agent: AgentNameOrFull,
   defaultBranch: string,
   outPath: string,
   files: readonly string[],
+  cap: boolean,
 ): Effect.Effect<string, DiffSliceError> =>
   Effect.gen(function* () {
     const range = `${defaultBranch}...HEAD`;
@@ -57,8 +73,9 @@ const writeGitDiff = (
       ),
     );
 
+    const payload = cap ? capDiffPayload(result.stdout) : result.stdout;
     yield* Effect.tryPromise({
-      try: () => writeFile(tmpPath, result.stdout),
+      try: () => writeFile(tmpPath, payload),
       catch: (cause) =>
         new DiffSliceError({ agent, reason: `write tmp failed — ${String(cause)}` }),
     });
@@ -74,6 +91,11 @@ const writeGitDiff = (
  * `writeFullDiff` — write the full `git diff $defaultBranch...HEAD` to a
  * single path. Used both as the input to the routing haiku and as the
  * shared `{diff_file}` for every full-diff agent the router picks.
+ *
+ * NOT capped — the router needs the whole picture to decide which agents to
+ * spawn. Full-diff agents (correctness, funnel) read this same file; if it
+ * exceeds the budget, the cost guard is the router itself shrinking the
+ * fan-out, not silent truncation.
  */
 type WriteFullDiffInput = {
   readonly defaultBranch: string;
@@ -81,7 +103,7 @@ type WriteFullDiffInput = {
 };
 
 export const writeFullDiff = (input: WriteFullDiffInput): Effect.Effect<string, DiffSliceError> =>
-  writeGitDiff("full", input.defaultBranch, input.outPath, []);
+  writeGitDiff("full", input.defaultBranch, input.outPath, [], false);
 
 /** Input for {@link writeDiffSlices}. */
 export type WriteDiffSlicesInput = {
@@ -129,7 +151,7 @@ export const writeDiffSlices = (
       agentsNeedingSlice,
       ({ agent, scope }) => {
         const slicePath = join(input.slicesDir, `${input.slug}-${agent}.patch`);
-        return writeGitDiff(agent, input.defaultBranch, slicePath, scope).pipe(
+        return writeGitDiff(agent, input.defaultBranch, slicePath, scope, true).pipe(
           Effect.map((path) => [agent, path] as const),
         );
       },
