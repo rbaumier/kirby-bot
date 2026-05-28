@@ -22,7 +22,7 @@
 import { writeFile } from "node:fs/promises";
 import { Clock, Console, Data, Effect, ParseResult, Schema } from "effect";
 import type { Phase } from "../config";
-import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
+import { MAX_ROUTER_ATTEMPTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "../session/errors";
 import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "../session/errors";
@@ -39,6 +39,34 @@ const TRUNCATION_MARKER = "\n\n... [truncated by kirby-bot router]";
 
 /** Haiku cap — the router is fast; this is the wall-clock hedge if it hangs. */
 const ROUTER_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Total bytes of router raw output echoed into a `router_failed` event. Big
+ * enough to host the head + tail of a multi-KB malformed envelope (capturing
+ * both the opening structure and the offending tail index that the
+ * TreeFormatter's `reason` typically points to), small enough that two failing
+ * attempts can't bloat `run.jsonl`.
+ */
+const ROUTER_RAW_LOG_CAP = 4000;
+
+/**
+ * Build a log-friendly view of the raw payload: emit it whole when under the
+ * cap, otherwise head + tail (each half the cap) so the entries are bounded
+ * but still informative about *where* the schema decoder gave up.
+ */
+const summarizeRaw = (
+  raw: string,
+): {
+  readonly rawLength: number;
+  readonly raw?: string;
+  readonly rawHead?: string;
+  readonly rawTail?: string;
+} => {
+  const rawLength = raw.length;
+  if (rawLength <= ROUTER_RAW_LOG_CAP) { return { rawLength, raw }; }
+  const half = ROUTER_RAW_LOG_CAP / 2;
+  return { rawLength, rawHead: raw.slice(0, half), rawTail: raw.slice(-half) };
+};
 
 /**
  * The router produced output the orchestrator can't act on: unparseable JSON,
@@ -248,26 +276,38 @@ const RouterOutputSchema = Schema.parseJson(
 /** Decode and validate the router's findings JSON. */
 const parseRouterOutput = (
   raw: string,
-): Effect.Effect<readonly RoutedAgent[], RouterMalformedOutput> =>
-  Schema.decodeUnknown(RouterOutputSchema, { errors: "all" })(raw.trim()).pipe(
+): Effect.Effect<readonly RoutedAgent[], RouterMalformedOutput> => {
+  // An empty file is a distinct mode (atomic rename failed, disk full, prompt
+  // misread) — flag it with a clear reason instead of the noisy decoder dump.
+  if (raw.trim() === "") {
+    return Effect.fail(
+      new RouterMalformedOutput({ reason: "router wrote empty findings file", raw }),
+    );
+  }
+  return Schema.decodeUnknown(RouterOutputSchema, { errors: "all" })(raw.trim()).pipe(
     Effect.map((output) => output.agents),
     Effect.mapError(
       (error) =>
         new RouterMalformedOutput({
-          reason: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 800),
+          reason: ParseResult.TreeFormatter.formatErrorSync(error).slice(0, 2400),
           raw,
         }),
     ),
   );
+};
 
 /**
  * `routeAgents` — spawn one haiku tmux session, hand it the diff + the agent
  * catalog, return the routing decision.
  *
  * Failure modes:
- *  - Session timeout / no verdict → propagated as PhaseError.
- *  - JSON parse failure / unknown agent / empty agent list → fail with a
- *    typed RouterError. The caller (review phase) maps these to a
+ *  - Session timeout / no verdict → propagated as PhaseError. Not retried —
+ *    that's capacity, not an LLM shape glitch.
+ *  - JSON parse failure / unknown agent / empty agent list → up to
+ *    {@link MAX_ROUTER_ATTEMPTS} attempts before propagating as
+ *    RouterMalformedOutput. Each attempt uses a distinct `ref.agent`
+ *    (`router`, `router-r1`, …) so sentinel/findings/tmux/session paths
+ *    never collide. The caller (review phase) maps the final failure to a
  *    HandlerError that fails the whole phase — no heuristic fallback by
  *    design.
  */
@@ -276,14 +316,10 @@ export const routeAgents = (
 ): Effect.Effect<RouteAgentsResult, PhaseError | RouterMalformedOutput, RunArtifacts> =>
   Effect.gen(function* () {
     const artifacts = yield* RunArtifacts;
-    const ref = {
-      issueIid: input.issueIid,
-      phase: input.phase,
-      iteration: input.iteration,
-      agent: "router",
-    };
 
-    // Wall-clock cap = min(router-specific cap, budget left, phase cap).
+    // Wall-clock cap = min(router-specific cap, budget left, phase cap). All
+    // attempts share this single budget — a parse failure must not reset the
+    // deadline.
     const phaseBudgetMs = input.deadline - (yield* Clock.currentTimeMillis);
     const timeoutMs = Math.min(
       ROUTER_TIMEOUT_MS,
@@ -296,80 +332,116 @@ export const routeAgents = (
 
     const { text: diffText, truncated } = truncateDiff(input.fullDiff);
     const diffBytesSent = Buffer.byteLength(diffText, "utf8");
+    const agentCatalog = renderAgentCatalog();
+    const fileRoster = renderFileRoster(input.files);
 
-    const findingsFile = artifacts.findingsPath(ref);
-    const promptFile = artifacts.promptFilePath(ref);
-    const sentinel = artifacts.sentinelPath(ref);
-    const tmuxLogPath = artifacts.tmuxLogPath(ref);
-    const session = artifacts.sessionName(ref);
-
-    const promptText = buildRouterPrompt({
-      findingsFile,
-      agentCatalog: renderAgentCatalog(),
-      fileRoster: renderFileRoster(input.files),
-      diffText,
-      truncated,
-    });
-
-    yield* Effect.tryPromise({
-      try: () => writeFile(promptFile, promptText),
-      catch: (cause) =>
-        new WorkspaceError({
+    const tryRoute = (
+      attempt: number,
+    ): Effect.Effect<readonly RoutedAgent[], PhaseError | RouterMalformedOutput, RunArtifacts> =>
+      Effect.gen(function* () {
+        // Attempt 0 keeps the original `router` agent slot so existing artifact
+        // paths and log greps are unchanged; retries get a suffixed slot.
+        const refAgent = attempt === 0 ? "router" : `router-r${attempt}`;
+        const ref = {
+          issueIid: input.issueIid,
           phase: input.phase,
-          operation: "write router prompt",
-          reason: String(cause),
-        }),
-    });
+          iteration: input.iteration,
+          agent: refAgent,
+        };
+        const findingsFile = artifacts.findingsPath(ref);
+        const promptFile = artifacts.promptFilePath(ref);
+        const sentinel = artifacts.sentinelPath(ref);
+        const tmuxLogPath = artifacts.tmuxLogPath(ref);
+        const session = artifacts.sessionName(ref);
 
-    yield* artifacts.logEvent({
-      event: "router_starting",
-      phase: input.phase,
-      iteration: input.iteration,
-      issueIid: input.issueIid,
-      diffBytesSent,
-      truncated,
-      fileCount: input.files.length,
-    });
-    yield* Console.log(
-      `[#${input.issueIid} ${input.phase}[${input.iteration}]] router (haiku) on ${input.files.length} files, ${diffBytesSent} bytes${truncated ? " (truncated)" : ""}`,
-    );
+        const promptText = buildRouterPrompt({
+          findingsFile,
+          agentCatalog,
+          fileRoster,
+          diffText,
+          truncated,
+        });
 
-    const verdict = yield* runOneClaudeSession({
-      phase: input.phase,
-      worktree: input.worktree,
-      session,
-      tmuxLogPath,
-      promptFile,
-      sentinel,
-      timeoutMs,
-      logContext: {
-        issueIid: input.issueIid,
-        iteration: input.iteration,
-        agent: "router",
-      },
-      model: "haiku",
-    });
-    if (verdict !== "ROUTING_DONE") {
-      return yield* Effect.fail(
-        new UnexpectedVerdictError({
+        yield* Effect.tryPromise({
+          try: () => writeFile(promptFile, promptText),
+          catch: (cause) =>
+            new WorkspaceError({
+              phase: input.phase,
+              operation: "write router prompt",
+              reason: String(cause),
+            }),
+        });
+
+        yield* artifacts.logEvent({
+          event: "router_starting",
           phase: input.phase,
-          verdict,
-          expected: ["ROUTING_DONE"],
-        }),
-      );
-    }
+          iteration: input.iteration,
+          issueIid: input.issueIid,
+          attempt,
+          diffBytesSent,
+          truncated,
+          fileCount: input.files.length,
+        });
+        yield* Console.log(
+          `[#${input.issueIid} ${input.phase}[${input.iteration}]] router (haiku${attempt === 0 ? "" : `, attempt ${attempt + 1}`}) on ${input.files.length} files, ${diffBytesSent} bytes${truncated ? " (truncated)" : ""}`,
+        );
 
-    // The session ended with a verdict. Read the findings file the haiku wrote.
-    const raw = yield* Effect.tryPromise({
-      try: () => Bun.file(findingsFile).text(),
-      catch: (cause) =>
-        new WorkspaceError({
+        const verdict = yield* runOneClaudeSession({
           phase: input.phase,
-          operation: "read router findings",
-          reason: String(cause),
-        }),
-    });
-    const routed = yield* parseRouterOutput(raw);
+          worktree: input.worktree,
+          session,
+          tmuxLogPath,
+          promptFile,
+          sentinel,
+          timeoutMs,
+          logContext: {
+            issueIid: input.issueIid,
+            iteration: input.iteration,
+            agent: refAgent,
+          },
+          model: "haiku",
+        });
+        if (verdict !== "ROUTING_DONE") {
+          return yield* Effect.fail(
+            new UnexpectedVerdictError({
+              phase: input.phase,
+              verdict,
+              expected: ["ROUTING_DONE"],
+            }),
+          );
+        }
+
+        const raw = yield* Effect.tryPromise({
+          try: () => Bun.file(findingsFile).text(),
+          catch: (cause) =>
+            new WorkspaceError({
+              phase: input.phase,
+              operation: "read router findings",
+              reason: String(cause),
+            }),
+        });
+
+        const canRetry = attempt + 1 < MAX_ROUTER_ATTEMPTS;
+        return yield* parseRouterOutput(raw).pipe(
+          Effect.catchTag("RouterMalformedOutput", (error) =>
+            Effect.gen(function* () {
+              yield* artifacts.logEvent({
+                event: "router_failed",
+                phase: input.phase,
+                iteration: input.iteration,
+                issueIid: input.issueIid,
+                attempt,
+                willRetry: canRetry,
+                reason: error.reason,
+                ...summarizeRaw(error.raw),
+              });
+              return yield* canRetry ? tryRoute(attempt + 1) : Effect.fail(error);
+            }),
+          ),
+        );
+      });
+
+    const routed = yield* tryRoute(0);
 
     yield* artifacts.logEvent({
       event: "router_complete",

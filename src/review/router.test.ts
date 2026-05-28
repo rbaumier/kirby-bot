@@ -78,6 +78,15 @@ describe("_parseRouterOutput", () => {
     }
   });
 
+  test("empty input carries the distinct empty-findings reason", () => {
+    const exit = run(_parseRouterOutput("   "));
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = (exit.cause as { error: unknown }).error ?? exit.cause;
+      expect((error as { reason?: string })?.reason).toBe("router wrote empty findings file");
+    }
+  });
+
   test("invalid JSON fails with RouterMalformedOutput", () => {
     const exit = run(_parseRouterOutput("not json"));
     expect(Exit.isFailure(exit)).toBe(true);

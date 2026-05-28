@@ -87,6 +87,20 @@ export const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 export const MAX_FIX_CYCLES = 2;
 
 /**
+ * Max attempts (initial + retries) the review router gets to emit a parseable
+ * agents-routing JSON before the review phase fails.
+ *
+ * The router runs Haiku, which occasionally emits a non-string `name`, a nested
+ * object, or other shape glitch the Effect Schema decoder rejects. A single
+ * retry resolves the bulk of these without burning meaningful budget — one
+ * attempt is ~60-90s, the review phase cap is {@link PHASE_CAP_MINUTES.review}
+ * minutes. A third attempt is rejected by design: if the LLM emits a malformed
+ * envelope twice in a row, the issue is no longer a transient glitch and
+ * deserves human triage.
+ */
+export const MAX_ROUTER_ATTEMPTS = 2;
+
+/**
  * Hard byte-cap on each per-agent diff slice handed to a fan-out reviewer.
  *
  * A run-away diff (mass refactor, large generated file, lockfile dropped into
