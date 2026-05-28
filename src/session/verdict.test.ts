@@ -28,8 +28,20 @@ describe("parseVerdict", () => {
     expect(parseVerdict("it is not yet READY_FOR_REVIEW so I keep going")).toBeNull();
   });
 
-  it("returns null when the verdict is not the last non-empty line", () => {
-    expect(parseVerdict("VERDICT: FIX_DONE\nactually, one more thing")).toBeNull();
+  it("accepts a verdict followed by trailing chatty prose (real #34 case)", () => {
+    // The model sometimes ignores the prompt's "nothing after it" rule and
+    // appends an MR pleasantry. The verdict line itself is well-formed and
+    // unique — accept it instead of failing a complete implementation.
+    expect(parseVerdict("VERDICT: READY_FOR_REVIEW\nMR !613 ouvert")).toBe("READY_FOR_REVIEW");
+  });
+
+  it("accepts a verdict wrapped in markdown bold (real #34 case)", () => {
+    // Captured in prod: `MR créée : **https://...** --- **VERDICT: READY_FOR_REVIEW**`.
+    expect(parseVerdict("MR créée\n---\n**VERDICT: READY_FOR_REVIEW**")).toBe("READY_FOR_REVIEW");
+  });
+
+  it("accepts a verdict wrapped in markdown italic underscores", () => {
+    expect(parseVerdict("done\n__VERDICT: CONVERGED__")).toBe("CONVERGED");
   });
 
   it("returns null on multiple verdict lines (ambiguous)", () => {

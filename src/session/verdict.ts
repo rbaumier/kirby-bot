@@ -35,43 +35,47 @@ const isVerdictToken = (value: string): value is VerdictToken => VERDICT_TOKEN_S
 const VERDICT_LINE = /^VERDICT: ([A-Z_]+)$/;
 
 /**
+ * Strip leading/trailing markdown emphasis chars (`*`, `_`) from a line.
+ * Models routinely render the verdict as `**VERDICT: TOKEN**` despite the
+ * prompt asking for plain text. Treating the emphasis wrappers as cosmetic
+ * lets the strict regex match what was clearly meant as a verdict.
+ */
+const stripEmphasis = (line: string): string => line.replace(/^[*_]+|[*_]+$/g, "");
+
+/**
  * Extract the verdict a session declared, or `null` if none found.
  *
- * Strict by design. A loose substring scan would false-match
- * prose like "not yet READY_FOR_REVIEW". A false *proceed* is
- * far worse than a false *fail*. A verdict counts only when
- * ALL of these hold:
+ * Strict on the *line* (still no substring scan into prose), lenient on
+ * *placement*. A loose substring scan would false-match prose like "not
+ * yet READY_FOR_REVIEW" — a false *proceed* is far worse than a false
+ * *fail*. A verdict counts only when ALL of these hold:
  *
- *  - Exactly one `VERDICT:` line exists in the message.
+ *  - Exactly one line (after stripping markdown emphasis wrappers like
+ *    `**` / `__`) matches `VERDICT: <KNOWN_TOKEN>` and nothing else.
  *    Zero or two+ is ambiguous → `null`.
- *  - That line is the LAST non-empty line.
  *  - The token is one of the known {@link VERDICT_TOKENS}.
+ *
+ * The verdict line is **not** required to be the last non-empty line:
+ * models often append a "MR !613 opened" pleasantry after the verdict
+ * despite the prompt forbidding it. As long as the verdict line itself
+ * is well-formed and unique, that trailing prose is harmless.
  *
  * `null` means the caller must treat the session as failed.
  */
 export function parseVerdict(message: string): VerdictToken | null {
-  const lines = message.split("\n");
+  const matches = message
+    .split("\n")
+    .map((line) => VERDICT_LINE.exec(stripEmphasis(line.trim())))
+    .filter((m): m is RegExpExecArray => m !== null);
 
   // Exactly one verdict line, or it is ambiguous and we refuse to guess.
-  const verdictLineCount = lines.filter((line) => VERDICT_LINE.test(line.trim())).length;
-  if (verdictLineCount !== 1) {
-    return null;
-  }
-
-  // The verdict must be the last thing the session said.
-  const lastNonEmpty = [...lines].toReversed().find((line) => line.trim() !== "");
-  if (lastNonEmpty === undefined) {
-    return null;
-  }
-
-  const match = VERDICT_LINE.exec(lastNonEmpty.trim());
-  if (match === null) {
+  if (matches.length !== 1) {
     return null;
   }
 
   // match[1] is always set when exec succeeds with a participating group;
   // the guard exists only to satisfy noUncheckedIndexedAccess.
-  const token = match[1];
+  const token = matches[0]?.[1];
   if (token === undefined) {
     return null;
   }
