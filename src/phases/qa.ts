@@ -1,32 +1,32 @@
 /**
- * QA Phase — the runtime gate; `QA_PASS` advances to merge.
+ * QA Phase — TEMPORARILY DISABLED.
  *
- * Always spawned by the orchestrator; the Session self-skips when no
- * user-facing surface was touched (see the orchestrator decomposition doc).
- * `QA_FAIL` is a real, in-scope bug: route it back to `fix` so the loop can
- * address it, sharing the same `fixCycles` budget as the evaluate→fix path.
- * Only when that budget is exhausted do we fail the issue for a human.
+ * The runtime dogfood gate is currently bypassed: the phase no-ops to
+ * `merge` without spawning a `claude` session. Tracked by #37 — the
+ * orchestrator + dogfood-skill rework landed in `4c705c9`, but until
+ * we have a green run end-to-end with the new flow, we route around it
+ * rather than risk a regression on the merge path.
+ *
+ * To re-enable: `git revert` this file (or restore from the prior
+ * commit `c324d17`) and the session-driven QA returns unchanged.
  */
 import { Effect } from "effect";
 import type { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
-import type { RunArtifacts } from "../run-artifacts";
-import { runPhaseSession } from "../session/phase";
-import { mrPhaseOptions, phaseHandlerError, pipelineContext, toFixUnlessCapped } from "./runner";
+import { RunArtifacts } from "../run-artifacts";
+import { pipelineContext } from "./runner";
 
-/** QA Phase Module — implements the qa state's transition. */
+/** QA Phase Module — currently a pass-through; see file header. */
 export const qaPhase = (
   state: Extract<State, { kind: "qa" }>,
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
-    const { fixCycles } = state;
-    const verdict = yield* runPhaseSession(
-      mrPhaseOptions(state, "qa", fixCycles),
-      ["QA_PASS", "QA_FAIL"],
-    ).pipe(Effect.mapError(phaseHandlerError("qa")));
-
-    if (verdict === "QA_PASS") {
-      return { kind: "merge", ...pipelineContext(state) };
-    }
-    return yield* toFixUnlessCapped(state, "fix cycles, qa still failing");
+    const artifacts = yield* RunArtifacts;
+    yield* artifacts.logEvent({
+      event: "qa_skipped",
+      issueIid: state.issue.iid,
+      iteration: state.fixCycles,
+      reason: "qa phase temporarily disabled — see src/phases/qa.ts header",
+    });
+    return { kind: "merge", ...pipelineContext(state) };
   });
