@@ -6,6 +6,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { AgentModel } from "./review/agents";
 
 /** The GitLab issue labels the orchestrator reads and writes. */
 export const LABELS = {
@@ -22,6 +23,27 @@ export const PHASES = ["implementation", "review", "evaluate", "fix", "qa"] as c
 
 /** One of the five session-driven pipeline phases. */
 export type Phase = (typeof PHASES)[number];
+
+/**
+ * Claude tier each phase runs on.
+ *
+ * Implementation, evaluate and fix are creative or judgment-heavy and stay on
+ * Sonnet. The review-phase orchestrator session just spawns the per-agent
+ * fan-out and aggregates JSON envelopes — that does not need Sonnet (the
+ * fan-out agents pick their own model from {@link AGENTS_DATA}). The qa phase
+ * orchestrates dogfood-persona subagents that do the real work in their own
+ * sessions, so the qa orchestrator runs on Haiku.
+ *
+ * Changing a value here propagates to every phase session without touching
+ * `runPhaseSession` — the model is no longer hard-coded.
+ */
+export const PHASE_MODELS: Record<Phase, AgentModel> = {
+  implementation: "sonnet",
+  review: "haiku",
+  evaluate: "sonnet",
+  fix: "sonnet",
+  qa: "haiku",
+};
 
 /**
  * Per-phase wall-clock cap, in minutes.

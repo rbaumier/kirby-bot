@@ -11,7 +11,7 @@
  */
 import { writeFile } from "node:fs/promises";
 import { Clock, Effect } from "effect";
-import { PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
+import { PHASE_CAP_MINUTES, PHASE_MODELS, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
 import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "./errors";
@@ -82,7 +82,7 @@ export const runPhaseSession = <const V extends VerdictToken>(
       sentinel,
       timeoutMs,
       logContext: { issueIid, iteration },
-      model: "sonnet",
+      model: PHASE_MODELS[phase],
     });
 
     const narrowed = expected.find((candidate) => candidate === verdict);
