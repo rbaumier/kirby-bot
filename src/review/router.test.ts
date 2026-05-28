@@ -54,7 +54,7 @@ describe("_parseRouterOutput", () => {
     const raw = JSON.stringify({
       agents: [
         { name: "funnel-l1", files: [] },
-        { name: "language-typescript", files: ["src/a.ts", "src/b.tsx"] },
+        { name: "language-rust", files: ["src/a.rs", "src/b.rs"] },
       ],
     });
     const exit = run(_parseRouterOutput(raw));
@@ -63,8 +63,8 @@ describe("_parseRouterOutput", () => {
       expect(exit.value).toHaveLength(2);
       expect(exit.value[0]).toEqual({ name: "funnel-l1", files: [] });
       expect(exit.value[1]).toEqual({
-        name: "language-typescript",
-        files: ["src/a.ts", "src/b.tsx"],
+        name: "language-rust",
+        files: ["src/a.rs", "src/b.rs"],
       });
     }
   });

@@ -160,6 +160,7 @@ export const renderAgentPrompt = (
     const roleSubs: Readonly<Record<string, string>> = {
       ...baseSubs,
       skill_name: prompt.skillName ?? "",
+      skill_names: prompt.skillNames?.join(", ") ?? "",
       subsystem_name: prompt.subsystemName ?? "",
       failure_modes: prompt.failureModes ?? "",
     };

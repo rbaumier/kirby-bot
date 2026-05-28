@@ -38,6 +38,8 @@ export type PromptSpec =
     readonly roleFile: string;
     /** Substituted into `{skill_name}` (skill-agent.md). */
     readonly skillName?: string;
+    /** Substituted into `{skill_names}` (skill-agent-pair.md). Joined by `, `. */
+    readonly skillNames?: readonly string[];
     /** Substituted into `{subsystem_name}` (subsystem-agent.md). */
     readonly subsystemName?: string;
     /** Substituted into `{failure_modes}` (subsystem-agent.md). */
@@ -73,7 +75,7 @@ const AGENTS_DATA = {
     prompt: { kind: "self-contained", templateFile: "funnel-l2.md" },
   },
   "occam-razor": {
-    model: "sonnet",
+    model: "haiku",
     description: "Mechanically walks call sites of every exported symbol; flags 0/1-caller wrappers and derivable defaults. Spawn on every diff.",
     prompt: { kind: "line-anchored", roleFile: "occam-razor.md" },
   },
@@ -88,17 +90,12 @@ const AGENTS_DATA = {
     prompt: { kind: "line-anchored", roleFile: "tests-agent.md" },
   },
   simplify: {
-    model: "sonnet",
+    model: "haiku",
     description: "Spot accidental complexity, dead branches, premature abstractions. Spawn on every diff.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "simplify" },
   },
-  "coding-standards": {
-    model: "sonnet",
-    description: "Umbrella coding-standards review (naming, hygiene, style, error handling). Spawn on every diff.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "coding-standards" },
-  },
   "matt-improve-codebase-architecture": {
-    model: "sonnet",
+    model: "haiku",
     description: "Architecture pass: module boundaries, layering, dependency direction. Spawn for non-trivial diffs (multi-file or new module).",
     prompt: {
       kind: "line-anchored",
@@ -112,53 +109,17 @@ const AGENTS_DATA = {
   //   prompt: { kind: "self-contained", templateFile: "matt-review.md" },
   // },
   "thermo-nuclear": {
-    model: "sonnet",
+    model: "haiku",
     description: "Aggressive structural pass: what would a skeptical senior tear apart. Spawn for non-trivial or high-stakes diffs.",
     prompt: { kind: "self-contained", templateFile: "thermo-nuclear-review.md" },
   },
   "security-defensive": {
-    model: "sonnet",
+    model: "haiku",
     description: "OWASP-style security review: injection, auth, secrets, deserialization. Spawn when any trust boundary is crossed.",
     prompt: {
       kind: "line-anchored",
       roleFile: "skill-agent.md",
       skillName: "security-defensive",
-    },
-  },
-  "coding-standards:design": {
-    model: "sonnet",
-    description: "Design sub-standard: API shape, function signatures, naming intent. Spawn for non-trivial diffs.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "coding-standards:design",
-    },
-  },
-  "coding-standards:errors": {
-    model: "sonnet",
-    description: "Error-handling sub-standard: result types, fail-fast, never-swallow. Spawn for non-trivial diffs.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "coding-standards:errors",
-    },
-  },
-  "coding-standards:hygiene": {
-    model: "sonnet",
-    description: "Hygiene sub-standard: dead code, unused imports, todo rot. Spawn for non-trivial diffs.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "coding-standards:hygiene",
-    },
-  },
-  "coding-standards:style": {
-    model: "sonnet",
-    description: "Style sub-standard: formatting, idiom consistency, comments. Spawn for non-trivial diffs.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "coding-standards:style",
     },
   },
   // "general-opus": {
@@ -169,7 +130,7 @@ const AGENTS_DATA = {
 
   // ─── CLAUDE.md ─────────────────────────────────────────────────────────
   "claude-md-compliance": {
-    model: "sonnet",
+    model: "haiku",
     description: "Walk the diff for violations of the repo's CLAUDE.md rules. Spawn when CLAUDE.md exists in the repo.",
     prompt: { kind: "line-anchored", roleFile: "claude-md-compliance.md" },
   },
@@ -180,15 +141,6 @@ const AGENTS_DATA = {
   },
 
   // ─── Language by extension ─────────────────────────────────────────────
-  "language-typescript": {
-    model: "sonnet",
-    description: "TypeScript-specific review: type safety, narrowing, branded types, exhaustiveness. Spawn for .ts/.tsx files.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "language-typescript",
-    },
-  },
   "language-rust": {
     model: "sonnet",
     description: "Rust-specific review: ownership, lifetimes, unsafe, error types. Spawn for .rs files.",
@@ -205,24 +157,32 @@ const AGENTS_DATA = {
   //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "vue" },
   // },
 
-  // ─── Skill by import — heavy (sonnet) ──────────────────────────────────
-  react: {
-    model: "sonnet",
-    description: "React-specific review: hooks rules, render perf, key/effect bugs. Spawn when files import react/react-dom or render JSX.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "react" },
-  },
-  database: {
-    model: "sonnet",
-    description: "Database-layer review: SQL injection, N+1, transaction scope. Spawn when files import pg/mysql2/sqlite3/postgres or run raw SQL.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "database" },
-  },
+  // ─── Skill by import ───────────────────────────────────────────────────
   "drizzle-orm": {
-    model: "sonnet",
+    model: "haiku",
     description: "Drizzle ORM review: schema shape, query correctness, migration safety. Spawn when files import drizzle-orm/drizzle-kit.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "drizzle-orm" },
   },
+  tanstack: {
+    model: "haiku",
+    description: "TanStack review (Query + Start): query keys, invalidation, suspense; Start routing, loaders, server fns. Spawn when files import @tanstack/react-query/@tanstack/query-core/@tanstack/start/@tanstack/react-start.",
+    prompt: {
+      kind: "line-anchored",
+      roleFile: "skill-agent-pair.md",
+      skillNames: ["tanstack-query", "tanstack-start-best-practices"],
+    },
+  },
+  "code-hygiene": {
+    model: "haiku",
+    description: "Coding-standards hygiene + error-handling review: dead code, naming, and error path discipline. Spawn on every non-trivial diff.",
+    prompt: {
+      kind: "line-anchored",
+      roleFile: "skill-agent-pair.md",
+      skillNames: ["coding-standards:errors", "coding-standards:hygiene"],
+    },
+  },
 
-  // ─── Skill by import — light (haiku) ───────────────────────────────────
+  // ─── Skill by import — commented experiments ──────────────────────────
   // i18n: {
   //   model: "haiku",
   //   description: "i18n review: missing keys, locale-specific formatting bugs. Spawn when files import i18next/next-intl/@formatjs/react-i18next.",
@@ -243,29 +203,6 @@ const AGENTS_DATA = {
   //   description: "shadcn/ui review: component composition, accessibility. Spawn when files import @radix-ui or use shadcn components.",
   //   prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "shadcn" },
   // },
-  "tanstack-query": {
-    model: "haiku",
-    description: "TanStack Query review: query keys, invalidation, suspense. Spawn when files import @tanstack/react-query/@tanstack/query-core.",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "tanstack-query" },
-  },
-  "tanstack-start-best-practices": {
-    model: "haiku",
-    description: "TanStack Start framework review: routing, loaders, server fns. Spawn when files import @tanstack/start or @tanstack/react-start.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "tanstack-start-best-practices",
-    },
-  },
-  "better-result-adopt": {
-    model: "haiku",
-    description: "Migrate try/catch to better-result. Spawn when files import better-result or contain throw/catch over result-friendly paths.",
-    prompt: {
-      kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "better-result-adopt",
-    },
-  },
   docker: {
     model: "haiku",
     description: "Dockerfile / compose review: layer order, secrets, multi-stage. Spawn when Dockerfile/compose files or dockerode imports change.",
@@ -283,24 +220,14 @@ const AGENTS_DATA = {
   },
 
   // ─── Surface (UI / API) ────────────────────────────────────────────────
-  "ui-ux": {
+  "ui-quality": {
     model: "haiku",
-    description: "Visual / UX review: layout, accessibility, copy. Spawn for any user-facing UI component (React/Vue/Svelte components, CSS/design tokens).",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "ui-ux" },
-  },
-  "make-interfaces-feel-better": {
-    model: "haiku",
-    description: "Interaction polish: loading states, error states, transitions. Spawn for any user-facing UI component.",
+    description: "UI quality (visual / UX + interaction polish): layout, accessibility, copy, loading + error states, transitions. Spawn for any user-facing UI component (React/Vue/Svelte components, CSS/design tokens).",
     prompt: {
       kind: "line-anchored",
-      roleFile: "skill-agent.md",
-      skillName: "make-interfaces-feel-better",
+      roleFile: "skill-agent-pair.md",
+      skillNames: ["ui-ux", "make-interfaces-feel-better"],
     },
-  },
-  frontend: {
-    model: "sonnet",
-    description: "Frontend architecture review: state management, data flow, bundling. Spawn for non-trivial frontend code (React/Vue/Svelte apps).",
-    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "frontend" },
   },
   // "web-performance": {
   //   model: "sonnet",
