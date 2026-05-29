@@ -81,6 +81,20 @@ single AFK run (several issues × 4-hour budget) outlives them. Create a
 long-lived PAT (e.g. `glab api -X POST user/personal_access_tokens` with the
 `api` scope) and export it as `KIRBY_GITLAB_TOKEN` before launching.
 
+### Backend selection: `KIRBY_PROVIDER`
+
+`KIRBY_PROVIDER` chooses which backend the pipeline runs against. `gitlab`
+(the default when unset) keeps the behavior above; `github` routes through the
+GitHub provider; any other value fails fast with a `ProviderConfigError`.
+
+With `KIRBY_PROVIDER=github`, the connection is resolved from these env vars
+(same fail-fast contract, PAT-only):
+
+- `KIRBY_GITHUB_TOKEN` — a personal access token (PAT) with the `repo` scope.
+- `GITHUB_REPO` — the `owner/repo` slug.
+- `GITHUB_HOST` — optional; defaults to `https://api.github.com`. Set it to a
+  GitHub Enterprise base (e.g. `https://gh.corp.example/api/v3`) when needed.
+
 ## Diagnosing slow phases via Claude session transcripts
 
 `run.jsonl` shows phase-level transitions but no per-tool / per-subagent

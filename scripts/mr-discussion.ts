@@ -1,10 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Mr-discussion.ts — a thin CLI over the GitLab MR-discussion operations.
+ * Mr-discussion.ts — a thin CLI over the selected provider's discussion ops.
  *
  * The phase prompts call this (`review` posts, `evaluate`/`fix` reply and
- * resolve). The logic lives in `src/gitlab/discussion.ts`; this file only parses
- * argv and prints the result.
+ * resolve). The logic lives behind the {@link GitProvider} seam, resolved via
+ * `selectProvider()` (GitLab or GitHub per `$KIRBY_PROVIDER`); this file only
+ * parses argv and prints the result. The `--mr` flag and every output string
+ * are unchanged so the phase prompts work under either backend (`--mr` is a
+ * PR/MR number either way).
  *
  *   post    --mr <iid> --body <text>
  *   list    --mr <iid>
@@ -13,12 +16,9 @@
  */
 import { BunRuntime } from "@effect/platform-bun";
 import { Console, Data, Effect } from "effect";
-import {
-  listDiscussions,
-  postDiscussion,
-  replyToDiscussion,
-  resolveDiscussion,
-} from "../src/gitlab/discussion";
+import { GitProvider } from "../src/provider/provider";
+import { selectProvider } from "../src/provider/select";
+import { DiscussionId } from "../src/provider/types";
 
 /** The CLI was invoked with a missing or malformed argument. */
 class UsageError extends Data.TaggedError("UsageError")<{ readonly message: string }> {}
@@ -65,30 +65,39 @@ const requireFlag = (value: string | null, name: string): Effect.Effect<string, 
     : Effect.fail(new UsageError({ message: `missing required flag --${name}` }));
 
 const program = Effect.gen(function* () {
+  const provider = yield* GitProvider;
   const args = parseArgs(process.argv.slice(2));
   switch (args.command) {
     case "list": {
       const mr = yield* requireMr(args.mr);
-      const discussions = yield* listDiscussions(mr);
-      return JSON.stringify(discussions, null, 2);
+      const discussions = yield* provider.listDiscussions(mr);
+      // Re-shape to the legacy `{ id, resolved, notes }` JSON the phase prompts
+      // parse (the seam renamed `resolved`→`isResolved` and maps a missing
+      // author to null; both are reversed here so the output is unchanged).
+      const legacy = discussions.map((discussion) => ({
+        id: discussion.id,
+        resolved: discussion.isResolved,
+        notes: discussion.notes.map((note) => ({ author: note.author ?? "unknown", body: note.body })),
+      }));
+      return JSON.stringify(legacy, null, 2);
     }
     case "post": {
       const mr = yield* requireMr(args.mr);
       const body = yield* requireFlag(args.body, "body");
-      yield* postDiscussion(mr, body);
+      yield* provider.postDiscussion(mr, body);
       return `posted a discussion on !${mr}`;
     }
     case "reply": {
       const mr = yield* requireMr(args.mr);
       const discussion = yield* requireFlag(args.discussion, "discussion");
       const body = yield* requireFlag(args.body, "body");
-      yield* replyToDiscussion(mr, discussion, body);
+      yield* provider.replyToDiscussion(mr, DiscussionId(discussion), body);
       return `replied on discussion ${discussion}`;
     }
     case "resolve": {
       const mr = yield* requireMr(args.mr);
       const discussion = yield* requireFlag(args.discussion, "discussion");
-      yield* resolveDiscussion(mr, discussion);
+      yield* provider.resolveDiscussion(mr, DiscussionId(discussion));
       return `resolved discussion ${discussion}`;
     }
     default: {
@@ -99,6 +108,9 @@ const program = Effect.gen(function* () {
       );
     }
   }
-}).pipe(Effect.flatMap((output) => Console.log(output)));
+}).pipe(
+  Effect.flatMap((output) => Console.log(output)),
+  Effect.provide(selectProvider()),
+);
 
 BunRuntime.runMain(program);
