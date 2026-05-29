@@ -9,6 +9,7 @@ import { formatDuration } from "../duration";
 import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
+import { recoverStaleClaims } from "../recovery/sweep";
 import { RunArtifacts } from "../run-artifacts";
 import { step } from "./step";
 import type { IssueRef, State } from "./state";
@@ -91,6 +92,11 @@ export const runMachine = (
       repo: env.repoName,
       defaultBranch: env.defaultBranch,
     });
+
+    // Return any claim stranded by a crashed prior run to the queue before
+    // reading it — otherwise a stale `picked-by-agent` label hides the issue
+    // and the run ends `fetch_queue → end` with no work (#35).
+    yield* recoverStaleClaims;
 
     const initialState: State = { kind: "fetch_queue" };
     yield* Effect.iterate(initialState, {

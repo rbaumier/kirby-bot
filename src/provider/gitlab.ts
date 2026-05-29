@@ -63,6 +63,7 @@ const mapIssue = (issue: GitLabIssue): Issue => ({
   title: issue.title,
   description: issue.description,
   labels: issue.labels,
+  updatedAt: issue.updated_at,
 });
 
 const mapPullRequest = (mr: GitLabMergeRequest): PullRequestRef => ({

@@ -27,7 +27,7 @@ The bot is named after Kirby because, like Kirby, it eats issues whole and spits
 - **Hard budgets** — a 90-minute wall-clock cap per issue, per-phase caps, and a 2-minute ceiling on every shell-out. No hung command can freeze the run.
 - **Run artifacts** — every run writes sentinel files, tmux logs, prompt files, and a structured `run.jsonl` to `~/.afk-runs/<run-id>/` for post-mortem.
 - **Provider seam** — the orchestrator talks to GitLab today through a clean `Provider` interface; GitHub support is the obvious next adapter.
-- **Stale-claim sweeper** — a companion script releases issues whose `picked-by-agent` claim has gone stale.
+- **Crash recovery** — on startup, before reading the queue, the orchestrator releases issues whose `picked-by-agent` claim has gone stale (a crashed prior run), returning them to the queue.
 
 ## How it works
 
@@ -161,7 +161,7 @@ src/
 ├── phases/              # the five interactive Phase Modules
 ├── session/             # tmux + Stop hook + sentinel + verdict parsing
 ├── provider/            # forge adapter seam (GitLab today)
-├── recovery/            # stale-claim sweeping
+├── recovery/            # startup stale-claim recovery sweep
 └── run-artifacts.ts     # per-run logs (run.jsonl, prompts, tmux output)
 
 assets/
@@ -170,7 +170,6 @@ assets/
 
 scripts/
 ├── setup-skills.ts         # populate .claude/skills/ via symlink + fallback clone
-├── sweep-stale-claims.ts   # release issues whose claim has gone stale
 └── mr-discussion.ts        # post/read MR discussion threads from prompts
 ```
 

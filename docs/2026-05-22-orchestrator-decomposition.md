@@ -122,6 +122,14 @@ Two guards, different failure modes:
 
 ## Crash recovery — standalone sweep
 
+> **Superseded 2026-05-29 (#35).** The standalone cron sweep relied on external
+> scheduling that was never reliably deployed, so crashed-run claims kept
+> stranding the queue. Recovery now runs **in-process at startup** before the
+> first queue read (`src/recovery/sweep.ts`, wired in `runMachine`), needs no
+> cron, and returns each stale issue to the queue (`+ready-for-agent` /
+> `-picked-by-agent`). `scripts/sweep-stale-claims.ts` was removed. The original
+> design below is kept for history.
+
 `scripts/sweep-stale-claims.ts`, scheduled separately (cron/launchd ~3h). Lists `picked-by-agent` issues idle >2h → unlabel + force-remove orphan worktree → re-picked from scratch by the next run. Not part of the orchestrator process. A crash is not a `failed` verdict.
 
 ## Not Doing

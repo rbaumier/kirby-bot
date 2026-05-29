@@ -66,6 +66,20 @@ export const PHASE_CAP_MINUTES: Record<Phase, number> = {
 /** Total wall-clock an issue may take, from `implementation` through `qa`. */
 export const ISSUE_BUDGET_MS = 240 * 60 * 1000;
 
+/**
+ * How long a `picked-by-agent` claim may sit untouched before the startup
+ * sweep treats it as stale and returns the issue to the queue (#35).
+ *
+ * The signal is the issue's `updated_at`, which a run only bumps at claim time
+ * (the phases work the MR, not the issue) — so it is the claim's age, not a
+ * heartbeat. A healthy run can therefore carry a claim as old as the whole
+ * per-issue budget. The threshold is `budget + margin` so a second instance
+ * starting just as a sibling run finishes near its budget can never reap a
+ * still-live claim (and `git worktree remove --force` its live worktree). The
+ * margin also absorbs clock skew between the local host and GitLab.
+ */
+export const STALE_CLAIM_MS = ISSUE_BUDGET_MS + 30 * 60 * 1000;
+
 /** How often the orchestrator polls a phase's sentinel file. */
 export const SENTINEL_POLL_MS = 5000;
 

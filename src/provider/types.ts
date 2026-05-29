@@ -10,6 +10,8 @@ export type Issue = {
   readonly title: string;
   readonly description: string | null;
   readonly labels: Labels;
+  /** ISO-8601 last-update time, or `""` when the endpoint omits it. */
+  readonly updatedAt: string;
 };
 
 export type PullRequestRef = {
