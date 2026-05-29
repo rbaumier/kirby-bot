@@ -5,7 +5,7 @@
  * the request shape and Effect schema for one MR endpoint: find/create the
  * draft MR, view it, un-draft it, and merge it.
  */
-import { Effect, Schema } from "effect";
+import { Effect, Schedule, Schema } from "effect";
 import type { ProviderError } from "../provider/types";
 import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
 import { MergeRequestSchema } from "./schema";
@@ -72,9 +72,60 @@ const TitledMrSchema = Schema.Struct({ title: Schema.String });
 const DRAFT_PREFIX = /^(?:Draft|WIP)\s*[:-]\s*/i;
 
 /**
+ * GitLab recomputes an MR's mergeability asynchronously after any write that
+ * could change it (un-drafting, a push, a rebase). While that re-check is in
+ * flight the merge endpoint rejects the call with HTTP 405, so we wait for it
+ * to settle before merging (issue #41). These are the *in-flight* values of
+ * `detailed_merge_status` (GitLab ≥ 15.6) and the legacy `merge_status` —
+ * everything else is a settled verdict the merge call can act on.
+ */
+const MERGEABILITY_PENDING: ReadonlySet<string> = new Set([
+  "unchecked",
+  "checking",
+  "preparing",
+]);
+
+/** True while GitLab is still (re)computing the MR's mergeability. */
+const isMergeabilityPending = (status: string | undefined): boolean =>
+  status !== undefined && MERGEABILITY_PENDING.has(status);
+
+/** Narrow read for the mergeability poll — prefers the detailed status. */
+const MergeabilitySchema = Schema.Struct({
+  detailed_merge_status: Schema.optional(Schema.String),
+  merge_status: Schema.optional(Schema.String),
+});
+
+const readMergeStatus = (iid: number): Effect.Effect<string | undefined, ProviderError> =>
+  runGitLabRead(
+    { method: "GET", path: `projects/:id/merge_requests/${iid}` },
+    MergeabilitySchema,
+  ).pipe(Effect.map((mr) => mr.detailed_merge_status ?? mr.merge_status));
+
+/**
+ * Poll until GitLab finishes (re)computing mergeability so the merge that
+ * follows isn't racily rejected with 405. Bounded to ~10s (500ms-spaced
+ * reads, 20 recurrences); on timeout we proceed best-effort and let the merge
+ * call surface any genuine block. An older instance that omits both status
+ * fields reports `undefined` — treated as settled, never looped on.
+ */
+const waitForMergeabilitySettled = (iid: number): Effect.Effect<void, ProviderError> =>
+  readMergeStatus(iid).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("500 millis").pipe(Schedule.intersect(Schedule.recurs(20))),
+      until: (status) => !isMergeabilityPending(status),
+    }),
+    Effect.asVoid,
+  );
+
+/**
  * Mark a draft MR as ready by stripping the "Draft:" / "WIP:" prefix from its
  * title. The GitLab API derives the draft flag from the title prefix, so the
  * canonical way to "un-draft" is to PUT a clean title.
+ *
+ * Un-drafting kicks off an async mergeability re-check, so we then wait for it
+ * to settle before returning — otherwise the immediately following merge races
+ * the check and is rejected with HTTP 405 (issue #41). The wait is best-effort:
+ * a poll-read failure must not turn a successful un-draft into a phase failure.
  */
 export const markMergeRequestReady = (iid: number): Effect.Effect<void, ProviderError> =>
   Effect.gen(function* () {
@@ -83,17 +134,17 @@ export const markMergeRequestReady = (iid: number): Effect.Effect<void, Provider
       TitledMrSchema,
     );
     const stripped = current.title.replace(DRAFT_PREFIX, "");
-    if (stripped === current.title) {
-      return; // already ready
+    if (stripped !== current.title) {
+      yield* runGitLabIdempotentWrite(
+        {
+          method: "PUT",
+          path: `projects/:id/merge_requests/${iid}`,
+          body: { title: stripped },
+        },
+        MergeRequestSchema,
+      );
     }
-    yield* runGitLabIdempotentWrite(
-      {
-        method: "PUT",
-        path: `projects/:id/merge_requests/${iid}`,
-        body: { title: stripped },
-      },
-      MergeRequestSchema,
-    );
+    yield* waitForMergeabilitySettled(iid).pipe(Effect.ignore);
   });
 
 /** Params for {@link mergeMergeRequest}. */
@@ -125,3 +176,6 @@ export const mergeMergeRequest = (
     },
     MergeRequestSchema,
   );
+
+/** Exposed for tests — never used in production code. */
+export const __test = { isMergeabilityPending };
