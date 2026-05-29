@@ -1,5 +1,24 @@
 import { describe, expect, it } from "bun:test";
-import { ENV_KEY_RE, MODEL_ALIAS_RE, paneShowsPaste, sqEscape, TUI_PASTE_MARKER } from "./tmux";
+import { Effect, Ref } from "effect";
+import {
+  ENV_KEY_RE,
+  MODEL_ALIAS_RE,
+  paneShowsPaste,
+  paneShowsTuiReady,
+  pollPaneUntil,
+  sqEscape,
+  TUI_PASTE_MARKER,
+} from "./tmux";
+
+/** The rendered claude input prompt box, once the REPL is ready for input. */
+const READY_BOX = [
+  "╭─────────────────────────────────╮",
+  '│ > Try "fix typecheck errors"    │',
+  "╰─────────────────────────────────╯",
+].join("\n");
+
+/** A single boot-spinner frame — churns the pane but renders no prompt box. */
+const spinner = (glyph: string): string => `${glyph} Booting claude…`;
 
 describe("sqEscape", () => {
   it("wraps a normal string in single quotes", () => {
@@ -90,5 +109,85 @@ describe("paneShowsPaste", () => {
 
   it("keys off the exported marker constant", () => {
     expect(paneShowsPaste(`prefix ${TUI_PASTE_MARKER} #2 +9 lines] suffix`)).toBe(true);
+  });
+});
+
+describe("paneShowsTuiReady", () => {
+  it("detects the rendered input prompt box", () => {
+    expect(paneShowsTuiReady(READY_BOX)).toBe(true);
+  });
+
+  it("detects the prompt box once a paste has collapsed into it", () => {
+    expect(
+      paneShowsTuiReady("╭───╮\n│ > [Pasted text #1 +312 lines] │\n╰───╯"),
+    ).toBe(true);
+  });
+
+  it("returns false for an animating boot spinner (issue #25 failure mode)", () => {
+    expect(paneShowsTuiReady(spinner("⠋"))).toBe(false);
+    expect(paneShowsTuiReady(spinner("⠙"))).toBe(false);
+  });
+
+  it("returns false for a boxed welcome banner that carries no prompt", () => {
+    const welcome = ["╭──────────────────╮", "│ Welcome to Claude │", "╰──────────────────╯"].join(
+      "\n",
+    );
+    expect(paneShowsTuiReady(welcome)).toBe(false);
+  });
+
+  it("returns false for an npm update banner", () => {
+    expect(paneShowsTuiReady("Update available: 1.2.3 → run npm i -g")).toBe(false);
+  });
+
+  it("returns false for an empty pane (capture failure)", () => {
+    expect(paneShowsTuiReady("")).toBe(false);
+  });
+});
+
+describe("pollPaneUntil", () => {
+  /** Build a capture Effect that replays `frames` one per tick (last sticks). */
+  const scriptedCapture = (frames: readonly string[]) =>
+    Ref.make(0).pipe(
+      Effect.map((cursor) =>
+        Ref.getAndUpdate(cursor, (i) => Math.min(i + 1, frames.length - 1)).pipe(
+          Effect.map((i) => frames[i] ?? ""),
+        ),
+      ),
+    );
+
+  it("returns ready once the prompt box appears after spinner frames", async () => {
+    const ready = await Effect.runPromise(
+      scriptedCapture([spinner("⠋"), spinner("⠙"), spinner("⠹"), READY_BOX]).pipe(
+        Effect.flatMap((capture) =>
+          pollPaneUntil(capture, paneShowsTuiReady, 20, "1 millis"),
+        ),
+      ),
+    );
+    expect(ready).toBe(true);
+  });
+
+  it("stops polling at the ready frame, not before or after", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const frames = [spinner("⠋"), spinner("⠙"), READY_BOX, READY_BOX];
+        const capture = Ref.getAndUpdate(calls, (n) => n + 1).pipe(
+          Effect.map((n) => frames[Math.min(n, frames.length - 1)] ?? ""),
+        );
+        const ready = yield* pollPaneUntil(capture, paneShowsTuiReady, 20, "1 millis");
+        return { ready, ticks: yield* Ref.get(calls) };
+      }),
+    );
+    expect(result.ready).toBe(true);
+    expect(result.ticks).toBe(3); // two spinner ticks + the ready frame, then stop
+  });
+
+  it("caps out (best-effort fallback) when the prompt box never appears", async () => {
+    const ready = await Effect.runPromise(
+      scriptedCapture([spinner("⠋"), spinner("⠙"), spinner("⠹")]).pipe(
+        Effect.flatMap((capture) => pollPaneUntil(capture, paneShowsTuiReady, 5, "1 millis")),
+      ),
+    );
+    expect(ready).toBe(false);
   });
 });

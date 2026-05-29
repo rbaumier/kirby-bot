@@ -8,7 +8,7 @@
  * bracket in phase.ts.
  */
 import { $ } from "bun";
-import { Console, Effect } from "effect";
+import { Console, Duration, Effect } from "effect";
 import { describeShellError, runShell } from "../shell";
 import { TmuxError } from "./errors";
 
@@ -70,29 +70,70 @@ const capturePane = (session: string): Effect.Effect<string> =>
   );
 
 /**
- * Wait for the `claude` TUI to settle before pasting into it.
+ * Poll a pane once per `interval` until `ready(pane)` holds or `maxTicks`
+ * elapse. Resolves to whether readiness was actually observed (`false` = the
+ * cap was hit and the caller should proceed on a best-effort basis).
  *
- * Polls the pane content once a second; once it is unchanged for two
- * consecutive ticks the TUI has finished booting. Capped at 20 ticks — on a
- * pathologically slow start it proceeds anyway rather than hang forever. Far
- * less fragile than a blind fixed sleep into a not-yet-ready pane.
+ * `capture` is taken as an injected Effect — re-run each tick — so the loop is
+ * unit-testable by feeding a scripted sequence of pane snapshots without a live
+ * tmux server, and `interval` is a parameter so those tests need not sleep for
+ * real seconds.
  */
-const waitForTuiReady = (session: string): Effect.Effect<void> =>
+export const pollPaneUntil = (
+  capture: Effect.Effect<string>,
+  ready: (pane: string) => boolean,
+  maxTicks: number,
+  interval: Duration.DurationInput = "1 second",
+): Effect.Effect<boolean> =>
   Effect.iterate(
-    { ticks: 0, stableTicks: 0, previousPane: "" },
+    { ticks: 0, ready: false },
     {
-      while: (state) => state.ticks < 20 && state.stableTicks < 2,
+      while: (state) => state.ticks < maxTicks && !state.ready,
       body: (state) =>
-        Effect.sleep("1 second").pipe(
-          Effect.flatMap(() => capturePane(session)),
-          Effect.map((pane) => ({
-            ticks: state.ticks + 1,
-            stableTicks: pane === state.previousPane ? state.stableTicks + 1 : 0,
-            previousPane: pane,
-          })),
+        Effect.sleep(interval).pipe(
+          Effect.flatMap(() => capture),
+          Effect.map((pane) => ({ ticks: state.ticks + 1, ready: ready(pane) })),
         ),
     },
-  ).pipe(Effect.asVoid);
+  ).pipe(Effect.map((state) => state.ready));
+
+/**
+ * The claude TUI's input prompt box: a bordered box whose content line carries
+ * the `>` prompt (`│ > …`), rendered once the REPL is ready to accept input.
+ *
+ * Unlike pane *stability*, this is a *positive* readiness signal. The old "two
+ * identical ticks" heuristic declared readiness on quiescence, so any churn
+ * during boot — a spinner animation, an "Update available" npm banner, a
+ * MOTD/banner redraw, a responsive relayout, a system notification — kept the
+ * pane changing until the 20-tick cap elapsed, after which it pasted into a
+ * not-yet-ready pane and the prompt was eaten (issue #25). Waiting for the
+ * prompt box to actually appear is immune to all of those: they churn the pane
+ * but never render this line. The boxed welcome banner carries no prompt, so it
+ * does not match.
+ *
+ * Caveat: this matches a `│ >` prompt line *anywhere* in the pane, which is
+ * sound only on a fresh boot (the sole caller, {@link bootClaudeSession}, always
+ * launches a clean `claude` — no transcript in the pane). A future `--resume`
+ * caller could restore a transcript whose rendered content carries `│ >`,
+ * matching before the live REPL is ready; anchor to the live input box if that
+ * path is ever added.
+ */
+const TUI_PROMPT_RE = /│\s*>/;
+export const paneShowsTuiReady = (pane: string): boolean => TUI_PROMPT_RE.test(pane);
+
+/** Bounded readiness poll before paste; on cap we proceed anyway (never hang). */
+const TUI_READY_MAX_TICKS = 60;
+
+/**
+ * Wait for the `claude` TUI to be ready to accept input before pasting into it.
+ * Polls the pane once a second for the input prompt box
+ * ({@link paneShowsTuiReady}); on the cap it proceeds anyway rather than hang
+ * forever — a wrong/absent marker therefore degrades to the pre-#25 "proceed
+ * after cap" behaviour, never worse, and the paste-delivery check in
+ * {@link loadAndPastePrompt} still guards against pasting into a dead pane.
+ */
+const waitForTuiReady = (session: string): Effect.Effect<void> =>
+  pollPaneUntil(capturePane(session), paneShowsTuiReady, TUI_READY_MAX_TICKS).pipe(Effect.asVoid);
 
 /**
  * Collapsed-paste marker the Claude TUI renders once a multi-line prompt has
@@ -109,6 +150,9 @@ export const paneShowsPaste = (pane: string): boolean => pane.includes(TUI_PASTE
 /** Bounded load+paste attempts before falling through to Enter regardless. */
 const PASTE_MAX_ATTEMPTS = 3;
 
+/** Per-attempt cap polling for the paste to land before we re-check + retry. */
+const PASTE_LAND_MAX_TICKS = 10;
+
 /**
  * Load the prompt into the session's named buffer, paste it into the pane, and
  * verify the paste actually landed before returning. Retries up to
@@ -123,13 +167,14 @@ const PASTE_MAX_ATTEMPTS = 3;
  *
  *  2. **Async delivery (issue #30).** `tmux paste-buffer` only *enqueues* the
  *     write with the tmux server, which drains its queue asynchronously. Under
- *     high concurrency (15+ sessions) the server backlogs: `waitForTuiReady`
+ *     high concurrency (15+ sessions) the server backlogs: a naive settle-wait
  *     observes a visually-stable pane (still the empty-input placeholder) and
  *     returns before the bytes reach the application. The caller then sends
  *     Enter on an empty input and the session idles at 0% forever.
  *
- * After each paste we wait for the TUI to settle, then check the pane for the
- * collapsed-paste marker. Absent → re-load + re-paste. We verify with the
+ * After each paste we poll the pane for the collapsed-paste marker, returning as
+ * soon as it appears (or on a bounded cap). Absent → re-load + re-paste. We
+ * verify with the
  * positive marker (not placeholder-absence) so the check biases toward
  * retrying: a false "not delivered" costs at worst a benign double-paste (the
  * agent reads its prompt twice and still emits one verdict), whereas a false
@@ -145,7 +190,7 @@ const loadAndPastePrompt = (
     for (let attempt = 1; attempt <= PASTE_MAX_ATTEMPTS; attempt++) {
       yield* tmuxStep("load-buffer", () => $`tmux load-buffer -b ${session} ${promptFile}`);
       yield* tmuxStep("paste-buffer", () => $`tmux paste-buffer -b ${session} -t ${session}`);
-      yield* waitForTuiReady(session);
+      yield* pollPaneUntil(capturePane(session), paneShowsPaste, PASTE_LAND_MAX_TICKS);
       const pane = yield* capturePane(session);
       if (paneShowsPaste(pane)) { return; }
       yield* Console.log(
