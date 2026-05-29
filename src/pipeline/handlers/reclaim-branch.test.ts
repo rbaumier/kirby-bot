@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { reclaimAgentBranch } from "./reclaim-branch";
+import { dropStaleRemoteAgentBranch, reclaimAgentBranch } from "./reclaim-branch";
 
 const BRANCH = "issue-42";
 
@@ -66,5 +66,62 @@ describe("reclaimAgentBranch", () => {
     // The branch — and its unmerged commit — survive.
     const survived = await branchExists(repoDir);
     expect(survived).toBe(true);
+  });
+});
+
+/**
+ * Bare `origin` plus a working clone with `main` pushed. No agent branch yet —
+ * each test pushes the stale remote branch it needs.
+ */
+const buildClonedRepo = async (): Promise<string> => {
+  const origin = mkdtempSync(join(tmpdir(), "kirby-drop-origin-"));
+  await $`git -C ${origin} init -q --bare -b main`;
+
+  const work = mkdtempSync(join(tmpdir(), "kirby-drop-work-"));
+  await $`git -C ${work} init -q -b main`;
+  await $`git -C ${work} config user.email test@test`;
+  await $`git -C ${work} config user.name test`;
+  await $`git -C ${work} remote add origin ${origin}`;
+  writeFileSync(join(work, "a.ts"), "base\n");
+  await $`git -C ${work} add a.ts`;
+  await $`git -C ${work} commit -q -m base`;
+  await $`git -C ${work} push -q -u origin main`;
+  return work;
+};
+
+const remoteBranchExists = async (repoDir: string): Promise<boolean> => {
+  const probe = await $`git -C ${repoDir} ls-remote --exit-code --heads origin ${BRANCH}`.nothrow();
+  return probe.exitCode === 0;
+};
+
+describe("dropStaleRemoteAgentBranch", () => {
+  test("no-op when the remote branch does not exist", async () => {
+    const repoDir = await buildClonedRepo();
+    await Effect.runPromise(dropStaleRemoteAgentBranch({ repoDir, branch: BRANCH }));
+    expect(await remoteBranchExists(repoDir)).toBe(false);
+  });
+
+  test("drops a stale remote branch so a fresh push fast-forwards (#36)", async () => {
+    const repoDir = await buildClonedRepo();
+    // A prior run pushed a branch ahead of main to origin, then died.
+    await $`git -C ${repoDir} checkout -q -b ${BRANCH}`;
+    writeFileSync(join(repoDir, "wip.ts"), "abandoned\n");
+    await $`git -C ${repoDir} add wip.ts`;
+    await $`git -C ${repoDir} commit -q -m wip`;
+    await $`git -C ${repoDir} push -q -u origin ${BRANCH}`;
+
+    // The new run branches fresh from main — behind the stale remote tip.
+    await $`git -C ${repoDir} checkout -q main`;
+    await $`git -C ${repoDir} branch -q -D ${BRANCH}`;
+    await $`git -C ${repoDir} checkout -q -b ${BRANCH} main`;
+
+    // Without the drop, this push is rejected non-fast-forward.
+    const before = await $`git -C ${repoDir} push origin ${BRANCH}`.nothrow();
+    expect(before.exitCode).not.toBe(0);
+
+    await Effect.runPromise(dropStaleRemoteAgentBranch({ repoDir, branch: BRANCH }));
+
+    const after = await $`git -C ${repoDir} push -u origin ${BRANCH}`.nothrow();
+    expect(after.exitCode).toBe(0);
   });
 });

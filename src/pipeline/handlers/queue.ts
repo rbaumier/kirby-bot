@@ -22,7 +22,7 @@ import type { ProviderCallError } from "../../provider/types";
 import { describeShellError, runShell, runShellGit } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
 import { branchName, worktreePath } from "../naming";
-import { reclaimAgentBranch } from "./reclaim-branch";
+import { dropStaleRemoteAgentBranch, reclaimAgentBranch } from "./reclaim-branch";
 import type { IssueRef, State } from "../state";
 
 /**
@@ -146,6 +146,11 @@ export const onBranchCreate = (
     );
 
     yield* reclaimAgentBranch({ repoDir: ".", branch, defaultBranch: env.defaultBranch });
+
+    // Same re-entrancy on the remote side (#36): drop a stale origin/<branch>
+    // left by a sentinel-failed run, else the fresh push is rejected non-fast-
+    // forward.
+    yield* dropStaleRemoteAgentBranch({ repoDir: ".", branch });
 
     yield* runShell(
       () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,

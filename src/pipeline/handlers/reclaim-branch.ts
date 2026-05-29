@@ -1,13 +1,13 @@
 /**
- * Pipeline/handlers/reclaim-branch.ts — reclaim a crashed run's issue branch
- * without ever clobbering work that isn't ours.
+ * Pipeline/handlers/reclaim-branch.ts — reclaim a crashed run's leftover agent
+ * branch, locally and on origin, before a fresh attempt.
  *
  * The re-entry sweep in `branch_create` used to force-delete any leftover
  * branch unconditionally (`git branch -D`). The branch name is slugified from
  * the issue title/iid, so it can collide with a human's branch. A blind `-D`
  * would then silently discard their unmerged commits (#24).
  *
- * Decision, in order:
+ * {@link reclaimAgentBranch} — the *local* side — decides, in order:
  *   - branch absent                  → nothing to reclaim (no-op).
  *   - tip ⊆ origin/<defaultBranch>   → fully contained upstream, safe to delete.
  *   - otherwise / can't confirm safe → refuse, fail with an explicit reason.
@@ -16,10 +16,14 @@
  * (missing origin ref, spawn/timeout on the probe) is treated as unsafe and
  * left for a human to triage.
  *
+ * {@link dropStaleRemoteAgentBranch} — the *remote* side (#36) — is deliberately
+ * less conservative: it drops the remote branch unconditionally once present,
+ * because the `afk/` namespace is the bot's own (see that function's doc).
+ *
  * Pure data in / Effect out: the only side effects are the `git` shell-outs.
  */
 import { $ } from "bun";
-import { Effect } from "effect";
+import { Console, Effect } from "effect";
 import { describeShellError, runShell } from "../../shell";
 import { HandlerError } from "../errors";
 
@@ -81,4 +85,54 @@ export const reclaimAgentBranch = (
               `collision). A human must inspect and remove it before this issue can be retried.`,
           }),
         );
+  });
+
+/** Input for {@link dropStaleRemoteAgentBranch}. */
+export type DropStaleRemoteAgentBranchInput = {
+  /** Repo directory to run git in (`.` in production = the orchestrator cwd). */
+  readonly repoDir: string;
+  /** Slugified issue branch the orchestrator owns on origin. */
+  readonly branch: string;
+};
+
+/**
+ * Drop the bot's stale *remote* agent branch so the fresh push fast-forwards (#36).
+ *
+ * A sentinel-failed run can leave commits on `origin/<branch>`; the next run
+ * branches fresh from the default branch and `git push -u` is then rejected
+ * non-fast-forward. The delete is unconditional once the branch is present:
+ * unlike the local reclaim, no containment check guards it, because the `afk/`
+ * namespace is the bot's own and every run redoes the issue from scratch, so
+ * the remote tip is disposable.
+ *
+ * An absent branch — the common fresh case — is a silent no-op. A genuine
+ * delete failure (auth, permissions) is logged, not fatal: otherwise the push
+ * would later surface only a confusing non-fast-forward with no trace of why.
+ */
+export const dropStaleRemoteAgentBranch = (
+  input: DropStaleRemoteAgentBranchInput,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const { repoDir, branch } = input;
+
+    const present = yield* runShell(
+      () => $`git -C ${repoDir} ls-remote --exit-code --heads origin ${branch}`,
+    ).pipe(
+      Effect.as(true),
+      // Exit 2 = no matching remote ref (absent). Spawn/timeout/offline: can't
+      // confirm — skip the delete; a real push failure reports the cause.
+      Effect.catchAll(() => Effect.succeed(false)),
+    );
+    if (!present) {
+      return;
+    }
+
+    yield* runShell(() => $`git -C ${repoDir} push origin --delete ${branch}`).pipe(
+      Effect.tapError((error) =>
+        Console.error(
+          `  ⚠ could not delete stale remote branch '${branch}' (${error._tag}) — push may be rejected non-fast-forward`,
+        ),
+      ),
+      Effect.ignore,
+    );
   });
