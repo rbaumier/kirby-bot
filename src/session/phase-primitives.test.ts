@@ -4,13 +4,16 @@
  * predicate together. Before the Clock migration these used `Date.now()` and a
  * TestClock could only move half the system (see issue #23).
  */
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import { Effect, Fiber, Random, TestClock, TestContext } from "effect";
 import { SENTINEL_POLL_MS } from "../config";
 import { buildRunArtifacts, RunArtifacts } from "../run-artifacts";
 import { NoVerdict, SessionTimedOut } from "./errors";
 import { runPhaseSession } from "./phase";
-import { pollSentinel, recoverNoVerdictOnce } from "./phase-primitives";
+import { pollSentinel, recoverNoVerdictOnce, writeStopHookConfig } from "./phase-primitives";
 import type { VerdictToken } from "./verdict";
 
 const ABSENT_SENTINEL = "/kirby-bot-test-no-such-sentinel-xyz.flag";
@@ -120,5 +123,61 @@ describe("recoverNoVerdictOnce", () => {
     });
     const error = await Effect.runPromise(recoverNoVerdictOnce(poll, reprompt).pipe(Effect.flip));
     expect(error._tag).toBe("SessionTimedOut");
+  });
+});
+
+// Issue #21: the Stop-hook config is merged into any preexisting
+// settings.local.json instead of overwriting it. We own Stop/StopFailure
+// (replace), everything else survives.
+describe("writeStopHookConfig merges into an existing settings.local.json", () => {
+  const run = (worktree: string) =>
+    Effect.runPromise(writeStopHookConfig("implementation", worktree));
+  const readSettings = (worktree: string) =>
+    readFile(join(worktree, ".claude", "settings.local.json"), "utf8").then(
+      (raw) => JSON.parse(raw) as Record<string, any>,
+    );
+
+  it("preserves preexisting permissions and registers our Stop hooks", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "kirby-merge-"));
+    try {
+      await mkdir(join(worktree, ".claude"), { recursive: true });
+      await writeFile(
+        join(worktree, ".claude", "settings.local.json"),
+        JSON.stringify({ permissions: { allow: ["Bash(git status)"] } }),
+      );
+      await run(worktree);
+
+      const settings = await readSettings(worktree);
+      expect(settings.permissions).toEqual({ allow: ["Bash(git status)"] });
+      expect(settings.hooks.Stop).toHaveLength(1);
+      expect(settings.hooks.StopFailure).toHaveLength(1);
+      expect(settings.hooks.Stop[0].hooks[0].command).toContain("stop-hook.ts");
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps other hook events but replaces a foreign Stop hook (we own Stop)", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "kirby-merge-"));
+    try {
+      // Seed .claude/ via a first call, then write a file with a foreign Stop
+      // hook plus an unrelated PreToolUse hook.
+      await run(worktree);
+      const foreign = [{ matcher: "", hooks: [{ type: "command", command: "echo foreign" }] }];
+      await writeFile(
+        join(worktree, ".claude", "settings.local.json"),
+        JSON.stringify({ hooks: { PreToolUse: foreign, Stop: foreign } }),
+      );
+      await run(worktree);
+
+      const settings = await readSettings(worktree);
+      // PreToolUse (another origin) survives untouched.
+      expect(settings.hooks.PreToolUse).toEqual(foreign);
+      // Our Stop wins — the foreign "echo foreign" command is gone.
+      expect(settings.hooks.Stop[0].hooks[0].command).toContain("stop-hook.ts");
+      expect(settings.hooks.StopFailure[0].hooks[0].command).toContain("stop-hook.ts");
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
   });
 });

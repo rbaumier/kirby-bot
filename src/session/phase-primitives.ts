@@ -65,6 +65,19 @@ const AGENT_SENTINEL_VAR = "AGENT_SENTINEL";
  * for the full contract. Registered for both `Stop` and `StopFailure`.
  * Every path is double-quoted — the command runs through a shell and
  * worktree/sentinel paths may contain spaces.
+ *
+ * The config is **merged** into any existing `settings.local.json` rather than
+ * overwriting it (issue #21): a preexisting file — a parent `.claude/`, default
+ * permissions pre-installed in the worktree, or user-supplied hooks — keeps all
+ * of its top-level keys (e.g. `permissions`) and any non-Stop hook events.
+ *
+ * Policy on the two keys we manage: we **own** `Stop` and `StopFailure` and
+ * replace them outright rather than appending to them. `writeStopHookConfig`
+ * runs once per phase and N times per worktree under fan-out, so replacing is
+ * idempotent — appending would accumulate a duplicate hook entry every call.
+ * The cost is that a Stop/StopFailure hook from another origin is discarded;
+ * the orchestrator's verdict mechanism depends on this hook being the one that
+ * runs, so it must win.
  */
 export const writeStopHookConfig = (
   phase: Phase,
@@ -76,10 +89,19 @@ export const writeStopHookConfig = (
       await mkdir(claudeDir, { recursive: true });
       const command = `bun "${STOP_HOOK_SCRIPT}" "$${AGENT_SENTINEL_VAR}"`;
       const hookEntry = [{ matcher: "", hooks: [{ type: "command", command }] }];
-      await writeFile(
-        join(claudeDir, "settings.local.json"),
-        JSON.stringify({ hooks: { Stop: hookEntry, StopFailure: hookEntry } }, null, 2),
-      );
+      const settingsPath = join(claudeDir, "settings.local.json");
+      // Read-merge-write: a malformed or absent file degrades to an empty base
+      // so we never throw on a settings file we can't parse — we just rebuild it.
+      const existing = await readFile(settingsPath, "utf8")
+        .then((raw) => JSON.parse(raw) as Record<string, unknown>)
+        .catch(() => ({}) as Record<string, unknown>);
+      const existingHooks =
+        typeof existing.hooks === "object" && existing.hooks !== null ? existing.hooks : {};
+      const merged = {
+        ...existing,
+        hooks: { ...existingHooks, Stop: hookEntry, StopFailure: hookEntry },
+      };
+      await writeFile(settingsPath, JSON.stringify(merged, null, 2));
     },
     catch: (cause) =>
       new WorkspaceError({ phase, operation: "write the Stop-hook config", reason: String(cause) }),
