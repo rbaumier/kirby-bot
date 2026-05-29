@@ -89,6 +89,15 @@ const gitHubConfig: Effect.Effect<GitHubConfig, ProviderConfigError> = Effect.tr
       : new ProviderConfigError({ detail: error instanceof Error ? error.message : String(error) }),
 });
 
+/**
+ * The repo owner from the resolved config. The PR `head` filter needs the
+ * `owner:branch` form, so the pull-request operations read it from here rather
+ * than re-reading the environment.
+ */
+export const githubOwner: Effect.Effect<string, ProviderConfigError> = gitHubConfig.pipe(
+  Effect.map((config) => config.owner),
+);
+
 /** A single GitHub REST call: method, repo-relative path, and optional query/body. */
 export type GitHubRequest = {
   readonly method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
