@@ -132,10 +132,17 @@ describe("recoverNoVerdictOnce", () => {
 describe("writeStopHookConfig merges into an existing settings.local.json", () => {
   const run = (worktree: string) =>
     Effect.runPromise(writeStopHookConfig("implementation", worktree));
-  const readSettings = (worktree: string) =>
+  type HookEntry = { matcher: string; hooks: { type: string; command: string }[] };
+  type Settings = {
+    permissions?: unknown;
+    hooks: Record<string, HookEntry[]>;
+  };
+  const readSettings = (worktree: string): Promise<Settings> =>
     readFile(join(worktree, ".claude", "settings.local.json"), "utf8").then(
-      (raw) => JSON.parse(raw) as Record<string, any>,
+      (raw) => JSON.parse(raw) as Settings,
     );
+  const firstCommand = (entries: HookEntry[] | undefined): string | undefined =>
+    entries?.[0]?.hooks?.[0]?.command;
 
   it("preserves preexisting permissions and registers our Stop hooks", async () => {
     const worktree = await mkdtemp(join(tmpdir(), "kirby-merge-"));
@@ -151,7 +158,7 @@ describe("writeStopHookConfig merges into an existing settings.local.json", () =
       expect(settings.permissions).toEqual({ allow: ["Bash(git status)"] });
       expect(settings.hooks.Stop).toHaveLength(1);
       expect(settings.hooks.StopFailure).toHaveLength(1);
-      expect(settings.hooks.Stop[0].hooks[0].command).toContain("stop-hook.ts");
+      expect(firstCommand(settings.hooks.Stop)).toContain("stop-hook.ts");
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }
@@ -174,8 +181,8 @@ describe("writeStopHookConfig merges into an existing settings.local.json", () =
       // PreToolUse (another origin) survives untouched.
       expect(settings.hooks.PreToolUse).toEqual(foreign);
       // Our Stop wins — the foreign "echo foreign" command is gone.
-      expect(settings.hooks.Stop[0].hooks[0].command).toContain("stop-hook.ts");
-      expect(settings.hooks.StopFailure[0].hooks[0].command).toContain("stop-hook.ts");
+      expect(firstCommand(settings.hooks.Stop)).toContain("stop-hook.ts");
+      expect(firstCommand(settings.hooks.StopFailure)).toContain("stop-hook.ts");
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }

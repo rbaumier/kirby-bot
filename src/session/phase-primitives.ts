@@ -90,11 +90,17 @@ export const writeStopHookConfig = (
       const command = `bun "${STOP_HOOK_SCRIPT}" "$${AGENT_SENTINEL_VAR}"`;
       const hookEntry = [{ matcher: "", hooks: [{ type: "command", command }] }];
       const settingsPath = join(claudeDir, "settings.local.json");
-      // Read-merge-write: a malformed or absent file degrades to an empty base
-      // so we never throw on a settings file we can't parse — we just rebuild it.
+      // Read-merge-write: a malformed or absent file — or a non-object root
+      // (array/scalar) — degrades to an empty base so we never throw on a
+      // settings file we can't parse and never leak numeric keys; we rebuild it.
       const existing = await readFile(settingsPath, "utf8")
-        .then((raw) => JSON.parse(raw) as Record<string, unknown>)
-        .catch(() => ({}) as Record<string, unknown>);
+        .then((raw): Record<string, unknown> => {
+          const parsed: unknown = JSON.parse(raw);
+          return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {};
+        })
+        .catch((): Record<string, unknown> => ({}));
       const existingHooks =
         typeof existing.hooks === "object" && existing.hooks !== null ? existing.hooks : {};
       const merged = {
