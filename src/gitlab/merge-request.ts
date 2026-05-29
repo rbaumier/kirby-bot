@@ -5,7 +5,7 @@
  * the request shape and Effect schema for one MR endpoint: find/create the
  * draft MR, view it, un-draft it, and merge it.
  */
-import { Effect, Schedule, Schema } from "effect";
+import { Console, Effect, Schedule, Schema } from "effect";
 import type { ProviderError } from "../provider/types";
 import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
 import { MergeRequestSchema } from "./schema";
@@ -125,7 +125,9 @@ const waitForMergeabilitySettled = (iid: number): Effect.Effect<void, ProviderEr
  * Un-drafting kicks off an async mergeability re-check, so we then wait for it
  * to settle before returning — otherwise the immediately following merge races
  * the check and is rejected with HTTP 405 (issue #41). The wait is best-effort:
- * a poll-read failure must not turn a successful un-draft into a phase failure.
+ * a poll-read failure must not turn a successful un-draft into a phase failure,
+ * but it is logged rather than swallowed silently so an auth/network failure
+ * during the wait stays diagnosable.
  */
 export const markMergeRequestReady = (iid: number): Effect.Effect<void, ProviderError> =>
   Effect.gen(function* () {
@@ -144,7 +146,14 @@ export const markMergeRequestReady = (iid: number): Effect.Effect<void, Provider
         MergeRequestSchema,
       );
     }
-    yield* waitForMergeabilitySettled(iid).pipe(Effect.ignore);
+    yield* waitForMergeabilitySettled(iid).pipe(
+      Effect.tapError((error) =>
+        Console.log(
+          `  ⚠ MR !${iid}: mergeability re-check unreadable after un-draft (${error._tag}) — merging anyway`,
+        ),
+      ),
+      Effect.ignore,
+    );
   });
 
 /** Params for {@link mergeMergeRequest}. */
