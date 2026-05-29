@@ -20,7 +20,7 @@
  * the session-kill guarantee on verdict, timeout, defect, or interruption.
  */
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Clock, Console, Effect } from "effect";
 import type { Phase } from "../config";
@@ -29,7 +29,7 @@ import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
 import type { TmuxError } from "./errors";
 import { NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
-import { bootClaudeSession, createSession, killSession } from "./tmux";
+import { bootClaudeSession, createSession, killSession, repromptForVerdict } from "./tmux";
 import type { VerdictToken } from "./verdict";
 import { parseVerdict } from "./verdict";
 
@@ -139,6 +139,22 @@ export const pollSentinel = (
     }
     return verdict;
   });
+
+/**
+ * Give a session that stopped without a clean verdict exactly one more chance
+ * (issue #26): on the first {@link NoVerdict}, run `reprompt` (nudge the live
+ * session, having cleared the stale sentinel) and poll once more. A second
+ * NoVerdict — or a timeout while waiting — surfaces as before, so the recovery
+ * is bounded to a single retry within the session's existing wall-clock budget.
+ *
+ * `poll` is re-run as a value, so it must be the lazy `pollSentinel(...)`
+ * Effect (re-checking the sentinel from scratch), not an already-forced result.
+ */
+export const recoverNoVerdictOnce = <R, RP>(
+  poll: Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError, R>,
+  reprompt: Effect.Effect<void, TmuxError | WorkspaceError, RP>,
+): Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError | TmuxError, R | RP> =>
+  poll.pipe(Effect.catchTag("NoVerdict", () => reprompt.pipe(Effect.zipRight(poll))));
 
 /**
  * Caller-supplied context for log enrichment. Lets the JSONL log and stdout
@@ -254,7 +270,24 @@ export const runOneClaudeSession = (
             `${prefix} boot ${formatDuration(bootMs)}  ·  tmux attach -r -t ${session}  ·  tail -f ${tmuxLogPath}`,
           );
 
-          const verdict = yield* pollSentinel({ phase, sentinel, startedAt, timeoutMs });
+          // On a stop without a clean verdict, nudge the still-idle session
+          // once for an explicit verdict and re-poll within the same budget
+          // (#26) — clearing the stale sentinel so the next Stop-hook write is
+          // the one we read. A second miss falls through to NoVerdict as before.
+          const reprompt = Effect.gen(function* () {
+            yield* artifacts.logEvent({ event: "verdict_reprompt", ...baseEvent, session });
+            yield* Console.log(`${prefix} stopped without a verdict — re-prompting once`);
+            yield* Effect.tryPromise({
+              try: () => rm(sentinel, { force: true }),
+              catch: (cause) =>
+                new WorkspaceError({ phase, operation: "clear the sentinel", reason: String(cause) }),
+            });
+            yield* repromptForVerdict(session);
+          });
+          const verdict = yield* recoverNoVerdictOnce(
+            pollSentinel({ phase, sentinel, startedAt, timeoutMs }),
+            reprompt,
+          );
           const totalMs = (yield* Clock.currentTimeMillis) - startedAt;
           yield* artifacts.logEvent({
             event: "session_verdict",

@@ -43,6 +43,25 @@ export const createSession = (session: string, worktree: string): Effect.Effect<
 export const killSession = (session: string): Effect.Effect<void> =>
   runShell(() => $`tmux kill-session -t ${session}`).pipe(Effect.ignore);
 
+/**
+ * One-line nudge sent to a session that stopped without emitting a verdict.
+ * Single line, no newline — delivered as one keystroke string then Enter, so
+ * the idle TUI receives it the same way the boot prompt's trailing Enter is
+ * sent (no buffer paste needed for a short reminder).
+ */
+export const VERDICT_REMINDER =
+  "You stopped without a verdict. Emit it now as `VERDICT: TOKEN` on its own line, with nothing else on that line.";
+
+/**
+ * Re-prompt an idle session to emit its verdict (issue #26). The session must
+ * already be sitting at the `claude` prompt after an `end_turn`; this types the
+ * reminder and submits it, kicking off one more turn whose Stop hook rewrites
+ * the sentinel. Best-effort delivery: if the keys don't land, the caller's
+ * re-poll simply times out into the same terminal NoVerdict, never worse.
+ */
+export const repromptForVerdict = (session: string): Effect.Effect<void, TmuxError> =>
+  tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER} Enter`);
+
 /** Capture the visible content of a session's pane. Empty string on any failure. */
 const capturePane = (session: string): Effect.Effect<string> =>
   runShell(() => $`tmux capture-pane -p -t ${session}`).pipe(
