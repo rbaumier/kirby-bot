@@ -6,7 +6,7 @@
  * not on the exit code. Cleanup paths that don't care about the outcome use
  * `runShell(...).pipe(Effect.ignore)`.
  */
-import type { $ } from "bun";
+import { $ } from "bun";
 import { Data, Effect } from "effect";
 import { COMMAND_TIMEOUT_MS } from "./config";
 
@@ -98,4 +98,10 @@ export const runShell = (
             ),
     ),
   );
+
+/** Run `git -C <worktree> <args>` through {@link runShell}. */
+export const runShellGit = (
+  worktree: string,
+  args: readonly string[],
+): Effect.Effect<ShellOutput, ShellError> => runShell(() => $`git -C ${worktree} ${args}`);
 

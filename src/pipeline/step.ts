@@ -109,7 +109,7 @@ const dispatchHandler = (
       return qaPhase(current);
     }
     case "merge": {
-      return onMerge(current);
+      return onMerge(current, env);
     }
     case "done": {
       return onDone(current);

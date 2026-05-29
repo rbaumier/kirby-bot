@@ -14,10 +14,12 @@ import { Console, Effect, Option } from "effect";
 import { LABELS } from "../../config";
 import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
+import type { ProviderCallError } from "../../provider/types";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
 import { describeShellError, runShell } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
+import { rebaseBranchOntoDefault } from "./rebase-branch";
 import type { State } from "../state";
 
 /** Open_draft_mr — open the Draft PR (idempotent), recording its iid. */
@@ -73,13 +75,23 @@ export const onOpenDraftMr = (
     };
   });
 
+/**
+ * GitLab's 422 for a branch that has fallen behind its target. The recovery
+ * is a rebase + force-push + retry, not a terminal failure (see issue #40).
+ */
+const isBranchOutOfDate = (error: ProviderCallError): boolean =>
+  error._tag === "ProviderHttpError" &&
+  error.status === 422 &&
+  error.body.includes("Branch cannot be merged");
+
 /** Merge — un-draft the PR and merge it, verifying on a non-zero exit. */
 export const onMerge = (
   state: Extract<State, { kind: "merge" }>,
+  env: Environment,
 ): Effect.Effect<State, HandlerError, GitProvider> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
-    const { issue, worktree, pullRequestIid } = state;
+    const { issue, branch, worktree, pullRequestIid } = state;
 
     yield* provider.markPullRequestReady(pullRequestIid).pipe(
       Effect.mapError(
@@ -90,29 +102,54 @@ export const onMerge = (
       ),
     );
 
-    // The merge API can return an error while the PR is in fact merged or
-    // queued (race with auto-merge) — verify the state before failing.
-    // `closed` ≠ `merged`.
-    return yield* provider
+    // One merge attempt. Resolves to `done` when the PR merges — or was already
+    // merged, a race with auto-merge (`closed` ≠ `merged`) — and otherwise fails
+    // with the raw provider error so the caller can decide whether to recover.
+    const attemptMerge: Effect.Effect<State, ProviderCallError, GitProvider> = provider
       .mergePullRequest(pullRequestIid, { shouldSquash: true, shouldAutoMerge: true })
       .pipe(
         Effect.map((): State => ({ kind: "done", issue, worktree, pullRequestIid })),
-        Effect.catchAll(
-          (mergeError): Effect.Effect<State, HandlerError, GitProvider> =>
-            Effect.gen(function* () {
-              const isMerged = yield* provider.viewPullRequest(pullRequestIid).pipe(
-                Effect.map((pr) => pr.isMerged),
-                Effect.catchAll(() => Effect.succeed(false)),
-              );
-              if (isMerged) {
-                return { kind: "done", issue, worktree, pullRequestIid };
-              }
-              return yield* Effect.fail(
-                new HandlerError({ reason: `merge: ${describeProviderError(mergeError)}` }),
-              );
-            }),
+        Effect.catchAll((mergeError) =>
+          provider.viewPullRequest(pullRequestIid).pipe(
+            Effect.map((pr) => pr.isMerged),
+            Effect.catchAll(() => Effect.succeed(false)),
+            Effect.flatMap(
+              (isMerged): Effect.Effect<State, ProviderCallError> =>
+                isMerged
+                  ? Effect.succeed({ kind: "done", issue, worktree, pullRequestIid })
+                  : Effect.fail(mergeError),
+            ),
+          ),
         ),
       );
+
+    // On "branch out of date", rebase onto the default branch, force-push, and
+    // retry the merge once before giving up — preserving all review/fix work.
+    return yield* attemptMerge.pipe(
+      Effect.catchAll((mergeError): Effect.Effect<State, HandlerError, GitProvider> => {
+        if (!isBranchOutOfDate(mergeError)) {
+          return Effect.fail(
+            new HandlerError({ reason: `merge: ${describeProviderError(mergeError)}` }),
+          );
+        }
+        return Effect.gen(function* () {
+          yield* Console.log(
+            `  ↳ merge rejected (branch out of date) — rebasing ${branch} onto ${env.defaultBranch}`,
+          );
+          yield* rebaseBranchOntoDefault({ worktree, branch, defaultBranch: env.defaultBranch }).pipe(
+            Effect.mapError((error): HandlerError => new HandlerError({ reason: `merge: ${error.reason}` })),
+          );
+          return yield* attemptMerge.pipe(
+            Effect.mapError(
+              (retryError): HandlerError =>
+                new HandlerError({
+                  reason: `merge: still failing after rebase — ${describeProviderError(retryError)}`,
+                }),
+            ),
+          );
+        });
+      }),
+    );
   });
 
 /** Done — unlabel the issue, remove the worktree, loop back to the queue. */

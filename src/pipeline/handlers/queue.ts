@@ -19,15 +19,11 @@ import { LABELS, WORKTREES_DIR } from "../../config";
 import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
 import type { ProviderCallError } from "../../provider/types";
-import { describeShellError, runShell } from "../../shell";
+import { describeShellError, runShell, runShellGit } from "../../shell";
 import { HandlerError, providerHandlerError } from "../errors";
 import { branchName, worktreePath } from "../naming";
 import { reclaimAgentBranch } from "./reclaim-branch";
 import type { IssueRef, State } from "../state";
-
-/** Run `git -C <worktree> <args>` and capture the result. */
-const runShellGit = (worktree: string, args: readonly string[]) =>
-  runShell(() => $`git -C ${worktree} ${args}`);
 
 /**
  * Exclude `.claude/settings.local.json` from git in a fresh worktree.
