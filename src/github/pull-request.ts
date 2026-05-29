@@ -79,9 +79,6 @@ export const createDraftPullRequest = (
 export const viewPullRequest = (iid: number): Effect.Effect<GitHubPullRequest, ProviderError> =>
   runGitHubRead({ method: "GET", path: `repos/:owner/:repo/pulls/${iid}` }, PullRequestSchema);
 
-/** A PR needs the ready-for-review mutation only while it is still a draft. */
-const needsReadyMutation = (draft: boolean): boolean => draft;
-
 /**
  * GraphQL is the only way to flip a PR from draft to ready-for-review; there is
  * no REST endpoint. The mutation is addressed by the PR's opaque `node_id`.
@@ -108,7 +105,8 @@ const MarkReadySchema = Schema.Struct({
 export const markPullRequestReady = (iid: number): Effect.Effect<void, ProviderError> =>
   Effect.gen(function* () {
     const pr = yield* viewPullRequest(iid);
-    if (!needsReadyMutation(pr.draft)) {
+    // Already ready — flipping a non-draft PR to ready is a wasted round-trip.
+    if (!pr.draft) {
       return;
     }
     yield* runGitHubGraphQL(MARK_READY_MUTATION, { id: pr.node_id }, MarkReadySchema);
@@ -160,4 +158,4 @@ export const mergePullRequest = (
   );
 
 /** Exposed for tests — never used in production code. */
-export const __test = { findOpenQuery, needsReadyMutation, mergeMethod };
+export const __test = { findOpenQuery, mergeMethod };
