@@ -52,14 +52,17 @@ export const PHASE_MODELS: Record<Phase, AgentModel> = {
  * *secondary* guard: they stop a single hung phase from silently eating the
  * whole budget. `implementation` carries by far the largest cap — implementation is
  * the heavy phase and a hard issue can legitimately run for hours — while the
- * review/evaluate/fix/qa loop stays tight. Their sum (300) deliberately
+ * review/evaluate/fix/qa loop stays tight. Their sum (315) deliberately
  * exceeds the budget, so a healthy run never reaches every cap.
+ *
+ * `fix` carries 45 (not 30): a multi-file fix on a large diff routinely runs
+ * past 30 min, and a hard kill there discards the whole review+fix pass (#42).
  */
 export const PHASE_CAP_MINUTES: Record<Phase, number> = {
   implementation: 180,
   review: 35,
   evaluate: 30,
-  fix: 30,
+  fix: 45,
   qa: 25,
 };
 
