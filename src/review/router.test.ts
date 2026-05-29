@@ -3,6 +3,7 @@ import { Effect, Exit } from "effect";
 import {
   _parseRouterOutput,
   _renderAgentCatalog,
+  _renderExampleEnvelope,
   _renderFileRoster,
   ROUTER_DIFF_MAX_BYTES,
   RouterMalformedOutput,
@@ -145,6 +146,19 @@ describe("_renderAgentCatalog", () => {
     for (const name of ALL_AGENT_NAMES) {
       expect(out).toContain(`- \`${name}\`: ${AGENTS[name].description}`);
     }
+  });
+});
+
+describe("_renderExampleEnvelope", () => {
+  // The #38 regression: the prompt's example advertised agent names the catalog
+  // no longer had (`funnel-l1`, `language-typescript`); haiku copied them and
+  // every routing pass failed with "unknown agent name". Guard against any
+  // future drift by feeding the rendered example back through the real parser —
+  // it must round-trip, proving every name in the example is a live catalog
+  // agent. Never names an agent.
+  test("round-trips through _parseRouterOutput (every example name is valid)", () => {
+    const exit = Effect.runSyncExit(_parseRouterOutput(_renderExampleEnvelope()));
+    expect(Exit.isSuccess(exit)).toBe(true);
   });
 });
 

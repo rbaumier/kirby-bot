@@ -214,23 +214,15 @@ const buildRouterPrompt = (input: BuildRouterPromptInput): string =>
     "Write this exact JSON envelope to the findings file:",
     "",
     "```json",
-    "{",
-    `  "agents": [`,
-    `    { "name": "funnel-l1", "files": [] },`,
-    `    { "name": "correctness", "files": [] },`,
-    `    { "name": "language-typescript", "files": ["src/foo.ts", "src/bar.tsx"] }`,
-    "  ]",
-    "}",
+    renderExampleEnvelope(),
     "```",
     "",
     "Rules:",
     "",
-    "- `name` MUST be one of the agent names listed above. Unknown names abort the phase.",
-    "- `files: []` means the agent receives the full diff. Use for funnel-l1, funnel-l2, correctness, tests, generalist passes (matt-review, thermo-nuclear), and any agent whose review value depends on the cross-file picture.",
-    "- `files: [\"path/a\", \"path/b\"]` restricts the agent to those files. Use for language-specific agents (e.g. language-typescript on `.ts/.tsx` files), skill agents (drizzle-orm only on files importing drizzle), and subsystem agents (billing-subsystem only on billing files).",
-    "- Be inclusive with always-on agents (funnel-l1, funnel-l2, occam-razor, correctness, tests, simplify, coding-standards). Be selective with specialist ones — only pick a subsystem or language agent if its rule clearly matches.",
-    "- Pick `general-opus` only for large diffs (>200 lines) or visibly high-stakes ones (auth, billing, schema migrations).",
-    "- Pick `claude-md-materiality` only when the diff teaches something that *should* be in the repo's CLAUDE.md / AGENTS.md but those files are unchanged.",
+    "- `name` MUST be copied exactly from the catalog above. Unknown names abort the phase — never invent or abbreviate one. The example above shows the envelope *shape*; pick the actual agents from the catalog, not from the example.",
+    "- `files: []` means the agent receives the full diff. Use it for any agent whose description says to spawn on every diff, and for generalist passes whose review value depends on the cross-file picture.",
+    "- `files: [\"path/a\", \"path/b\"]` restricts the agent to those files. Use it for language-, skill-, or subsystem-specific agents — scope each to the files its description targets (e.g. a language agent on that language's files, a skill agent only on files that import the skill's library).",
+    "- Be inclusive with the spawn-on-every-diff agents; be selective with specialists — pick a language, skill, or subsystem agent only when its description clearly matches what the diff actually does.",
     "",
     "Now read the diff carefully, decide, write the JSON, emit the verdict.",
   ].join("\n");
@@ -238,6 +230,29 @@ const buildRouterPrompt = (input: BuildRouterPromptInput): string =>
 /** Render the agent catalog block — one line per agent. */
 const renderAgentCatalog = (): string =>
   ALL_AGENT_NAMES.map((name) => `- \`${name}\`: ${AGENTS[name].description}`).join("\n");
+
+/**
+ * Render the example routing envelope shown in the output contract. Built from
+ * {@link ALL_AGENT_NAMES} — never hard-coded — so an agent rename or merge can
+ * never leave a stale name in the prompt that the haiku copies verbatim into an
+ * unroutable decision. This was the #38 regression: after `funnel-l1`/`-l2`
+ * were merged into `funnel` (and with no TypeScript agent ever in the catalog),
+ * the prompt's hard-coded examples still advertised `funnel-l1` and
+ * `language-typescript`; haiku echoed them, `isAgentName` rejected them every
+ * time, and the deterministic failure made the retry useless.
+ */
+const renderExampleEnvelope = (): string => {
+  const fullDiffPicks = ALL_AGENT_NAMES.slice(0, 2);
+  const scopedPick = ALL_AGENT_NAMES[ALL_AGENT_NAMES.length - 1];
+  return [
+    "{",
+    `  "agents": [`,
+    ...fullDiffPicks.map((name) => `    { "name": "${name}", "files": [] },`),
+    `    { "name": "${scopedPick}", "files": ["src/foo.ts", "src/bar.ts"] }`,
+    "  ]",
+    "}",
+  ].join("\n");
+};
 
 /** Render the file roster — small per-file summaries; no diff content here. */
 const renderFileRoster = (files: readonly ChangedFile[]): string =>
@@ -457,5 +472,6 @@ export const routeAgents = (
 
 /** Exported for tests. */
 export const _renderAgentCatalog = renderAgentCatalog;
+export const _renderExampleEnvelope = renderExampleEnvelope;
 export const _renderFileRoster = renderFileRoster;
 export const _parseRouterOutput = parseRouterOutput;
