@@ -184,12 +184,11 @@ const PlainCommentAckSchema = Schema.Struct({ node_id: Schema.String });
 const IssueCommentSchema = Schema.Struct({
   node_id: Schema.String,
   body: Schema.optionalWith(Schema.String, { default: () => "" }),
-  user: Schema.optionalWith(
-    Schema.NullOr(
-      Schema.Struct({ login: Schema.optionalWith(Schema.String, { default: () => "unknown" }) }),
-    ),
-    { default: () => null },
-  ),
+  // `user` is null for a ghost author; the `"unknown"` fallback lives in the
+  // mapper below (single source), mirroring GitLab's `toDiscussionSummary`.
+  user: Schema.optionalWith(Schema.NullOr(Schema.Struct({ login: Schema.String })), {
+    default: () => null,
+  }),
 });
 const IssueCommentsSchema = Schema.Array(IssueCommentSchema);
 
@@ -361,6 +360,3 @@ export const resolveDiscussion = (
     ),
   );
 };
-
-/** Exposed for tests — never used in production code. */
-export const __test = { isLineNotInDiff, PLAIN_COMMENT_PREFIX };
