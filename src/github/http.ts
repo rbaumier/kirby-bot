@@ -267,6 +267,30 @@ const GraphQLEnvelope = Schema.Struct({
 const GRAPHQL_REF = { method: "POST", path: "graphql" } as const;
 
 /**
+ * Interpret a parsed GraphQL response body: a top-level `errors` array (GraphQL
+ * signals failure with HTTP 200 + `errors`) is lifted into a
+ * {@link ProviderResponseError}; otherwise the `data` payload is decoded against
+ * `schema`. Pure — no I/O — so the errors-vs-data branch is unit-testable.
+ */
+const decodeGraphQL = <A, I>(
+  schema: Schema.Schema<A, I>,
+  parsed: unknown,
+): Effect.Effect<A, ProviderError> =>
+  decodeBody(GRAPHQL_REF, GraphQLEnvelope, parsed).pipe(
+    Effect.flatMap((envelope) =>
+      envelope.errors !== undefined && envelope.errors.length > 0
+        ? Effect.fail(
+            new ProviderResponseError({
+              method: GRAPHQL_REF.method,
+              path: GRAPHQL_REF.path,
+              detail: `GraphQL errors: ${JSON.stringify(envelope.errors).slice(0, 700)}`,
+            }),
+          )
+        : decodeBody(GRAPHQL_REF, schema, envelope.data),
+    ),
+  );
+
+/**
  * Run a GraphQL operation exactly once — no retry (treat every operation as a
  * mutation). GraphQL returns HTTP 200 even on errors, so after parsing we check
  * for a top-level `errors` array and lift it into a {@link ProviderResponseError}
@@ -327,19 +351,8 @@ export const runGitHubGraphQL = <A, I>(
         }),
     });
 
-    const envelope = yield* decodeBody(GRAPHQL_REF, GraphQLEnvelope, parsed);
-    if (envelope.errors !== undefined && envelope.errors.length > 0) {
-      return yield* Effect.fail(
-        new ProviderResponseError({
-          method: GRAPHQL_REF.method,
-          path: GRAPHQL_REF.path,
-          detail: `GraphQL errors: ${JSON.stringify(envelope.errors).slice(0, 700)}`,
-        }),
-      );
-    }
-
-    return yield* decodeBody(GRAPHQL_REF, schema, envelope.data);
+    return yield* decodeGraphQL(schema, parsed);
   });
 
 /** Exposed for tests — never used in production code. */
-export const __test = { decodeBody };
+export const __test = { decodeBody, decodeGraphQL, graphqlUrlFor, computeConfig };
