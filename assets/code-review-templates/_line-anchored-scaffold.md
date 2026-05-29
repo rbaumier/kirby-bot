@@ -20,6 +20,7 @@ Max **8 file reads** for the whole review (incl. CLAUDE.md, diff, source files).
 3. **Intentional comments** — `// SAFETY:`/`// intentionally`/`// fallback`/`# noqa` *specifically* addresses the failure mode? Must be specific. `// SAFETY:` for unchecked-bounds does NOT silence a race on the same line.
 4. **Diff is the fix** — added code resolves *this* failure mode, not just an adjacent one? `.unwrap()` → `?` resolves panic-on-None. `format!` → bind params resolves SQL injection, NOT missing tenant filter. Drop only if diff addresses your specific mode.
 5. **Type tracing** — claimed type mismatch (`f64`/`i64`, `Option<T>`/`T`, `&str`/`String`): trace through diff. Conversion anywhere on path → types consistent → drop.
+6. **Project convention** — does CLAUDE.md (or a linked house-rules doc) explicitly sanction this pattern (timeouts handled at the pool/connection layer, the project's ORM/lib version, a DB-level constraint that already guarantees the invariant)? A generic skill rule does not override an explicit project convention. Drop.
 
 ## Output
 
