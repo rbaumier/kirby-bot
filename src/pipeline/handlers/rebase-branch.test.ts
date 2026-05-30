@@ -84,6 +84,23 @@ describe("rebaseBranchOntoDefault", () => {
     expect(localSha).toBe(remoteSha);
   });
 
+  test("commits a dirty working tree before rebasing, carrying the edit along (#67)", async () => {
+    const worktree = await buildDivergedRepo({ branchFile: "b.ts" });
+    // A post-review edit left uncommitted by a later phase — would abort the
+    // rebase with "cannot rebase: You have unstaged changes" before the fix.
+    writeFileSync(join(worktree, "b.ts"), "branch change\npost-review refinement\n");
+
+    await Effect.runPromise(rebaseBranchOntoDefault({ worktree, branch: BRANCH, defaultBranch: "main" }));
+
+    const clean = (await $`git -C ${worktree} status --porcelain`.text()).trim();
+    expect(clean).toBe("");
+    const localSha = await headSha(worktree, BRANCH);
+    const remoteSha = await headSha(worktree, `origin/${BRANCH}`);
+    expect(localSha).toBe(remoteSha);
+    const tracked = await $`git -C ${worktree} show ${BRANCH}:b.ts`.text();
+    expect(tracked).toContain("post-review refinement");
+  });
+
   test("fails with a conflict error when the rebase cannot replay cleanly", async () => {
     const worktree = await buildDivergedRepo({ branchFile: "a.ts" });
 
