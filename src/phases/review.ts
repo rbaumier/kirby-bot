@@ -23,7 +23,7 @@ import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { Environment } from "../preflight";
 import { describeProviderError } from "../provider/types";
-import type { RunArtifacts } from "../run-artifacts";
+import { RunArtifacts } from "../run-artifacts";
 import type { GitProvider } from "../provider/provider";
 import { aggregateFindings } from "../review/aggregate";
 import { postReviewToMr } from "../review/post";
@@ -38,6 +38,7 @@ export const reviewPhase = (
   env: Environment,
 ): Effect.Effect<State, HandlerError, GitProvider | RunArtifacts> =>
   Effect.gen(function* () {
+    const artifacts = yield* RunArtifacts;
     const { fixCycles, issue, worktree, deadline, pullRequestIid } = state;
     const tag = `review[${fixCycles}]`;
 
@@ -61,6 +62,25 @@ export const reviewPhase = (
         (error) => new HandlerError({ reason: `${tag}: ${describePhaseError(error)}` }),
       ),
     );
+
+    // When every fan-out agent failed (timed out / verdict-reprompt loop / error),
+    // this is an infrastructure failure of the iteration — not "no findings".
+    // Advancing to evaluate would re-run another full fan-out against the same
+    // diff. Abort and let a human inspect the run.
+    if (fanOut.okCount === 0) {
+      yield* artifacts.logEvent({
+        event: "review_fanout_sterile",
+        issueIid: issue.iid,
+        iteration: fixCycles,
+        okCount: fanOut.okCount,
+        totalCount: fanOut.totalCount,
+      });
+      return yield* Effect.fail(
+        new HandlerError({
+          reason: `${tag}: review_fanout_sterile — 0/${fanOut.totalCount} agents reached AGENT_DONE`,
+        }),
+      );
+    }
 
     const review = yield* aggregateFindings(fanOut).pipe(
       Effect.mapError(
