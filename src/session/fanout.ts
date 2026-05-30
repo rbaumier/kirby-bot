@@ -28,8 +28,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Cause, Clock, Console, Effect, Exit } from "effect";
-import type { Phase } from "../config";
-import { MAX_CONCURRENT_AGENTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
+import type { AgentModel, Phase } from "../config";
+import { MAX_CONCURRENT_AGENTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS, pickReviewModel } from "../config";
 import type { AgentName } from "../review/agents";
 import { getAgentModel } from "../review/agents";
 import { getChangedFilesSince } from "../review/delta-files";
@@ -97,6 +97,12 @@ export type RunFanOutPhaseInput = {
   readonly lastReviewedSha?: string;
 };
 
+/** Return the higher-tier model so per-agent `sonnet` entries are never downgraded. */
+const maxModel = (a: AgentModel, b: AgentModel): AgentModel => {
+  const rank: Record<AgentModel, number> = { haiku: 0, sonnet: 1, opus: 2 };
+  return (rank[a] ?? 0) >= (rank[b] ?? 0) ? a : b;
+};
+
 /** Templates dir resolved relative to this file at module load — handy default. */
 export const DEFAULT_TEMPLATES_DIR = new URL(
   "../../assets/code-review-templates/",
@@ -148,12 +154,14 @@ type RunOneAgentParams = {
   readonly diffFile: string;
   readonly perAgentTimeoutMs: number;
   readonly previousFindingsBlock: string;
+  /** Floor model for this pass — composed with per-agent model via maxModel. */
+  readonly escalatedModel: AgentModel;
 };
 
 const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
   Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
-    const { input, agent, analysis, scopedFiles, diffFile, perAgentTimeoutMs, previousFindingsBlock } =
+    const { input, agent, analysis, scopedFiles, diffFile, perAgentTimeoutMs, previousFindingsBlock, escalatedModel } =
       params;
     const artifacts = yield* RunArtifacts;
     const ref = {
@@ -202,7 +210,7 @@ const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, nev
               iteration: input.iteration,
               agent,
             },
-            model: getAgentModel(agent),
+            model: maxModel(getAgentModel(agent), escalatedModel),
           }),
         ),
       )
@@ -323,7 +331,11 @@ export const runFanOutPhase = (
         }),
     });
 
-    // Routing — haiku in a tmux session. Hard-fails the phase if the output
+    // Measure the full diff once — reused for model escalation and router.
+    const fullDiffBytes = Buffer.byteLength(fullDiff, "utf8");
+    const escalatedModel = pickReviewModel(input.iteration, fullDiffBytes);
+
+    // Routing — model-escalated tmux session. Hard-fails the phase if the output
     // is malformed or the agent list is empty.
     const routerResult = yield* routeAgents({
       phase: input.phase,
@@ -333,6 +345,7 @@ export const runFanOutPhase = (
       deadline: input.deadline,
       files: input.files,
       fullDiff,
+      model: escalatedModel,
     }).pipe(Effect.mapError(routerErrorToPhase(input.phase)));
 
     // Deterministic analysis — runs after routing so the run JSONL keeps the
@@ -414,6 +427,7 @@ export const runFanOutPhase = (
           diffFile: slices.perAgent.get(route.name) ?? fullDiffPath,
           perAgentTimeoutMs,
           previousFindingsBlock,
+          escalatedModel,
         }),
       { concurrency: MAX_CONCURRENT_AGENTS },
     );

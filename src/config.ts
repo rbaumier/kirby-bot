@@ -7,6 +7,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentModel } from "./review/agents";
+export type { AgentModel };
 
 /** The GitLab issue labels the orchestrator reads and writes. */
 export const LABELS = {
@@ -44,6 +45,31 @@ export const PHASE_MODELS: Record<Phase, AgentModel> = {
   fix: "sonnet",
   qa: "haiku",
 };
+
+/**
+ * Diff size threshold (bytes) above which a first-pass review escalates from
+ * haiku to sonnet. Re-review iterations always escalate regardless of size.
+ *
+ * 20 KB captures medium-to-large diffs that push haiku toward shape glitches
+ * while leaving cheap, small first-pass reviews on haiku.
+ */
+export const REVIEW_ESCALATION_DIFF_BYTES = 20_000;
+
+/**
+ * Pick the model tier for the review phase (router + fan-out agents).
+ *
+ * Escalates from haiku to sonnet when the risk of degradation is high:
+ *  - any re-review iteration (`iteration >= 1`), or
+ *  - the full diff exceeds {@link REVIEW_ESCALATION_DIFF_BYTES}.
+ *
+ * First-pass small diffs stay on haiku to keep cost down.
+ *
+ * Note: per-agent model overrides in the agent registry are a *floor*. The
+ * caller in `fanout.ts` takes `max(agentModel, pickReviewModel(...))` so an
+ * agent already declared as `sonnet` is never downgraded.
+ */
+export const pickReviewModel = (iteration: number, diffBytes: number): AgentModel =>
+  iteration >= 1 || diffBytes >= REVIEW_ESCALATION_DIFF_BYTES ? "sonnet" : "haiku";
 
 /**
  * Per-phase wall-clock cap, in minutes.

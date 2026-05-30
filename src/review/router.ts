@@ -21,7 +21,7 @@
  */
 import { writeFile } from "node:fs/promises";
 import { Clock, Console, Data, Effect, ParseResult, Schema } from "effect";
-import type { Phase } from "../config";
+import type { AgentModel, Phase } from "../config";
 import { MAX_ROUTER_ATTEMPTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "../session/errors";
@@ -91,6 +91,8 @@ export type RouteAgentsInput = {
   readonly files: readonly ChangedFile[];
   /** The full diff text (will be truncated to ~100KB before being sent). */
   readonly fullDiff: string;
+  /** Model tier for the router session — escalated from haiku when risk is high. */
+  readonly model: AgentModel;
 };
 
 /** One agent decision the router emitted. */
@@ -398,7 +400,7 @@ export const routeAgents = (
           fileCount: input.files.length,
         });
         yield* Console.log(
-          `[#${input.issueIid} ${input.phase}[${input.iteration}]] router (haiku${attempt === 0 ? "" : `, attempt ${attempt + 1}`}) on ${input.files.length} files, ${diffBytesSent} bytes${truncated ? " (truncated)" : ""}`,
+          `[#${input.issueIid} ${input.phase}[${input.iteration}]] router (${input.model}${attempt === 0 ? "" : `, attempt ${attempt + 1}`}) on ${input.files.length} files, ${diffBytesSent} bytes${truncated ? " (truncated)" : ""}`,
         );
 
         const verdict = yield* runOneClaudeSession({
@@ -414,7 +416,7 @@ export const routeAgents = (
             iteration: input.iteration,
             agent: refAgent,
           },
-          model: "haiku",
+          model: input.model,
         });
         if (verdict !== "ROUTING_DONE") {
           return yield* Effect.fail(
