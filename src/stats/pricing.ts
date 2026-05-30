@@ -44,15 +44,17 @@ export const modelTier = (modelId: string): ModelTier | null => {
   return null;
 };
 
-/** Compute USD cost for one usage record. */
-export const usageCostUsd = (input: {
+export type UsageRecord = {
   readonly tier: ModelTier;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheCreation5mTokens: number;
   readonly cacheCreation1hTokens: number;
   readonly cacheReadTokens: number;
-}): number => {
+};
+
+/** Compute USD cost for one usage record. */
+export const usageCostUsd = (input: UsageRecord): number => {
   const price = MODEL_PRICES[input.tier];
   const per = (tokens: number, ratePerMtok: number): number => (tokens * ratePerMtok) / 1_000_000;
   return (

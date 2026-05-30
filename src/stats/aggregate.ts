@@ -222,14 +222,16 @@ const isAfkTranscript = (t: TranscriptSummary): boolean =>
   (t.cwd ?? "").includes(".afk-worktrees") ||
   (t.cwd ?? "").includes("kirby-bot");
 
-/** Build the full {@link AnalyticsReport} for a date range. */
-export const buildAnalyticsReport = async (input: {
+export type AnalyticsReportInput = {
   readonly runsDir: string;
   readonly sinceMs: number;
   readonly untilMs: number;
   /** When false, transcript scanning is skipped (test/perf escape). */
   readonly includeTranscripts?: boolean;
-}): Promise<AnalyticsReport> => {
+};
+
+/** Build the full {@link AnalyticsReport} for a date range. */
+export const buildAnalyticsReport = async (input: AnalyticsReportInput): Promise<AnalyticsReport> => {
   const { runsDir, sinceMs, untilMs } = input;
   const runDirs = await findRunsInWindow(runsDir, sinceMs, untilMs);
   const runs: RunSummary[] = [];

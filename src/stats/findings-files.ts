@@ -41,10 +41,9 @@ export type FindingsDump = {
 
 const FNAME_RE = /^findings-(\d+)-([a-z]+)-(\d+)-(.+)\.json$/;
 
-const parseDumpContent = (
-  meta: { issueIid: number; phase: string; iteration: number; agent: string; path: string },
-  content: string,
-): FindingsDump => {
+type FindingsMeta = Pick<FindingsDump, "issueIid" | "phase" | "iteration" | "agent" | "path">;
+
+const parseDumpContent = (meta: FindingsMeta, content: string): FindingsDump => {
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(content);
