@@ -186,5 +186,17 @@ export const mergeMergeRequest = (
     MergeRequestSchema,
   );
 
+const NoteAckSchema = Schema.Struct({ id: Schema.Union(Schema.String, Schema.Number) });
+
+/** Post a plain (non-resolvable) note on a merge request. */
+export const addMergeRequestNote = (
+  iid: number,
+  body: string,
+): Effect.Effect<void, ProviderError> =>
+  runGitLabWrite(
+    { method: "POST", path: `projects/:id/merge_requests/${iid}/notes`, body: { body } },
+    NoteAckSchema,
+  ).pipe(Effect.asVoid);
+
 /** Exposed for tests — never used in production code. */
 export const __test = { isMergeabilityPending };

@@ -13,6 +13,7 @@
  */
 import { Effect, Layer, Option } from "effect";
 import {
+  addPullRequestNote as ghAddPullRequestNote,
   listDiscussions as ghListDiscussions,
   postDiscussion as ghPostDiscussion,
   replyToDiscussion as ghReplyToDiscussion,
@@ -138,6 +139,9 @@ export const GitHubProviderLive: Layer.Layer<GitProvider> = Layer.succeed(
 
     postDiscussion: (pullRequestIid: number, body: string) =>
       adaptCall(ghPostDiscussion(pullRequestIid, body)).pipe(Effect.map(DiscussionId)),
+
+    postMrNote: (pullRequestIid: number, body: string) =>
+      adaptCall(ghAddPullRequestNote(pullRequestIid, body)),
 
     replyToDiscussion: (pullRequestIid: number, discussionId: DiscussionId, body: string) =>
       adaptCall(ghReplyToDiscussion(pullRequestIid, discussionId, body)),

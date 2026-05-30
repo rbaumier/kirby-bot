@@ -120,6 +120,7 @@ const makeClaimFailingProvider = (): Layer.Layer<GitProvider> =>
     mergePullRequest: () => Effect.die("fake: mergePullRequest"),
     listDiscussions: () => Effect.die("fake: listDiscussions"),
     postDiscussion: () => Effect.die("fake: postDiscussion"),
+    postMrNote: () => Effect.die("fake: postMrNote"),
     replyToDiscussion: () => Effect.die("fake: replyToDiscussion"),
     resolveDiscussion: () => Effect.die("fake: resolveDiscussion"),
   });

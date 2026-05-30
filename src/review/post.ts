@@ -15,6 +15,12 @@
  * will route to "left for a human". This intentionally avoids the noise of
  * one thread per prose finding while preserving them on the MR record.
  *
+ * Line-anchored `suggestion` findings are similarly file-and-forget: they are
+ * consolidated into a single non-resolvable MR note so the evaluator never
+ * re-triages them (they are never blocking). Actionable severities
+ * (`bug`, `security`, `performance`, `error_handling`) keep the resolvable
+ * discussion path.
+ *
  * Concurrency is bounded — both stale-resolution and posting run with
  * concurrency {@link POST_CONCURRENCY} so a hundred-finding review doesn't
  * hammer the GitLab API in lockstep.
@@ -27,6 +33,9 @@ import type { AggregatedReview, LineAnchoredFinding, ProseFinding } from "./aggr
 
 /** Parallel discussion-posts per request — keeps GitLab happy on big diffs. */
 const POST_CONCURRENCY = 6;
+
+/** Severities that go through the resolvable-discussion path and into the evaluate loop. */
+const isActionable = (f: LineAnchoredFinding): boolean => f.severity !== "suggestion";
 
 /**
  * Format one line-anchored finding into a discussion body. The first line is
@@ -73,6 +82,34 @@ const formatProseSummary = (findings: readonly ProseFinding[]): string => {
     "## Prose findings (architectural / scope-level)",
     "",
     "These are emitted by structural review agents (Funnel L1/L2, Matt Review, Thermo-nuclear, Materiality). They don't anchor to a single line; the evaluator routes them to 'left for a human'.",
+    "",
+    ...sections,
+  ].join("\n");
+};
+
+/**
+ * Collapse line-anchored suggestion findings into one consolidated note body.
+ * Mirrors `formatProseSummary`'s grouping approach — one section per agent.
+ */
+const formatSuggestionNote = (findings: readonly LineAnchoredFinding[]): string => {
+  const grouped = new Map<string, LineAnchoredFinding[]>();
+  for (const finding of findings) {
+    const list = grouped.get(finding.agent) ?? [];
+    list.push(finding);
+    grouped.set(finding.agent, list);
+  }
+  const sections = Array.from(grouped.entries(), ([agent, items]) =>
+    [
+      `### ${agent}`,
+      ...items.map(
+        (f) => `- [${f.file}:${f.line}] **${f.title}** _(confidence: ${f.confidence})_`,
+      ),
+    ].join("\n"),
+  );
+  return [
+    "## Suggestion findings (filed for later grooming)",
+    "",
+    "These are `severity: suggestion` findings from the code-review pass. They are not blocking — the evaluator will not re-triage them.",
     "",
     ...sections,
   ].join("\n");
@@ -135,11 +172,19 @@ export const postReviewToMr = (
       { concurrency: POST_CONCURRENCY },
     );
 
-    // 2. Post each line-anchored finding as its own resolvable thread, keeping
+    // 2. Split line-anchored findings: actionable severities become resolvable
+    //    discussions; suggestion findings go to a single consolidated note so
+    //    the evaluator never re-triages them.
+    const actionableFindings = input.review.lineAnchoredFindings.filter(isActionable);
+    const suggestionFindings = input.review.lineAnchoredFindings.filter(
+      (f) => !isActionable(f),
+    );
+
+    // 3. Post each actionable finding as its own resolvable thread, keeping
     //    the finding object so the returned thread id stays attributed to its
     //    emitting Agent (forEach preserves input order).
     const postedLine = yield* Effect.forEach(
-      input.review.lineAnchoredFindings,
+      actionableFindings,
       (finding) =>
         provider
           .postDiscussion(input.mrIid, formatLineAnchoredBody(finding))
@@ -147,15 +192,21 @@ export const postReviewToMr = (
       { concurrency: POST_CONCURRENCY },
     );
 
-    // 3. Collapse prose findings into one summary thread (if any).
+    // 4. Consolidate suggestion findings into one non-resolvable note (if any).
+    if (suggestionFindings.length > 0) {
+      yield* provider.postMrNote(input.mrIid, formatSuggestionNote(suggestionFindings));
+    }
+
+    // 5. Collapse prose findings into one summary thread (if any).
     const proseFindings = input.review.proseFindings;
     const proseDiscussionId =
       proseFindings.length > 0
         ? yield* provider.postDiscussion(input.mrIid, formatProseSummary(proseFindings))
         : undefined;
 
-    // 4. Log review_findings — kirby-bot owns the Agent attribution here; the
-    //    stats projection joins it to triage_results on discussionId.
+    // 6. Log review_findings — only actionable findings carry a discussionId
+    //    joinable to triage_results; suggestion findings are omitted because
+    //    they are never triaged.
     yield* artifacts.logEvent({
       event: "review_findings",
       issueIid: input.issueIid,
@@ -170,12 +221,15 @@ export const postReviewToMr = (
       ...(proseDiscussionId === undefined
         ? {}
         : { prose: { discussionId: proseDiscussionId, byAgent: countByAgent(proseFindings) } }),
+      ...(suggestionFindings.length === 0 ? {} : { suggestions: { count: suggestionFindings.length } }),
     });
 
     const summaryPosted = proseDiscussionId !== undefined;
     const posted = postedLine.length + (summaryPosted ? 1 : 0);
     yield* Console.log(
-      `[review] !${input.mrIid}: posted ${posted} discussions (${postedLine.length} line-anchored + ${summaryPosted ? 1 : 0} prose summary), resolved ${stale.length} stale`,
+      `[review] !${input.mrIid}: posted ${posted} discussions (${postedLine.length} line-anchored + ${summaryPosted ? 1 : 0} prose summary)` +
+        (suggestionFindings.length > 0 ? `, ${suggestionFindings.length} suggestions filed as note` : "") +
+        `, resolved ${stale.length} stale`,
     );
 
     return { posted, resolvedStale: stale.length };
