@@ -46,6 +46,18 @@ export type PromptSpec =
     readonly failureModes?: string;
   };
 
+/**
+ * Deterministic spawn predicate — hard-gates the agent before the router's
+ * semantic judgment is applied. The gate is checked against `ChangedFile`
+ * metadata already extracted by `detect.ts`; no new file walk is needed.
+ *
+ * - `{ ext }` — at least one changed file must have `ext === <value>`.
+ * - `{ import }` — at least one changed file must have an import entry that
+ *   equals `<value>` or starts with `<value>/` (covers scoped packages and
+ *   sub-path imports such as `@tanstack/react-query` or `drizzle-orm/pg-core`).
+ */
+export type AgentGate = { readonly ext: string } | { readonly import: string };
+
 /** One agent's complete declaration — the only place to CRUD an agent. */
 export type AgentEntry = {
   readonly model: AgentModel;
@@ -56,6 +68,12 @@ export type AgentEntry = {
    */
   readonly description: string;
   readonly prompt: PromptSpec;
+  /**
+   * Optional hard gate. When present, the agent is dropped from the fan-out
+   * unless the gate is satisfied by the actual diff files — regardless of what
+   * the router emits. Agents without a gate are always eligible.
+   */
+  readonly gate?: AgentGate;
 };
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -140,6 +158,7 @@ const AGENTS_DATA = {
     model: "sonnet",
     description: "Rust-specific review: ownership, lifetimes, unsafe, error types. Spawn for .rs files.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "language-rust" },
+    gate: { ext: "rs" },
   },
   // "language-swift": {
   //   model: "sonnet",
@@ -157,6 +176,7 @@ const AGENTS_DATA = {
     model: "haiku",
     description: "Drizzle ORM review: schema shape, query correctness, migration safety. Spawn when files import drizzle-orm/drizzle-kit.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "drizzle-orm" },
+    gate: { import: "drizzle-orm" },
   },
   tanstack: {
     model: "haiku",
@@ -166,6 +186,7 @@ const AGENTS_DATA = {
       roleFile: "skill-agent-pair.md",
       skillNames: ["tanstack-query", "tanstack-start-best-practices"],
     },
+    gate: { import: "@tanstack" },
   },
   "code-hygiene": {
     model: "haiku",
@@ -212,6 +233,7 @@ const AGENTS_DATA = {
     model: "haiku",
     description: "Zod schema review: branding, refinements, error shaping. Spawn when files import zod.",
     prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "zod" },
+    gate: { import: "zod" },
   },
 
   // ─── Surface (UI / API) ────────────────────────────────────────────────
