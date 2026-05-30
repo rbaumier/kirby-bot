@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, Ref } from "effect";
 import {
+  buildClaudeCmd,
   ENV_KEY_RE,
   MODEL_ALIAS_RE,
   paneShowsPaste,
@@ -81,6 +82,44 @@ describe("MODEL_ALIAS_RE", () => {
 
   it("rejects an empty string", () => {
     expect(MODEL_ALIAS_RE.test("")).toBe(false);
+  });
+});
+
+describe("buildClaudeCmd", () => {
+  it("returns base command when no model or mcpConfigPath", () => {
+    expect(buildClaudeCmd()).toBe("claude --dangerously-skip-permissions");
+  });
+
+  it("appends --model flag when model is provided", () => {
+    expect(buildClaudeCmd("haiku")).toBe("claude --dangerously-skip-permissions --model haiku");
+  });
+
+  it("appends --strict-mcp-config and --mcp-config when mcpConfigPath is provided", () => {
+    const cmd = buildClaudeCmd(undefined, "/assets/mcp/phase.json");
+    expect(cmd).toContain("--strict-mcp-config");
+    expect(cmd).toContain("--mcp-config");
+    expect(cmd).toContain("/assets/mcp/phase.json");
+  });
+
+  it("includes both model and mcp flags together", () => {
+    const cmd = buildClaudeCmd("haiku", "/assets/mcp/phase.json");
+    expect(cmd).toContain("--model haiku");
+    expect(cmd).toContain("--strict-mcp-config");
+    expect(cmd).toContain("--mcp-config");
+    expect(cmd).toContain("/assets/mcp/phase.json");
+  });
+
+  it("single-quotes paths with spaces in mcp-config", () => {
+    const cmd = buildClaudeCmd(undefined, "/path with spaces/phase.json");
+    expect(cmd).toContain("--mcp-config '/path with spaces/phase.json'");
+  });
+
+  it("throws for an invalid model alias (shell metacharacters)", () => {
+    expect(() => buildClaudeCmd("haiku; echo pwned")).toThrow("invalid model alias");
+  });
+
+  it("throws for an empty model alias", () => {
+    expect(() => buildClaudeCmd("")).toThrow("invalid model alias");
   });
 });
 

@@ -213,6 +213,12 @@ export type RunOneClaudeSessionInput = {
    * then inherits the orchestrator's model).
    */
   readonly model?: string;
+  /**
+   * Absolute path to a minimal MCP config JSON. Passed as
+   * `--strict-mcp-config --mcp-config <path>` so the session ignores the
+   * operator's global MCP config. Omit to inherit the global config.
+   */
+  readonly mcpConfigPath?: string;
 };
 
 /** `[#42 review/correctness[2]]` — concise prefix for stdout session events. */
@@ -286,6 +292,7 @@ export const runOneClaudeSession = (
             // the same env var as fan-out, each with one value.
             env: { [AGENT_SENTINEL_VAR]: sentinel },
             ...(input.model === undefined ? {} : { model: input.model }),
+            ...(input.mcpConfigPath === undefined ? {} : { mcpConfigPath: input.mcpConfigPath }),
           });
           const bootMs = (yield* Clock.currentTimeMillis) - startedAt;
           yield* artifacts.logEvent({
