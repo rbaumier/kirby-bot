@@ -79,6 +79,12 @@ export type RunFanOutPhaseInput = {
   /** Path to the vendored templates directory (assets/code-review-templates). */
   readonly templatesDir: string;
   /**
+   * Absolute path to the slim MCP config JSON passed to each agent session via
+   * `--strict-mcp-config --mcp-config <path>`. Omit to inherit the global
+   * operator config (legacy behaviour; not recommended for new code).
+   */
+  readonly mcpConfigPath?: string;
+  /**
    * Block of previously-triaged findings to inject into every agent's prompt
    * via the scaffold's `{previous_findings_block}` placeholder. Empty string
    * (the default) → first iteration, nothing to skip. Built upstream from
@@ -100,6 +106,12 @@ export type RunFanOutPhaseInput = {
 /** Templates dir resolved relative to this file at module load — handy default. */
 export const DEFAULT_TEMPLATES_DIR = new URL(
   "../../assets/code-review-templates/",
+  import.meta.url,
+).pathname;
+
+/** Slim MCP config for phase sessions — resolved relative to this file. */
+export const DEFAULT_MCP_CONFIG_PATH = new URL(
+  "../../assets/mcp/phase.json",
   import.meta.url,
 ).pathname;
 
@@ -203,6 +215,7 @@ const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, nev
               agent,
             },
             model: getAgentModel(agent),
+            ...(input.mcpConfigPath === undefined ? {} : { mcpConfigPath: input.mcpConfigPath }),
           }),
         ),
       )

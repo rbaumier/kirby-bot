@@ -221,6 +221,13 @@ type BootClaudeSessionInput = {
    * Optional for backward compat with the single-prompt phase runner.
    */
   readonly model?: string;
+  /**
+   * Absolute path to a JSON MCP config file. When set, `--strict-mcp-config`
+   * and `--mcp-config <path>` are appended so the session ignores the
+   * operator's global MCP config and boots only the servers in this file.
+   * Omit to inherit the global config (legacy behaviour).
+   */
+  readonly mcpConfigPath?: string;
 };
 
 /** Shell-quote a value for safe inclusion in a single-quoted `export`. */
@@ -237,6 +244,26 @@ export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * caller pins a specific revision.
  */
 export const MODEL_ALIAS_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Build the `claude` command string for a tmux session.
+ *
+ * Validates `model` against {@link MODEL_ALIAS_RE}; throws if invalid so the
+ * caller gets an early, clear error rather than a silent shell-injection path.
+ * `mcpConfigPath` is single-quoted via {@link sqEscape} — it is a fixed asset
+ * path so the extra quoting is purely defensive.
+ */
+export const buildClaudeCmd = (model?: string, mcpConfigPath?: string): string => {
+  if (model !== undefined && !MODEL_ALIAS_RE.test(model)) {
+    throw new Error(`invalid model alias: ${model}`);
+  }
+  const modelFlag = model !== undefined ? ` --model ${model}` : "";
+  const mcpFlags =
+    mcpConfigPath !== undefined
+      ? ` --strict-mcp-config --mcp-config ${sqEscape(mcpConfigPath)}`
+      : "";
+  return `claude --dangerously-skip-permissions${modelFlag}${mcpFlags}`;
+};
 
 /**
  * Boot `claude` inside an already-created session and paste the prompt.
@@ -267,15 +294,13 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
         () => $`tmux send-keys -t ${input.session} ${exports} Enter`,
       );
     }
-    if (input.model !== undefined && !MODEL_ALIAS_RE.test(input.model)) {
-      yield* Effect.fail(
-        new TmuxError({ step: "start-claude", stderr: `invalid model alias: ${input.model}` }),
-      );
+    let claudeCmd: string;
+    try {
+      claudeCmd = buildClaudeCmd(input.model, input.mcpConfigPath);
+    } catch (err) {
+      yield* Effect.fail(new TmuxError({ step: "start-claude", stderr: String(err) }));
+      return;
     }
-    const claudeCmd =
-      input.model === undefined
-        ? "claude --dangerously-skip-permissions"
-        : `claude --dangerously-skip-permissions --model ${input.model}`;
     yield* tmuxStep(
       "start-claude",
       () => $`tmux send-keys -t ${input.session} ${claudeCmd} Enter`,
