@@ -120,6 +120,20 @@ describe("renderAgentPrompt — self-contained", () => {
   });
 });
 
+describe("renderAgentPrompt — evidence-gate rule", () => {
+  test("correctness prompt contains evidence gate", async () => {
+    const prompt = await run(renderAgentPrompt({ ...baseInput, agent: "correctness" }));
+    expect(prompt).toContain("Evidence gate");
+    expect(prompt).toContain("verbatim");
+  });
+
+  test("occam-razor prompt contains evidence gate", async () => {
+    const prompt = await run(renderAgentPrompt({ ...baseInput, agent: "occam-razor" }));
+    expect(prompt).toContain("Evidence gate");
+    expect(prompt).toContain("verbatim");
+  });
+});
+
 describe("renderAgentPrompt — failure modes", () => {
   test("unknown agent fails with RenderError", async () => {
     const exit = await Effect.runPromiseExit(

@@ -39,7 +39,7 @@ Else: ONLY the JSON object. First char `{`, last char `}`. No preamble, no narra
       "signature": "src/auth/session.rs:42:unwrap-on-user-header",
       "title": "unwrap() on user-supplied header",
       "analysis_chain": [
-        ".unwrap() on req.headers.get(\"X-Token\") — Option, missing header panics",
+        "`req.headers.get(\"X-Token\").unwrap()` — verbatim line 42; .unwrap() panics on None",
         "X-Token attacker-controlled",
         "no caller-site guard"
       ],
@@ -49,7 +49,7 @@ Else: ONLY the JSON object. First char `{`, last char `}`. No preamble, no narra
 }
 ```
 
-- `analysis_chain` — ≤3 bullets, ≤25 words each. Only reasoning channel. Doesn't survive re-read → hallucination, drop.
+- `analysis_chain` — ≤3 bullets, ≤25 words each. Only reasoning channel. **First bullet: verbatim quoted snippet of the offending code** (copy-paste from the file you read this session, not paraphrase). Doesn't survive re-read → hallucination, drop.
 - `fix_prompt` — concrete line + concrete replacement. `bug`/`security`/`performance`/`error_handling` → append `Add a test: …`.
 - `signature` — `<file>:<line>:<failure-mode-slug>`. Controlled-vocabulary slug when applicable (see `reference/output-format.md`).
 - `confidence` — `high`/`medium`/`low`, independent of severity.
@@ -59,6 +59,7 @@ Else: ONLY the JSON object. First char `{`, last char `}`. No preamble, no narra
 
 - Before emitting `bug`/`security`/`performance`/`error_handling`, grep tests. Already covered → drop.
 - Only flag a file you've read in full this session. Inferred from diff slice → hallucination, don't emit.
+- **Evidence gate** — before posting any finding: copy-paste the exact offending line(s) verbatim from the file you read this session into `analysis_chain[0]`. If you cannot quote the literal code, drop the finding.
 
 {previous_findings_block}
 ```
