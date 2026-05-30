@@ -37,8 +37,14 @@ export const ROUTER_DIFF_MAX_BYTES = 100 * 1024;
 /** Marker appended to head-truncated per-file slices so the router knows it's incomplete. */
 const TRUNCATION_MARKER = "\n\n... [truncated by kirby-bot router]";
 
-/** Haiku cap — the router is fast; this is the wall-clock hedge if it hangs. */
-const ROUTER_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Wall-clock hedge if the router hangs. Set to 15 min (not 5): a diff near the
+ * 100KB `ROUTER_DIFF_MAX_BYTES` cap is the slowest case to parse, and under
+ * concurrency the `claude` boot alone can eat ~60s of the window (#66). Still
+ * well under `PHASE_CAP_MINUTES.review` (35 min), which `timeoutMs` floors it
+ * against — so a genuinely hung router can never starve the rest of the phase.
+ */
+const ROUTER_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
  * Total bytes of router raw output echoed into a `router_failed` event. Big
