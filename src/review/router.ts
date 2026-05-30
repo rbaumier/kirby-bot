@@ -27,7 +27,7 @@ import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "../session/errors";
 import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "../session/errors";
 import { runOneClaudeSession } from "../session/phase-primitives";
-import type { AgentName } from "./agents";
+import type { AgentModel, AgentName } from "./agents";
 import { AGENTS, ALL_AGENT_NAMES, isAgentName } from "./agents";
 import type { ChangedFile } from "./detect";
 
@@ -91,6 +91,13 @@ export type RouteAgentsInput = {
   readonly files: readonly ChangedFile[];
   /** The full diff text (will be truncated to ~100KB before being sent). */
   readonly fullDiff: string;
+  /**
+   * Model the router session runs on. The review fan-out escalates this from
+   * haiku to sonnet on re-review / large diffs (#52) — a degraded diff is also
+   * where the router itself emits bad agent names (#39), so it escalates with
+   * the per-agent reviewers rather than staying pinned to haiku.
+   */
+  readonly model: AgentModel;
 };
 
 /** One agent decision the router emitted. */
@@ -396,9 +403,10 @@ export const routeAgents = (
           diffBytesSent,
           truncated,
           fileCount: input.files.length,
+          model: input.model,
         });
         yield* Console.log(
-          `[#${input.issueIid} ${input.phase}[${input.iteration}]] router (haiku${attempt === 0 ? "" : `, attempt ${attempt + 1}`}) on ${input.files.length} files, ${diffBytesSent} bytes${truncated ? " (truncated)" : ""}`,
+          `[#${input.issueIid} ${input.phase}[${input.iteration}]] router (${input.model}${attempt === 0 ? "" : `, attempt ${attempt + 1}`}) on ${input.files.length} files, ${diffBytesSent} bytes${truncated ? " (truncated)" : ""}`,
         );
 
         const verdict = yield* runOneClaudeSession({
@@ -414,7 +422,7 @@ export const routeAgents = (
             iteration: input.iteration,
             agent: refAgent,
           },
-          model: "haiku",
+          model: input.model,
         });
         if (verdict !== "ROUTING_DONE") {
           return yield* Effect.fail(

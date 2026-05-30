@@ -46,6 +46,45 @@ export const PHASE_MODELS: Record<Phase, AgentModel> = {
 };
 
 /**
+ * Model tiers, cheapest first. The review escalation policy composes its floor
+ * with each agent's own tier through {@link maxModel} — escalation may raise a
+ * cheaper agent up to the floor, never lower one already above it.
+ */
+const MODEL_TIER: Record<AgentModel, number> = { haiku: 0, sonnet: 1, opus: 2 };
+
+/** The more capable of two model tiers (ties return `a`). */
+export const maxModel = (a: AgentModel, b: AgentModel): AgentModel =>
+  MODEL_TIER[a] >= MODEL_TIER[b] ? a : b;
+
+/**
+ * Full-diff byte threshold at which a *first-pass* review escalates to sonnet.
+ *
+ * The measure is the byte length of the same full diff the router consumes —
+ * not a re-walked file roster. Below this, a first pass on haiku is fine and
+ * cheap; above it, a haiku reviewer handed the whole diff starts to degrade
+ * (the failure mode behind #52 / #39). Set at half the router's 100 KB diff
+ * budget ({@link ROUTER_DIFF_MAX_BYTES}): a diff that already fills half the
+ * router's window is large enough to warrant the stronger tier.
+ */
+export const REVIEW_ESCALATION_DIFF_BYTES = 50 * 1024;
+
+/**
+ * Pick the review model floor from the iteration and the full-diff size.
+ *
+ * Pure policy (unit-tested in `config.test.ts`). The first pass on a small diff
+ * stays on haiku to keep cost down; we escalate to sonnet exactly where haiku
+ * degrades:
+ *  - any re-review (`iteration >= 1`) — the diff has churned through ≥1 fix
+ *    cycle, the costliest place for a sterile haiku pass;
+ *  - a first pass whose full diff exceeds {@link REVIEW_ESCALATION_DIFF_BYTES}.
+ *
+ * The return value is a *floor*: callers compose it with each agent's own tier
+ * via {@link maxModel}, so a sonnet/opus agent is never downgraded.
+ */
+export const selectReviewModel = (iteration: number, diffBytes: number): AgentModel =>
+  iteration >= 1 || diffBytes > REVIEW_ESCALATION_DIFF_BYTES ? "sonnet" : "haiku";
+
+/**
  * Per-phase wall-clock cap, in minutes.
  *
  * The 4-hour per-issue budget (below) is the overall bound. These caps are the

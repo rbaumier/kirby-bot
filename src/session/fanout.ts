@@ -29,8 +29,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Cause, Clock, Console, Effect, Exit } from "effect";
 import type { Phase } from "../config";
-import { MAX_CONCURRENT_AGENTS, PHASE_CAP_MINUTES, SENTINEL_POLL_MS } from "../config";
-import type { AgentName } from "../review/agents";
+import {
+  MAX_CONCURRENT_AGENTS,
+  maxModel,
+  PHASE_CAP_MINUTES,
+  selectReviewModel,
+  SENTINEL_POLL_MS,
+} from "../config";
+import type { AgentModel, AgentName } from "../review/agents";
 import { getAgentModel } from "../review/agents";
 import { getChangedFilesSince } from "../review/delta-files";
 import type { ChangedFile, ReviewAnalysis } from "../review/detect";
@@ -160,13 +166,26 @@ type RunOneAgentParams = {
   readonly diffFile: string;
   readonly perAgentTimeoutMs: number;
   readonly previousFindingsBlock: string;
+  /**
+   * Review escalation floor for this fan-out — composed with the agent's own
+   * tier via {@link maxModel} so a sonnet/opus agent is never downgraded.
+   */
+  readonly reviewModel: AgentModel;
 };
 
 const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
   Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
-    const { input, agent, analysis, scopedFiles, diffFile, perAgentTimeoutMs, previousFindingsBlock } =
-      params;
+    const {
+      input,
+      agent,
+      analysis,
+      scopedFiles,
+      diffFile,
+      perAgentTimeoutMs,
+      previousFindingsBlock,
+      reviewModel,
+    } = params;
     const artifacts = yield* RunArtifacts;
     const ref = {
       issueIid: input.issueIid,
@@ -214,7 +233,7 @@ const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, nev
               iteration: input.iteration,
               agent,
             },
-            model: getAgentModel(agent),
+            model: maxModel(getAgentModel(agent), reviewModel),
             ...(input.mcpConfigPath === undefined ? {} : { mcpConfigPath: input.mcpConfigPath }),
           }),
         ),
@@ -336,8 +355,14 @@ export const runFanOutPhase = (
         }),
     });
 
-    // Routing — haiku in a tmux session. Hard-fails the phase if the output
-    // is malformed or the agent list is empty.
+    // Review model floor: escalate haiku→sonnet on re-review or a large diff.
+    // Reuses the full-diff byte length already read above — no second walk —
+    // and the iteration the fan-out was invoked with. Threaded into the router
+    // and composed into each agent's own tier below.
+    const reviewModel = selectReviewModel(input.iteration, Buffer.byteLength(fullDiff, "utf8"));
+
+    // Routing — escalation-floor model in a tmux session. Hard-fails the phase
+    // if the output is malformed or the agent list is empty.
     const routerResult = yield* routeAgents({
       phase: input.phase,
       issueIid: input.issueIid,
@@ -346,6 +371,7 @@ export const runFanOutPhase = (
       deadline: input.deadline,
       files: input.files,
       fullDiff,
+      model: reviewModel,
     }).pipe(Effect.mapError(routerErrorToPhase(input.phase)));
 
     // Deterministic analysis — runs after routing so the run JSONL keeps the
@@ -392,6 +418,7 @@ export const runFanOutPhase = (
       issueIid: input.issueIid,
       agents: routes.map((route) => route.name),
       skippedAgents: skipped,
+      reviewModel,
       routerTruncated: routerResult.truncated,
       trustBoundaries: analysis.trustBoundaries,
       dogfoodRequired: analysis.dogfoodRequired,
@@ -427,6 +454,7 @@ export const runFanOutPhase = (
           diffFile: slices.perAgent.get(route.name) ?? fullDiffPath,
           perAgentTimeoutMs,
           previousFindingsBlock,
+          reviewModel,
         }),
       { concurrency: MAX_CONCURRENT_AGENTS },
     );
