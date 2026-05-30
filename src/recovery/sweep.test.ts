@@ -41,7 +41,7 @@ const recordingProvider = (
   Layer.succeed(GitProvider, {
     listIssuesByLabels: () => Effect.succeed(claims),
     updateIssueLabels: (iid, changes) => {
-      calls.push({ iid, changes });
+      calls.push({ iid, changes }); // comply-ignore: no-mutating-methods — intentional spy recording
       return updateResult();
     },
     viewIssue: () => Effect.die("unused: viewIssue"),
@@ -91,7 +91,7 @@ const recordingRunArtifacts = (sink: Record<string, unknown>[]): Layer.Layer<Run
     sessionName: () => "test-session",
     logEvent: (event) =>
       Effect.sync(() => {
-        sink.push(event);
+        sink.push(event); // comply-ignore: no-mutating-methods — intentional sink recording
       }),
   } satisfies RunArtifactsShape);
 
