@@ -67,8 +67,8 @@ const emptyAnalysis: ReviewAnalysis = {
   trustBoundaries: [],
   dogfoodRequired: false,
   dogfoodSurfaces: [],
-  totalFiles: 0,
   totalLines: 0,
+  fileCount: 0,
 };
 
 const makeFanOutResult = (okCount: number): FanOutResult => ({
@@ -129,11 +129,13 @@ const noopProviderLayer = Layer.succeed(GitProvider, {
   addIssueNote: () => Effect.void,
   findOpenPullRequestBySource: () => Effect.succeed(Option.none()),
   createDraftPullRequest: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
-  addMrNote: () => Effect.void,
-  addMrDiscussion: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
+  viewPullRequest: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
+  markPullRequestReady: () => Effect.void,
+  mergePullRequest: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
   listDiscussions: () => Effect.succeed([]),
+  postDiscussion: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
+  replyToDiscussion: () => Effect.void,
   resolveDiscussion: () => Effect.void,
-  mergeMr: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
