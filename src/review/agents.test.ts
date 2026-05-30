@@ -33,11 +33,8 @@ describe("AGENTS — registry invariants", () => {
   test("every agent has a usable prompt spec", () => {
     for (const name of ALL_AGENT_NAMES) {
       const spec = AGENTS[name].prompt;
-      if (spec.kind === "self-contained") {
-        expect(spec.templateFile.length).toBeGreaterThan(0);
-      } else {
-        expect(spec.roleFile.length).toBeGreaterThan(0);
-      }
+      const file = spec.kind === "self-contained" ? spec.templateFile : spec.roleFile;
+      expect(file.length).toBeGreaterThan(0);
     }
   });
 });
