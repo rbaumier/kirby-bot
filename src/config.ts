@@ -25,21 +25,24 @@ export const PHASES = ["implementation", "review", "evaluate", "fix", "qa"] as c
 export type Phase = (typeof PHASES)[number];
 
 /**
- * Claude tier each phase runs on.
+ * Claude tier each single-session phase runs on.
  *
  * Implementation, evaluate and fix are creative or judgment-heavy and stay on
- * Sonnet. The review-phase orchestrator session just spawns the per-agent
- * fan-out and aggregates JSON envelopes — that does not need Sonnet (the
- * fan-out agents pick their own model from {@link AGENTS_DATA}). The qa phase
- * orchestrates dogfood-persona subagents that do the real work in their own
- * sessions, so the qa orchestrator runs on Haiku.
+ * Sonnet. The qa phase orchestrates dogfood-persona subagents that do the real
+ * work in their own sessions, so the qa orchestrator runs on Haiku.
+ *
+ * `review` is deliberately absent: it has no single orchestrator session. The
+ * review phase fans out one `claude` session per agent (see
+ * {@link runFanOutPhase}), each picking its own tier from {@link AGENTS_DATA}
+ * and escalated via {@link selectReviewModel} — there is nothing here to set.
+ * The key type is `PromptablePhase` ({@link Phase} minus `review`) so the
+ * absence is compiler-enforced, not a stray dead entry.
  *
  * Changing a value here propagates to every phase session without touching
  * `runPhaseSession` — the model is no longer hard-coded.
  */
-export const PHASE_MODELS: Record<Phase, AgentModel> = {
+export const PHASE_MODELS: Record<Exclude<Phase, "review">, AgentModel> = {
   implementation: "sonnet",
-  review: "haiku",
   evaluate: "sonnet",
   fix: "sonnet",
   qa: "haiku",
