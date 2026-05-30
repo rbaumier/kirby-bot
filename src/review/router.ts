@@ -27,7 +27,7 @@ import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "../session/errors";
 import { BudgetExhausted, UnexpectedVerdictError, WorkspaceError } from "../session/errors";
 import { runOneClaudeSession } from "../session/phase-primitives";
-import type { AgentModel, AgentName } from "./agents";
+import type { AgentGate, AgentModel, AgentName } from "./agents";
 import { AGENTS, ALL_AGENT_NAMES, isAgentName } from "./agents";
 import type { ChangedFile } from "./detect";
 
@@ -295,6 +295,38 @@ const RouterOutputSchema = Schema.parseJson(
   }),
 );
 
+/** Return true when the diff satisfies `gate`. */
+const isGateSatisfied = (gate: AgentGate, files: readonly ChangedFile[]): boolean => {
+  if ("ext" in gate) {
+    return files.some((f) => f.ext === gate.ext);
+  }
+  return files.some((f) =>
+    f.imports.some((imp) => imp === gate.import || imp.startsWith(`${gate.import}/`))
+  );
+};
+
+/**
+ * Hard-gate pass: drop any agent whose catalog entry has a `gate` that is
+ * unsatisfied by the actual diff files. Returns the kept agents and the list
+ * of dropped names (for the caller to log).
+ */
+export const applyGates = (
+  agents: readonly RoutedAgent[],
+  files: readonly ChangedFile[],
+): { readonly kept: readonly RoutedAgent[]; readonly dropped: readonly AgentName[] } => {
+  const kept: RoutedAgent[] = [];
+  const dropped: AgentName[] = [];
+  for (const agent of agents) {
+    const gate = AGENTS[agent.name].gate;
+    if (gate !== undefined && !isGateSatisfied(gate, files)) {
+      dropped.push(agent.name);
+    } else {
+      kept.push(agent);
+    }
+  }
+  return { kept, dropped };
+};
+
 /** Decode and validate the router's findings JSON. */
 const parseRouterOutput = (
   raw: string,
@@ -466,16 +498,30 @@ export const routeAgents = (
 
     const routed = yield* tryRoute(0);
 
+    const { kept, dropped } = applyGates(routed, input.files);
+    for (const name of dropped) {
+      yield* artifacts.logEvent({
+        event: "gate_drop",
+        phase: input.phase,
+        iteration: input.iteration,
+        issueIid: input.issueIid,
+        agent: name,
+      });
+      yield* Console.log(
+        `[#${input.issueIid} ${input.phase}[${input.iteration}]] gate_drop: ${name} (gate unsatisfied)`,
+      );
+    }
+
     yield* artifacts.logEvent({
       event: "router_complete",
       phase: input.phase,
       iteration: input.iteration,
       issueIid: input.issueIid,
-      agentCount: routed.length,
-      agents: routed.map((agent) => ({ name: agent.name, fileCount: agent.files.length })),
+      agentCount: kept.length,
+      agents: kept.map((agent) => ({ name: agent.name, fileCount: agent.files.length })),
     });
 
-    return { agents: routed, truncated, diffBytesSent };
+    return { agents: kept, truncated, diffBytesSent };
   });
 
 /** Exported for tests. */
@@ -483,3 +529,4 @@ export const _renderAgentCatalog = renderAgentCatalog;
 export const _renderExampleEnvelope = renderExampleEnvelope;
 export const _renderFileRoster = renderFileRoster;
 export const _parseRouterOutput = parseRouterOutput;
+export const _applyGates = applyGates;

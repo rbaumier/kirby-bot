@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
 import {
+  _applyGates,
   _parseRouterOutput,
   _renderAgentCatalog,
   _renderExampleEnvelope,
@@ -193,5 +194,55 @@ describe("_renderFileRoster", () => {
     expect(out).toContain("pkg-0");
     expect(out).toContain("pkg-9");
     expect(out).not.toContain("pkg-15");
+  });
+});
+
+describe("_applyGates", () => {
+  const makeFile = (path: string, ext: string, imports: string[] = []): ChangedFile => ({
+    path,
+    ext,
+    lineCount: 10,
+    content: "",
+    imports,
+  });
+
+  // Happy: import gate satisfied — agent kept
+  test("drizzle-orm kept when a file imports drizzle-orm", () => {
+    const agents = [
+      { name: "funnel" as const, files: [] },
+      { name: "drizzle-orm" as const, files: [] },
+    ];
+    const files = [makeFile("src/db.ts", "ts", ["drizzle-orm"])];
+    const { kept, dropped } = _applyGates(agents, files);
+    expect(kept.map((a) => a.name)).toContain("drizzle-orm");
+    expect(dropped).toHaveLength(0);
+  });
+
+  // Error: ext gate unsatisfied — agent dropped, drop recorded
+  test("language-rust dropped and recorded when no .rs file changed", () => {
+    const agents = [
+      { name: "funnel" as const, files: [] },
+      { name: "language-rust" as const, files: [] },
+    ];
+    const files = [makeFile("src/app.ts", "ts")];
+    const { kept, dropped } = _applyGates(agents, files);
+    expect(kept.map((a) => a.name)).not.toContain("language-rust");
+    expect(dropped).toContain("language-rust");
+  });
+
+  // Regression: TS-only diff with language-rust in router output → gate removes it
+  test("TS-only ReviewInput with language-rust in router list yields final set without it", () => {
+    const agents = [
+      { name: "correctness" as const, files: [] },
+      { name: "language-rust" as const, files: ["src/main.rs"] },
+    ];
+    const tsFiles = [
+      makeFile("src/app.ts", "ts"),
+      makeFile("src/components/Button.tsx", "tsx"),
+    ];
+    const { kept, dropped } = _applyGates(agents, tsFiles);
+    expect(kept.map((a) => a.name)).not.toContain("language-rust");
+    expect(dropped).toContain("language-rust");
+    expect(kept.map((a) => a.name)).toContain("correctness");
   });
 });
