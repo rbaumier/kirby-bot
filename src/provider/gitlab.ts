@@ -27,6 +27,7 @@ import {
 } from "../gitlab/issue";
 import type { GitLabIssue } from "../gitlab/issue";
 import {
+  addMergeRequestNote as glAddMergeRequestNote,
   createDraftMergeRequest as glCreateDraftMergeRequest,
   findOpenMergeRequestBySource as glFindOpenMergeRequestBySource,
   markMergeRequestReady as glMarkMergeRequestReady,
@@ -133,6 +134,9 @@ export const GitLabProviderLive: Layer.Layer<GitProvider> = Layer.succeed(
 
     postDiscussion: (pullRequestIid: number, body: string) =>
       adaptCall(glPostDiscussion(pullRequestIid, body)).pipe(Effect.map(DiscussionId)),
+
+    postMrNote: (pullRequestIid: number, body: string) =>
+      adaptCall(glAddMergeRequestNote(pullRequestIid, body)),
 
     replyToDiscussion: (pullRequestIid: number, discussionId: DiscussionId, body: string) =>
       adaptCall(glReplyToDiscussion(pullRequestIid, discussionId, body)),

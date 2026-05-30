@@ -53,6 +53,7 @@ const recordingProvider = (
     mergePullRequest: () => Effect.die("unused: mergePullRequest"),
     listDiscussions: () => Effect.die("unused: listDiscussions"),
     postDiscussion: () => Effect.die("unused: postDiscussion"),
+    postMrNote: () => Effect.die("unused: postMrNote"),
     replyToDiscussion: () => Effect.die("unused: replyToDiscussion"),
     resolveDiscussion: () => Effect.die("unused: resolveDiscussion"),
   });
@@ -74,6 +75,7 @@ const listFailingProvider = (): Layer.Layer<GitProvider> =>
     mergePullRequest: () => Effect.die("unused"),
     listDiscussions: () => Effect.die("unused"),
     postDiscussion: () => Effect.die("unused"),
+    postMrNote: () => Effect.die("unused"),
     replyToDiscussion: () => Effect.die("unused"),
     resolveDiscussion: () => Effect.die("unused"),
   });

@@ -214,6 +214,12 @@ const isLineNotInDiff = (error: ProviderError): boolean =>
   error._tag === "ProviderHttpError" && error.status === 422;
 
 /** Post a plain (non-resolvable) PR comment; its id is `comment:<node_id>`. */
+export const addPullRequestNote = (prNumber: number, body: string): Effect.Effect<void, ProviderError> =>
+  runGitHubWrite(
+    { method: "POST", path: `repos/:owner/:repo/issues/${prNumber}/comments`, body: { body } },
+    PlainCommentAckSchema,
+  ).pipe(Effect.asVoid);
+
 const postPlainComment = (prNumber: number, body: string): Effect.Effect<string, ProviderError> =>
   runGitHubWrite(
     { method: "POST", path: `repos/:owner/:repo/issues/${prNumber}/comments`, body: { body } },
