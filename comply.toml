@@ -185,6 +185,10 @@ disabled = true
 # for tests.
 disabled = true
 
+# no-test-logic: flat for-of loops in test bodies are now explicitly exempt
+# (table-driven pattern — fixed upstream in comply, issue #445). No waiver
+# needed; for-of without nested control flow in the loop body is allowed.
+
 [rules.require-hook]
 # Effect's `Layer.succeed(...)` at module top-level is pure construction,
 # not a side effect. Building a layer once and closing over it from the
