@@ -91,7 +91,7 @@ const dispatchHandler = (
       return onBranchPush(current);
     }
     case "implementation": {
-      return implementationPhase(current);
+      return implementationPhase(current, env);
     }
     case "open_draft_mr": {
       return onOpenDraftMr(current, env);
