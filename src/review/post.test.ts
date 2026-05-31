@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { GitProvider } from "../provider/provider";
 import { DiscussionId } from "../provider/types";
-import type { ProviderCallError } from "../provider/types";
+import type { DiscussionPosition, ProviderCallError } from "../provider/types";
 import { RunArtifacts } from "../run-artifacts";
 import type { RunArtifactsShape } from "../run-artifacts";
 import type { AggregatedReview } from "./aggregate";
@@ -13,6 +13,7 @@ import { postReviewToMr } from "./post";
 type ProviderCalls = {
   discussions: string[];
   notes: string[];
+  positions: (DiscussionPosition | undefined)[];
 };
 
 /** Build a mock GitProvider that records calls to postDiscussion and postMrNote. */
@@ -28,8 +29,9 @@ const makeProvider = (calls: ProviderCalls): Layer.Layer<GitProvider> =>
     markPullRequestReady: () => Effect.die("unused"),
     mergePullRequest: () => Effect.die("unused"),
     listDiscussions: () => Effect.succeed([]),
-    postDiscussion: (_iid: number, body: string) => {
+    postDiscussion: (_iid: number, body: string, position?: DiscussionPosition) => {
       calls.discussions.push(body);
+      calls.positions.push(position);
       return Effect.succeed(DiscussionId("disc-" + calls.discussions.length));
     },
     postMrNote: (_iid: number, body: string) => {
@@ -87,7 +89,7 @@ const emptyReview = (): AggregatedReview => ({
 
 describe("postReviewToMr — severity routing", () => {
   test("bug finding creates a resolvable discussion, not a note", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const review: AggregatedReview = {
       ...emptyReview(),
       lineAnchoredFindings: [makeFinding("bug")],
@@ -98,8 +100,29 @@ describe("postReviewToMr — severity routing", () => {
     expect(calls.discussions[0]).toContain("severity: bug");
   });
 
+  test("a line finding passes its file:line as the anchor position", async () => {
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
+    const review: AggregatedReview = {
+      ...emptyReview(),
+      lineAnchoredFindings: [makeFinding("bug", 0)],
+    };
+    await runPost(review, calls);
+    expect(calls.positions[0]).toEqual({ file: "src/file-0.ts", line: 10 });
+  });
+
+  test("the prose summary is posted with no position (general discussion)", async () => {
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
+    const review: AggregatedReview = {
+      ...emptyReview(),
+      proseFindings: [{ agent: "thermo-nuclear", tag: "suggestion", text: "architectural concern" }],
+    };
+    await runPost(review, calls);
+    expect(calls.discussions).toHaveLength(1);
+    expect(calls.positions[0]).toBeUndefined();
+  });
+
   test("suggestion finding goes to postMrNote, not a discussion", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const review: AggregatedReview = {
       ...emptyReview(),
       lineAnchoredFindings: [makeFinding("suggestion")],
@@ -111,7 +134,7 @@ describe("postReviewToMr — severity routing", () => {
   });
 
   test("mixed review: bug creates a discussion, suggestion goes to the note", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const review: AggregatedReview = {
       ...emptyReview(),
       lineAnchoredFindings: [makeFinding("bug", 0), makeFinding("suggestion", 1)],
@@ -124,7 +147,7 @@ describe("postReviewToMr — severity routing", () => {
   });
 
   test("all actionable severities create discussions, not notes", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const review: AggregatedReview = {
       ...emptyReview(),
       lineAnchoredFindings: [
@@ -140,7 +163,7 @@ describe("postReviewToMr — severity routing", () => {
   });
 
   test("multiple suggestions are consolidated into one note", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const review: AggregatedReview = {
       ...emptyReview(),
       lineAnchoredFindings: [
@@ -160,7 +183,7 @@ describe("postReviewToMr — severity routing", () => {
 
 describe("postReviewToMr — only-suggestions review", () => {
   test("posts zero resolvable discussions and advances cleanly", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const review: AggregatedReview = {
       ...emptyReview(),
       lineAnchoredFindings: [makeFinding("suggestion", 0), makeFinding("suggestion", 1)],
@@ -172,7 +195,7 @@ describe("postReviewToMr — only-suggestions review", () => {
   });
 
   test("empty review posts nothing", async () => {
-    const calls: ProviderCalls = { discussions: [], notes: [] };
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
     const result = await runPost(emptyReview(), calls);
     expect(result.posted).toBe(0);
     expect(calls.discussions).toHaveLength(0);

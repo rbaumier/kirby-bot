@@ -45,6 +45,11 @@ The set of per-run filesystem paths: the run directory, per-phase sentinel files
 
 The seam between the orchestrator and a forge (GitLab today; the GitHub adapter is deferred). Defined in [`src/provider/provider.ts`](src/provider/provider.ts) as an Effect `Context.Tag`. Domain vocabulary (Issue, PullRequestRef, Discussion, DiscussionId, …) lives in [`src/provider/types.ts`](src/provider/types.ts) and is documented at length in [`docs/provider-vocabulary.md`](docs/provider-vocabulary.md). Tests inject a fake Provider via `Layer.succeed(GitProvider, fake)` — that's the seam's primary justification today (see ADR §3.2 + addendum).
 
+### Position
+
+The provider-neutral anchor a line-anchored Finding rides on when posted: `{ file, line }` on the new side of the diff. `postDiscussion` carries it as an optional argument; each Adapter resolves the forge-specific payload internally — GitLab fetches the MR's `diff_refs` (`base/head/start_sha`, a net-new read, memoized per IID), GitHub uses the head commit. A forge that rejects the anchor (the line is outside the diff) falls back to a general resolvable Discussion with `file:line` kept in the body. SHAs never cross the seam — `start_sha` is GitLab-only and meaningless to GitHub (see ADR 0003).
+_Avoid_: anchor, location, coordinates, side.
+
 ## Architecture vocabulary
 
 These are the words used to evaluate design — borrow them when discussing trade-offs:

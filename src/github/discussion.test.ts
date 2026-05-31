@@ -1,23 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseFindingHeader, toDiscussionSummary } from "./discussion";
-
-describe("parseFindingHeader", () => {
-  it("extracts file and line from a real finding header", () => {
-    expect(parseFindingHeader("severity: bug | src/x.ts:42\n\nbody")).toEqual({
-      file: "src/x.ts",
-      line: 42,
-    });
-  });
-
-  it("returns null for the synthetic review-summary header", () => {
-    expect(parseFindingHeader("severity: suggestion | review-summary:0")).toBeNull();
-  });
-
-  it("returns null for a malformed header", () => {
-    expect(parseFindingHeader("not a header at all")).toBeNull();
-    expect(parseFindingHeader("severity: bug | src/x.ts:notanumber")).toBeNull();
-  });
-});
+import { toDiscussionSummary } from "./discussion";
 
 describe("toDiscussionSummary", () => {
   it("maps a resolved review-thread node, mapping author.login to the note author", () => {

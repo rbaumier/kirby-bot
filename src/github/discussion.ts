@@ -18,12 +18,12 @@
  *
  * `toDiscussionSummary` maps a raw GraphQL review-thread node to the trimmed
  * shape the evaluate/fix phases reason about — pure and unit-testable on its
- * own. `parseFindingHeader` reads the `severity: <sev> | <file>:<line>` header
- * contract documented in `src/review/post.ts`, also pure.
+ * own. Anchoring is driven by the caller's structured `position` (ADR 0003),
+ * not by parsing the body.
  */
 import { Effect, Schema } from "effect";
 import { ProviderResponseError } from "../provider/types";
-import type { ProviderError } from "../provider/types";
+import type { DiscussionPosition, ProviderError } from "../provider/types";
 import { runGitHubGraphQL, runGitHubRead, runGitHubWrite } from "./http";
 import { viewPullRequest } from "./pull-request";
 
@@ -39,35 +39,6 @@ const isRecord = (val: unknown): val is Record<string, unknown> =>
   typeof val === "object" && val !== null;
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────
-
-/**
- * Parse the review-finding header — the first line of a discussion body, in the
- * form `severity: <sev> | <file>:<line>` (the contract in `src/review/post.ts`).
- *
- * Returns the anchored `{ file, line }` for a real finding, or `null` for the
- * synthetic `review-summary:0` summary (file `review-summary`, line 0) and for
- * any unparseable header. Pure — drives whether `postDiscussion` anchors a
- * review comment or falls back to a plain comment.
- */
-export function parseFindingHeader(body: string): { file: string; line: number } | null {
-  const firstLine = body.split("\n", 1).at(0) ?? "";
-  const pipeIndex = firstLine.indexOf("|");
-  if (pipeIndex === -1) {
-    return null;
-  }
-  const location = firstLine.slice(pipeIndex + 1).trim();
-  const colonIndex = location.lastIndexOf(":");
-  if (colonIndex === -1) {
-    return null;
-  }
-  const file = location.slice(0, colonIndex);
-  const line = Number(location.slice(colonIndex + 1));
-  // `review-summary:0` and any malformed / non-positive line are not anchorable.
-  if (file === "" || file === "review-summary" || !Number.isInteger(line) || line <= 0) {
-    return null;
-  }
-  return { file, line };
-}
 
 /**
  * Map one raw GitHub review-thread node (from the `reviewThreads` GraphQL query)
@@ -284,18 +255,19 @@ export const listDiscussions = (
   });
 
 /**
- * Post `body` as a discussion. If its header anchors to a `file:line` that the
- * PR diff covers, create a resolvable review comment and return its review
- * **thread** node id. Otherwise (no anchor, or a 422 "line not in diff") fall
- * back to a plain PR comment and return its `comment:<node_id>` id.
+ * Post `body` as a discussion. With a `position`, create a resolvable review
+ * comment anchored to that `file:line` and return its review **thread** node
+ * id; if the line is not in the PR diff (a 422) fall back to a plain PR comment.
+ * Without a position (the prose summary, the CLI `post`), post a plain comment
+ * directly. The fallback returns a `comment:<node_id>` id.
  */
 export const postDiscussion = (
   prNumber: number,
   body: string,
+  position?: DiscussionPosition,
 ): Effect.Effect<string, ProviderError> =>
   Effect.gen(function* () {
-    const header = parseFindingHeader(body);
-    if (header === null) {
+    if (position === undefined) {
       return yield* postPlainComment(prNumber, body);
     }
 
@@ -307,8 +279,8 @@ export const postDiscussion = (
         body: {
           body,
           commit_id: pr.head.sha,
-          path: header.file,
-          line: header.line,
+          path: position.file,
+          line: position.line,
           side: "RIGHT",
           subject_type: "line",
         },

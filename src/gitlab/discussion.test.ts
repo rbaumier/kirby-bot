@@ -1,5 +1,32 @@
 import { describe, expect, it } from "bun:test";
-import { toDiscussionSummary } from "./discussion";
+import { ProviderHttpError, ProviderNetworkError } from "../provider/types";
+import { __test, toDiscussionSummary } from "./discussion";
+
+const { isLineNotAnchorable } = __test;
+
+const httpError = (status: number, body: string) =>
+  new ProviderHttpError({ method: "POST", path: "discussions", status, body });
+
+describe("isLineNotAnchorable", () => {
+  it("matches a 400 whose body names the line/position — the unanchorable case", () => {
+    expect(isLineNotAnchorable(httpError(400, '{"message":["line_code can\'t be blank"]}'))).toBe(
+      true,
+    );
+    expect(isLineNotAnchorable(httpError(400, "Note position is invalid"))).toBe(true);
+  });
+
+  it("does NOT match a 400 from an unrelated payload error — so real bugs still surface", () => {
+    expect(isLineNotAnchorable(httpError(400, '{"message":"base_sha is missing"}'))).toBe(false);
+  });
+
+  it("does NOT match other statuses (404/422/500) or non-HTTP errors", () => {
+    expect(isLineNotAnchorable(httpError(404, "line not found"))).toBe(false);
+    expect(isLineNotAnchorable(httpError(422, "line problem"))).toBe(false);
+    expect(
+      isLineNotAnchorable(new ProviderNetworkError({ method: "POST", path: "d", cause: "line" })),
+    ).toBe(false);
+  });
+});
 
 describe("toDiscussionSummary", () => {
   it("maps a resolved discussion", () => {

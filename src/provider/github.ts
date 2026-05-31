@@ -39,6 +39,7 @@ import { GitProvider } from "./provider";
 import { DiscussionId } from "./types";
 import type {
   CreateDraftPullRequestInput,
+  DiscussionPosition,
   DiscussionSummary,
   Issue,
   IssueLabelChange,
@@ -137,8 +138,8 @@ export const GitHubProviderLive: Layer.Layer<GitProvider> = Layer.succeed(
         Effect.map((list) => list.map(mapDiscussion)),
       ),
 
-    postDiscussion: (pullRequestIid: number, body: string) =>
-      adaptCall(ghPostDiscussion(pullRequestIid, body)).pipe(Effect.map(DiscussionId)),
+    postDiscussion: (pullRequestIid: number, body: string, position?: DiscussionPosition) =>
+      adaptCall(ghPostDiscussion(pullRequestIid, body, position)).pipe(Effect.map(DiscussionId)),
 
     postMrNote: (pullRequestIid: number, body: string) =>
       adaptCall(ghAddPullRequestNote(pullRequestIid, body)),

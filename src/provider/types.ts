@@ -42,6 +42,17 @@ export type DiscussionSummary = {
   readonly notes: readonly DiscussionNote[];
 };
 
+/**
+ * The provider-neutral anchor a line-anchored Finding rides on when posted.
+ * `{ file, line }` on the new side of the diff — SHAs stay inside each Adapter
+ * (see ADR 0003). A Finding the forge won't anchor falls back to a general
+ * discussion, so this is optional on {@link GitProvider.postDiscussion}.
+ */
+export type DiscussionPosition = {
+  readonly file: string;
+  readonly line: number;
+};
+
 export type ListIssuesQuery = {
   readonly include: Labels;
   readonly exclude: Labels;

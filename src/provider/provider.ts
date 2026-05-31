@@ -3,6 +3,7 @@ import type { Effect, Option } from "effect";
 import type {
   CreateDraftPullRequestInput,
   DiscussionId,
+  DiscussionPosition,
   DiscussionSummary,
   Issue,
   IssueLabelChange,
@@ -61,6 +62,7 @@ export class GitProvider extends Context.Tag("GitProvider")<
     readonly postDiscussion: (
       pullRequestIid: number,
       body: string,
+      position?: DiscussionPosition,
     ) => Effect.Effect<DiscussionId, ProviderCallError>;
 
     readonly postMrNote: (

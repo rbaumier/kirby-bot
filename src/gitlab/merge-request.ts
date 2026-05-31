@@ -8,8 +8,8 @@
 import { Console, Effect, Schedule, Schema } from "effect";
 import type { ProviderError } from "../provider/types";
 import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
-import { MergeRequestSchema } from "./schema";
-import type { GitLabMergeRequest } from "./schema";
+import { DiffRefsSchema, MergeRequestSchema } from "./schema";
+import type { GitLabDiffRefs, GitLabMergeRequest } from "./schema";
 
 const mrArraySchema = Schema.Array(MergeRequestSchema);
 
@@ -61,6 +61,19 @@ export const viewMergeRequest = (iid: number): Effect.Effect<GitLabMergeRequest,
     { method: "GET", path: `projects/:id/merge_requests/${iid}` },
     MergeRequestSchema,
   );
+
+/**
+ * Read an MR's `diff_refs` — the `base/head/start` SHAs a positioned discussion
+ * anchors against. Separate from {@link viewMergeRequest} so the anchoring path
+ * pulls only what it needs; the provider Layer memoizes this per MR head.
+ */
+export const viewMergeRequestDiffRefs = (
+  iid: number,
+): Effect.Effect<GitLabDiffRefs, ProviderError> =>
+  runGitLabRead(
+    { method: "GET", path: `projects/:id/merge_requests/${iid}` },
+    DiffRefsSchema,
+  ).pipe(Effect.map((mr) => mr.diff_refs));
 
 /** Schema for the title-bearing read used to compute the un-drafted title. */
 const TitledMrSchema = Schema.Struct({ title: Schema.String });

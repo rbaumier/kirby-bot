@@ -65,3 +65,20 @@ export const MergeRequestSchema = Schema.Struct({
 
 /** A merge request as the orchestrator consumes it. */
 export type GitLabMergeRequest = Schema.Schema.Type<typeof MergeRequestSchema>;
+
+/**
+ * The three SHAs a GitLab positioned discussion needs (`mr.diff_refs`), read
+ * separately from {@link MergeRequestSchema} so the strict `state` decoder is
+ * not coupled to this anchoring-only read. A line-anchored Finding is posted
+ * against these refs; they are constant for a given MR head (see ADR 0003).
+ */
+export const DiffRefsSchema = Schema.Struct({
+  diff_refs: Schema.Struct({
+    base_sha: Schema.NonEmptyString,
+    head_sha: Schema.NonEmptyString,
+    start_sha: Schema.NonEmptyString,
+  }),
+});
+
+/** The resolved diff refs for one MR. */
+export type GitLabDiffRefs = Schema.Schema.Type<typeof DiffRefsSchema>["diff_refs"];

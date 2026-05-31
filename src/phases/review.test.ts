@@ -134,6 +134,7 @@ const noopProviderLayer = Layer.succeed(GitProvider, {
   mergePullRequest: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
   listDiscussions: () => Effect.succeed([]),
   postDiscussion: () => Effect.fail({ _tag: "ProviderCallError", reason: "noop" } as never),
+  postMrNote: () => Effect.void,
   replyToDiscussion: () => Effect.void,
   resolveDiscussion: () => Effect.void,
 });

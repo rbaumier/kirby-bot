@@ -33,12 +33,14 @@ import {
   markMergeRequestReady as glMarkMergeRequestReady,
   mergeMergeRequest as glMergeMergeRequest,
   viewMergeRequest as glViewMergeRequest,
+  viewMergeRequestDiffRefs as glViewMergeRequestDiffRefs,
 } from "../gitlab/merge-request";
-import type { GitLabMergeRequest } from "../gitlab/schema";
+import type { GitLabDiffRefs, GitLabMergeRequest } from "../gitlab/schema";
 import { GitProvider } from "./provider";
 import { DiscussionId } from "./types";
 import type {
   CreateDraftPullRequestInput,
+  DiscussionPosition,
   DiscussionSummary,
   Issue,
   IssueLabelChange,
@@ -90,58 +92,85 @@ const mapDiscussion = (disc: GitLabDiscussionSummary): DiscussionSummary => ({
 });
 
 /** A GitLab-backed {@link GitProvider} Layer. */
-export const GitLabProviderLive: Layer.Layer<GitProvider> = Layer.succeed(
+export const GitLabProviderLive: Layer.Layer<GitProvider> = Layer.effect(
   GitProvider,
-  {
-    listIssuesByLabels: (query: ListIssuesQuery) =>
-      adaptCall(
-        glListIssuesByLabels({ include: query.include, exclude: query.exclude }),
-      ).pipe(Effect.map((issues) => issues.map(mapIssue))),
+  Effect.gen(function* () {
+    // `diff_refs` are constant for an MR head, so a review posting N findings
+    // resolves them once and reuses the result — `Effect.cachedFunction`
+    // memoizes by iid (ADR 0003).
+    const diffRefsFor: (iid: number) => Effect.Effect<GitLabDiffRefs, ProviderCallError> =
+      yield* Effect.cachedFunction((iid: number) => adaptCall(glViewMergeRequestDiffRefs(iid)));
 
-    viewIssue: (iid: number) => adaptCall(glViewIssue(iid)).pipe(Effect.map(mapIssue)),
+    const postDiscussion = (
+      pullRequestIid: number,
+      body: string,
+      position?: DiscussionPosition,
+    ): Effect.Effect<DiscussionId, ProviderCallError> =>
+      (position === undefined
+        ? adaptCall(glPostDiscussion(pullRequestIid, body))
+        : diffRefsFor(pullRequestIid).pipe(
+            Effect.flatMap((refs) =>
+              adaptCall(
+                glPostDiscussion(pullRequestIid, body, {
+                  file: position.file,
+                  line: position.line,
+                  refs,
+                }),
+              ),
+            ),
+          )
+      ).pipe(Effect.map(DiscussionId));
 
-    updateIssueLabels: (iid: number, changes: IssueLabelChange) =>
-      adaptCall(glUpdateIssueLabels(iid, { add: changes.add, remove: changes.remove })),
+    return {
+      listIssuesByLabels: (query: ListIssuesQuery) =>
+        adaptCall(
+          glListIssuesByLabels({ include: query.include, exclude: query.exclude }),
+        ).pipe(Effect.map((issues) => issues.map(mapIssue))),
 
-    addIssueNote: (iid: number, body: string) => adaptCall(glAddIssueNote(iid, body)),
+      viewIssue: (iid: number) => adaptCall(glViewIssue(iid)).pipe(Effect.map(mapIssue)),
 
-    findOpenPullRequestBySource: (sourceBranch: string) =>
-      adaptCall(glFindOpenMergeRequestBySource(sourceBranch)).pipe(
-        Effect.map(pullRequestAsOption),
-      ),
+      updateIssueLabels: (iid: number, changes: IssueLabelChange) =>
+        adaptCall(glUpdateIssueLabels(iid, { add: changes.add, remove: changes.remove })),
 
-    createDraftPullRequest: (input: CreateDraftPullRequestInput) =>
-      adaptCall(glCreateDraftMergeRequest(input)).pipe(Effect.map(mapPullRequest)),
+      addIssueNote: (iid: number, body: string) => adaptCall(glAddIssueNote(iid, body)),
 
-    viewPullRequest: (iid: number) =>
-      adaptCall(glViewMergeRequest(iid)).pipe(Effect.map(mapPullRequest)),
+      findOpenPullRequestBySource: (sourceBranch: string) =>
+        adaptCall(glFindOpenMergeRequestBySource(sourceBranch)).pipe(
+          Effect.map(pullRequestAsOption),
+        ),
 
-    markPullRequestReady: (iid: number) => adaptCall(glMarkMergeRequestReady(iid)),
+      createDraftPullRequest: (input: CreateDraftPullRequestInput) =>
+        adaptCall(glCreateDraftMergeRequest(input)).pipe(Effect.map(mapPullRequest)),
 
-    mergePullRequest: (iid: number, input: MergeInput) =>
-      adaptCall(
-        glMergeMergeRequest({
-          iid,
-          squash: input.shouldSquash,
-          autoMerge: input.shouldAutoMerge,
-        }),
-      ).pipe(Effect.map(mapPullRequest)),
+      viewPullRequest: (iid: number) =>
+        adaptCall(glViewMergeRequest(iid)).pipe(Effect.map(mapPullRequest)),
 
-    listDiscussions: (pullRequestIid: number) =>
-      adaptCall(glListDiscussions(pullRequestIid)).pipe(
-        Effect.map((list) => list.map(mapDiscussion)),
-      ),
+      markPullRequestReady: (iid: number) => adaptCall(glMarkMergeRequestReady(iid)),
 
-    postDiscussion: (pullRequestIid: number, body: string) =>
-      adaptCall(glPostDiscussion(pullRequestIid, body)).pipe(Effect.map(DiscussionId)),
+      mergePullRequest: (iid: number, input: MergeInput) =>
+        adaptCall(
+          glMergeMergeRequest({
+            iid,
+            squash: input.shouldSquash,
+            autoMerge: input.shouldAutoMerge,
+          }),
+        ).pipe(Effect.map(mapPullRequest)),
 
-    postMrNote: (pullRequestIid: number, body: string) =>
-      adaptCall(glAddMergeRequestNote(pullRequestIid, body)),
+      listDiscussions: (pullRequestIid: number) =>
+        adaptCall(glListDiscussions(pullRequestIid)).pipe(
+          Effect.map((list) => list.map(mapDiscussion)),
+        ),
 
-    replyToDiscussion: (pullRequestIid: number, discussionId: DiscussionId, body: string) =>
-      adaptCall(glReplyToDiscussion(pullRequestIid, discussionId, body)),
+      postDiscussion,
 
-    resolveDiscussion: (pullRequestIid: number, discussionId: DiscussionId) =>
-      adaptCall(glResolveDiscussion(pullRequestIid, discussionId)),
-  },
+      postMrNote: (pullRequestIid: number, body: string) =>
+        adaptCall(glAddMergeRequestNote(pullRequestIid, body)),
+
+      replyToDiscussion: (pullRequestIid: number, discussionId: DiscussionId, body: string) =>
+        adaptCall(glReplyToDiscussion(pullRequestIid, discussionId, body)),
+
+      resolveDiscussion: (pullRequestIid: number, discussionId: DiscussionId) =>
+        adaptCall(glResolveDiscussion(pullRequestIid, discussionId)),
+    };
+  }),
 );

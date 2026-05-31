@@ -12,6 +12,7 @@ import { Effect, Schema } from "effect";
 import { ProviderResponseError } from "../provider/types";
 import type { ProviderError } from "../provider/types";
 import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
+import type { GitLabDiffRefs } from "./schema";
 
 /** A discussion reduced to what the pipeline reasons about. */
 export type DiscussionSummary = {
@@ -93,12 +94,19 @@ export const listDiscussions = (
     DiscussionListSchema,
   ).pipe(Effect.map((raw) => raw.map((disc) => toDiscussionSummary(disc))));
 
+/** Anchor for a line-positioned discussion: the Finding's line plus the MR's refs. */
+export type DiscussionAnchor = {
+  readonly file: string;
+  readonly line: number;
+  readonly refs: GitLabDiffRefs;
+};
+
 /**
- * Create a new general, resolvable discussion carrying `body`. Returns the
- * created thread's id (stringified — GitLab discussion ids are string hashes),
- * which callers join review findings to evaluator triage on.
+ * Create a general, resolvable discussion carrying `body`. Returns the created
+ * thread's id (stringified — GitLab discussion ids are string hashes), which
+ * callers join review findings to evaluator triage on.
  */
-export const postDiscussion = (
+const postGeneralDiscussion = (
   mergeRequestIid: number,
   body: string,
 ): Effect.Effect<string, ProviderError> =>
@@ -110,6 +118,59 @@ export const postDiscussion = (
     },
     HasIdSchema,
   ).pipe(Effect.map((res) => String(res.id)));
+
+/**
+ * GitLab rejects a position it cannot anchor (a context line that also needs
+ * `old_line`, or a line outside the diff) with HTTP 400 whose body names the
+ * line/position. Matched narrowly — not a blanket 400 — so a genuinely
+ * malformed payload (bad SHAs) still surfaces instead of silently degrading
+ * every Finding to a general discussion (see ADR 0003).
+ */
+const isLineNotAnchorable = (error: ProviderError): boolean =>
+  error._tag === "ProviderHttpError" &&
+  error.status === 400 &&
+  /line|position/i.test(error.body);
+
+/**
+ * Post `body` as a discussion. With an `anchor`, POST it as a discussion
+ * positioned on the new side of the diff; if GitLab won't anchor that line
+ * (HTTP 400), fall back to a general discussion with `file:line` kept in the
+ * body. Without an anchor (prose summary, CLI `post`), post general directly.
+ */
+export const postDiscussion = (
+  mergeRequestIid: number,
+  body: string,
+  anchor?: DiscussionAnchor,
+): Effect.Effect<string, ProviderError> => {
+  if (anchor === undefined) {
+    return postGeneralDiscussion(mergeRequestIid, body);
+  }
+  return runGitLabWrite(
+    {
+      method: "POST",
+      path: discussionsPath(mergeRequestIid),
+      body: {
+        body,
+        position: {
+          position_type: "text",
+          base_sha: anchor.refs.base_sha,
+          head_sha: anchor.refs.head_sha,
+          start_sha: anchor.refs.start_sha,
+          new_path: anchor.file,
+          old_path: anchor.file,
+          new_line: anchor.line,
+        },
+      },
+    },
+    HasIdSchema,
+  ).pipe(
+    Effect.map((res) => String(res.id)),
+    Effect.catchIf(isLineNotAnchorable, () => postGeneralDiscussion(mergeRequestIid, body)),
+  );
+};
+
+/** Exposed for tests — never used in production code. */
+export const __test = { isLineNotAnchorable };
 
 /**
  * Add a note (a reply) to an existing discussion thread. The response is

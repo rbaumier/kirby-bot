@@ -187,7 +187,10 @@ export const postReviewToMr = (
       actionableFindings,
       (finding) =>
         provider
-          .postDiscussion(input.mrIid, formatLineAnchoredBody(finding))
+          .postDiscussion(input.mrIid, formatLineAnchoredBody(finding), {
+            file: finding.file,
+            line: finding.line,
+          })
           .pipe(Effect.map((discussionId) => ({ discussionId, finding }))),
       { concurrency: POST_CONCURRENCY },
     );
