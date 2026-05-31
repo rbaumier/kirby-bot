@@ -31,6 +31,23 @@ _Avoid_: comment, remark, issue (an Issue is the upstream work item).
 The `evaluate` Phase's per-Finding judgment — one of `real`, `real-but-bloated-remedy`, `imagined`, or a punt (`severity: suggestion` Findings → "left for a human"). `real` / `real-but-bloated-remedy` leave the Discussion unresolved for `fix` (the Finding is *accepted*); `imagined` and suggestions are resolved. Distinct from **Verdict**: a Verdict is the phase-level outcome token, a Triage is per-Finding.
 _Avoid_: verdict (reserved for phase tokens), adjudication, ruling, assessment.
 
+A run that stops short of `done` lands in exactly one of three fates — **Interruption**, **Stall**, or **Failure**. The boundary that matters is *who/what stopped it*: an external cut-off (innocent issue), the work failing to converge within its own resources (possibly-poison issue), or the agent reaching a terminal judgment. Each gets a different recovery policy. (A `PromptError` — a missing/unresolvable prompt template — is none of these: it is a *deploy bug* that crashes the whole **run**, not a fate of the issue.)
+
+### Interruption
+
+A run stopped by an **external or environment cut-off** — the issue is innocent. Causes: SIGTERM / Ctrl-C, `kill -9` / OOM / host crash (the process dies mid-Phase), `TmuxError`, `WorkspaceError` (a filesystem fault in the worktree/run dir), a transient git/network/API error, and an unhandled defect (`Effect.die`) that crashes the run. An Interruption returns the issue to `ready-for-agent` and is retried **for free — uncapped**: an external cut-off carries no signal that the *issue* is unworkable (an environment fault that *persists* is bounded instead by the absolute re-pick backstop, not by this fate). Detected only by the startup sweep via a dead PID lockfile (mono-host) — there is no in-process signal finalizer (a graceful SIGTERM and a hard `kill -9` both reduce to "the next sweep finds a dead PID"). Distinct from a **Stall** (the work itself failed to converge) and a **Failure** (a judgment).
+_Avoid_: stall, failure, crash, abort, error.
+
+### Stall
+
+A run where **the work itself consumed its session without producing a verdict** — `SessionTimedOut`, `NoVerdict`, `BudgetExhausted`, an implementation that timed out with no commits to salvage, **and the agent/diff-correlated emission glitches** (`UnexpectedVerdictError`, a review router malformed twice). Unlike an **Interruption**, the issue is *not* innocent: a Stall is a weak signal the issue may be unworkable (too large, perpetual Claude-usage starvation, a diff the router keeps choking on). The classification rule is *re-runnability*: a cause that **recurs when the same work resumes** is a Stall (must be capped), not an Interruption. A Stall returns the issue to `ready-for-agent` but is **capped** — after the Nth consecutive Stall (counted in a local sidecar, mono-host) it converts to a **Failure**. The cap rations the only real waste: re-minting a fresh per-issue budget over and over (each resume mints a new `deadline`) on an issue that never converges.
+_Avoid_: interruption (an external cut-off, never capped), timeout (only one of its causes).
+
+### Failure
+
+A run reaching a **terminal outcome the pipeline cannot resolve without a human** — either the agent *judged* and gave up (a suspected blocker `BLOCKER_SUSPECTED`, `MAX_FIX_CYCLES` exhausted, `QA_FAIL` after fixes) or a *safety refusal* (a branch reclaim refused on a #24 name collision — not a judgment, but equally terminal). Also the terminal landing of a capped **Stall**. A Failure carries `failed-by-agent`, needs a human, and is **never** retried automatically. A human re-queue (`failed-by-agent` → `ready-for-agent`) clears the Stall count and starts fresh.
+_Avoid_: interruption, stall (both recoverable; Failure is terminal).
+
 ### Session
 
 The mechanism a Phase uses to run a single `claude` invocation in isolation: spawn a tmux session with the rendered prompt, register a Stop hook (`src/session/stop-hook.ts`) that writes the last assistant message to a sentinel **iff `stop_reason === "end_turn"`** (or the event is `StopFailure`), poll the sentinel, parse the Verdict, kill the tmux. On any other `stop_reason` the hook emits `{"decision":"block"}` on stdout so Claude Code resumes the agent loop instead of stopping prematurely — that branch is what catches mid-turn Stops while subagents or `tool_use` rounds are still in flight (see #29). The Session Module hides tmux/sentinel/verdict-parsing behind a small interface; the Phase only sees `runPhaseSession(input, expected) → Effect<V, PhaseError, RunArtifacts>`, where `V extends VerdictToken` is narrowed to the expected set and an off-set verdict fails with `UnexpectedVerdictError`.

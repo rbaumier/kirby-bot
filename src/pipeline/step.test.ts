@@ -1,18 +1,22 @@
 /**
- * Handlers.test.ts — `failedFieldsOf` and the `step` seam.
+ * Handlers.test.ts — `endFieldsOf` and the `step` seam.
  *
- * The seam catches a `HandlerError` and rebuilds a `failed` state from
- * `current`. Tests pin the extractor's per-variant output, and the live
- * behaviour when a handler fails with a failing provider.
+ * The seam catches a `HandlerError` and rebuilds an end state from `current`,
+ * routing on the error's `fate` (failure → failed, stall → stalled,
+ * interruption → interrupted). Tests pin the extractor's per-variant output,
+ * and the live behaviour when a handler fails with a failing provider.
  */
-import { describe, expect, it } from "bun:test";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
+import { STATE_DIR } from "../config";
 import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
 import { RunArtifacts } from "../run-artifacts";
 import type { RunArtifactsShape } from "../run-artifacts";
-import { failedFieldsOf, step } from "./step";
+import { endFieldsOf, step } from "./step";
 import type { State } from "./state";
 
 const noopRunArtifacts: RunArtifactsShape = {
@@ -31,10 +35,10 @@ const TestRunArtifacts: Layer.Layer<RunArtifacts> = Layer.succeed(RunArtifacts, 
 const issue = { iid: 42, title: "Test issue", body: "body" } as const;
 const env: Environment = { repoName: "test-repo", defaultBranch: "main" };
 
-describe("failedFieldsOf", () => {
+describe("endFieldsOf", () => {
   it("issue-only states leave branch/worktree/pullRequestIid/fixCycles null", () => {
     const claim: Extract<State, { kind: "claim_issue" }> = { kind: "claim_issue", issue };
-    expect(failedFieldsOf(claim)).toEqual({
+    expect(endFieldsOf(claim)).toEqual({
       issue,
       branch: null,
       worktree: null,
@@ -50,7 +54,7 @@ describe("failedFieldsOf", () => {
       branch: "issue-42",
       worktree: "/wt/42",
     };
-    expect(failedFieldsOf(runImpl)).toEqual({
+    expect(endFieldsOf(runImpl)).toEqual({
       issue,
       branch: "issue-42",
       worktree: "/wt/42",
@@ -69,7 +73,7 @@ describe("failedFieldsOf", () => {
       pullRequestIid: 7,
       fixCycles: 1,
     };
-    expect(failedFieldsOf(review)).toEqual({
+    expect(endFieldsOf(review)).toEqual({
       issue,
       branch: "issue-42",
       worktree: "/wt/42",
@@ -85,7 +89,7 @@ describe("failedFieldsOf", () => {
       worktree: "/wt/42",
       pullRequestIid: 7,
     };
-    expect(failedFieldsOf(done)).toEqual({
+    expect(endFieldsOf(done)).toEqual({
       issue,
       branch: null,
       worktree: "/wt/42",
@@ -126,21 +130,95 @@ const makeClaimFailingProvider = (): Layer.Layer<GitProvider> =>
   });
 
 describe("step seam", () => {
-  it("HandlerError from claim_issue becomes a `failed` state with the issue copied off `current`", async () => {
+  it("a transient (HTTP 500) HandlerError from claim_issue becomes an `interrupted` state with the issue copied off `current`", async () => {
     const result = await Effect.runPromise(
       step({ kind: "claim_issue", issue }, env).pipe(
         Effect.provide(makeClaimFailingProvider()),
         Effect.provide(TestRunArtifacts),
       ),
     );
-    const failed = result.kind === "failed" ? result : null;
-    expect(failed).not.toBeNull();
-    expect(failed?.issue).toEqual(issue);
-    expect(failed?.branch).toBeNull();
-    expect(failed?.worktree).toBeNull();
-    expect(failed?.pullRequestIid).toBeNull();
-    expect(failed?.fixCycles).toBeNull();
-    expect(failed?.reason).toContain("claim_issue:");
-    expect(failed?.reason).toContain("HTTP 500");
+    // status 500 → fateOfProviderError → "interruption" → `interrupted` (ADR 0004).
+    const interrupted = result.kind === "interrupted" ? result : null;
+    expect(interrupted).not.toBeNull();
+    expect(interrupted?.issue).toEqual(issue);
+    expect(interrupted?.branch).toBeNull();
+    expect(interrupted?.worktree).toBeNull();
+    expect(interrupted?.pullRequestIid).toBeNull();
+    expect(interrupted?.fixCycles).toBeNull();
+    expect(interrupted?.reason).toContain("claim_issue:");
+    expect(interrupted?.reason).toContain("HTTP 500");
+  });
+
+  it("a 422 HandlerError from claim_issue becomes a `failed` state (the retry would only re-hit it)", async () => {
+    const provider = Layer.succeed(GitProvider, {
+      ...providerStub,
+      viewIssue: () => Effect.succeed({ labels: [] } as never),
+      updateIssueLabels: () =>
+        Effect.fail(
+          new ProviderHttpError({ method: "PUT", path: "issues/42", status: 422, body: "nope" }),
+        ),
+    });
+    const result = await Effect.runPromise(
+      step({ kind: "claim_issue", issue }, env).pipe(
+        Effect.provide(provider),
+        Effect.provide(TestRunArtifacts),
+      ),
+    );
+    expect(result.kind).toBe("failed");
+  });
+});
+
+/** A provider stub whose every method is a defect — override only what a test touches. */
+const providerStub = {
+  listIssuesByLabels: () => Effect.die("stub: listIssuesByLabels"),
+  viewIssue: () => Effect.die("stub: viewIssue"),
+  updateIssueLabels: () => Effect.die("stub: updateIssueLabels"),
+  addIssueNote: () => Effect.die("stub: addIssueNote"),
+  findOpenPullRequestBySource: () => Effect.die("stub: findOpenPullRequestBySource"),
+  createDraftPullRequest: () => Effect.die("stub: createDraftPullRequest"),
+  viewPullRequest: () => Effect.die("stub: viewPullRequest"),
+  markPullRequestReady: () => Effect.die("stub: markPullRequestReady"),
+  mergePullRequest: () => Effect.die("stub: mergePullRequest"),
+  listDiscussions: () => Effect.die("stub: listDiscussions"),
+  postDiscussion: () => Effect.die("stub: postDiscussion"),
+  postMrNote: () => Effect.die("stub: postMrNote"),
+  replyToDiscussion: () => Effect.die("stub: replyToDiscussion"),
+  resolveDiscussion: () => Effect.die("stub: resolveDiscussion"),
+} as const;
+
+describe("onStalled (cold sidecar)", () => {
+  // This suite's repo owns its sidecar; wipe it so a prior run's counters can't park early.
+  beforeEach(() => rm(join(STATE_DIR, env.repoName), { recursive: true, force: true }));
+
+  it("returns the issue to the queue (ready-for-agent) and posts an audit note below the cap", async () => {
+    const labelCalls: { add: readonly string[]; remove: readonly string[] }[] = [];
+    let noted = false;
+    const provider = Layer.succeed(GitProvider, {
+      ...providerStub,
+      addIssueNote: () =>
+        Effect.sync(() => {
+          noted = true;
+        }),
+      updateIssueLabels: (_iid, changes) =>
+        Effect.sync(() => {
+          labelCalls.push(changes);
+        }),
+    });
+    const stalled = {
+      kind: "stalled",
+      issue,
+      branch: null,
+      worktree: "/wt/42",
+      pullRequestIid: null,
+      fixCycles: null,
+      reason: "implementation: timed out with no commits ahead of base",
+    } as const;
+
+    const result = await Effect.runPromise(
+      step(stalled, env).pipe(Effect.provide(provider), Effect.provide(TestRunArtifacts)),
+    );
+    expect(result.kind).toBe("fetch_queue");
+    expect(noted).toBe(true);
+    expect(labelCalls).toEqual([{ add: ["ready-for-agent"], remove: ["picked-by-agent"] }]);
   });
 });

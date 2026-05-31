@@ -35,7 +35,10 @@ const commitPendingChanges = (worktree: string): Effect.Effect<void, HandlerErro
     const status = yield* runShellGit(worktree, ["status", "--porcelain"]).pipe(
       Effect.mapError(
         (error): HandlerError =>
-          new HandlerError({ reason: `status before rebase failed — ${describeShellError(error)}` }),
+          new HandlerError({
+            reason: `status before rebase failed — ${describeShellError(error)}`,
+            fate: "interruption",
+          }),
       ),
     );
     if (status.stdout.trim() === "") {
@@ -45,13 +48,19 @@ const commitPendingChanges = (worktree: string): Effect.Effect<void, HandlerErro
     yield* runShellGit(worktree, ["add", "-A"]).pipe(
       Effect.mapError(
         (error): HandlerError =>
-          new HandlerError({ reason: `git add before rebase failed — ${describeShellError(error)}` }),
+          new HandlerError({
+            reason: `git add before rebase failed — ${describeShellError(error)}`,
+            fate: "interruption",
+          }),
       ),
     );
     yield* runShellGit(worktree, ["commit", "-m", "chore: post-review refinements (kirby)"]).pipe(
       Effect.mapError(
         (error): HandlerError =>
-          new HandlerError({ reason: `commit before rebase failed — ${describeShellError(error)}` }),
+          new HandlerError({
+            reason: `commit before rebase failed — ${describeShellError(error)}`,
+            fate: "interruption",
+          }),
       ),
     );
   });
@@ -70,7 +79,10 @@ export const rebaseBranchOntoDefault = (
     yield* runShellGit(worktree, ["fetch", "origin", defaultBranch]).pipe(
       Effect.mapError(
         (error): HandlerError =>
-          new HandlerError({ reason: `fetch before rebase failed — ${describeShellError(error)}` }),
+          new HandlerError({
+            reason: `fetch before rebase failed — ${describeShellError(error)}`,
+            fate: "interruption",
+          }),
       ),
     );
 
@@ -84,6 +96,7 @@ export const rebaseBranchOntoDefault = (
             Effect.fail(
               new HandlerError({
                 reason: `rebase onto ${defaultBranch} hit conflicts — ${describeShellError(error)}`,
+                fate: "interruption",
               }),
             ),
           ),
@@ -94,7 +107,10 @@ export const rebaseBranchOntoDefault = (
     yield* runShellGit(worktree, ["push", "--force-with-lease", "origin", branch]).pipe(
       Effect.mapError(
         (error): HandlerError =>
-          new HandlerError({ reason: `force-push after rebase failed — ${describeShellError(error)}` }),
+          new HandlerError({
+            reason: `force-push after rebase failed — ${describeShellError(error)}`,
+            fate: "interruption",
+          }),
       ),
     );
   });

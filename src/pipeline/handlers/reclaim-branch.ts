@@ -74,6 +74,7 @@ export const reclaimAgentBranch = (
             (error): HandlerError =>
               new HandlerError({
                 reason: `branch_create: could not delete reclaimed branch '${branch}' — ${describeShellError(error)}`,
+                fate: "interruption",
               }),
           ),
         )
@@ -83,8 +84,56 @@ export const reclaimAgentBranch = (
               `branch_create: refusing to delete existing branch '${branch}' — its tip is not ` +
               `contained in origin/${defaultBranch}, so it may hold unmerged work (possible name ` +
               `collision). A human must inspect and remove it before this issue can be retried.`,
+            fate: "failure",
           }),
         );
+  });
+
+/** Input for {@link resumableRemoteBranch}. */
+export type ResumableRemoteBranchInput = {
+  /** Repo directory to run git in (`.` in production = the orchestrator cwd). */
+  readonly repoDir: string;
+  /** Slugified issue branch the orchestrator owns. */
+  readonly branch: string;
+  /** Upstream branch the pushed work must be *ahead of* to count as resumable. */
+  readonly defaultBranch: string;
+};
+
+/**
+ * Whether `origin/<branch>` exists and holds commits beyond `origin/<defaultBranch>`
+ * — the fingerprint of an attempt that pushed work before it was interrupted
+ * (ADR 0004, G1.5). When true, `branch_create` rebuilds the worktree *from that
+ * remote branch* (resume) instead of reclaiming the local ref and recreating from
+ * the default branch (fresh start).
+ *
+ * Assumes the caller has already fetched `origin/<branch>` and
+ * `origin/<defaultBranch>`. Any probe failure (missing ref, spawn/timeout)
+ * resolves to `false`, so an uncertain case falls back to the conservative
+ * fresh-start path rather than resuming onto a tip it could not verify.
+ */
+export const resumableRemoteBranch = (
+  input: ResumableRemoteBranchInput,
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const { repoDir, branch, defaultBranch } = input;
+
+    const exists = yield* runShell(
+      () => $`git -C ${repoDir} rev-parse --verify --quiet refs/remotes/origin/${branch}`,
+    ).pipe(
+      Effect.as(true),
+      Effect.catchAll(() => Effect.succeed(false)),
+    );
+    if (!exists) {
+      return false;
+    }
+
+    const ahead = yield* runShell(
+      () => $`git -C ${repoDir} rev-list --count origin/${defaultBranch}..origin/${branch}`,
+    ).pipe(
+      Effect.map((output) => parseInt(output.stdout.trim(), 10)),
+      Effect.catchAll(() => Effect.succeed(0)),
+    );
+    return !Number.isNaN(ahead) && ahead > 0;
   });
 
 /** Input for {@link dropStaleRemoteAgentBranch}. */
@@ -102,8 +151,12 @@ export type DropStaleRemoteAgentBranchInput = {
  * branches fresh from the default branch and `git push -u` is then rejected
  * non-fast-forward. The delete is unconditional once the branch is present:
  * unlike the local reclaim, no containment check guards it, because the `afk/`
- * namespace is the bot's own and every run redoes the issue from scratch, so
- * the remote tip is disposable.
+ * namespace is the bot's own and the remote tip is disposable on the fresh-start
+ * path.
+ *
+ * Only reached on the fresh-start path: when the remote branch carries resumable
+ * work ({@link resumableRemoteBranch}), `branch_create` rebuilds *from* it and
+ * skips this drop entirely (ADR 0004, G1.5).
  *
  * An absent branch — the common fresh case — is a silent no-op. A genuine
  * delete failure (auth, permissions) is logged, not fatal: otherwise the push

@@ -74,6 +74,7 @@ export const implementationPhase = (
       return yield* Effect.fail(
         new HandlerError({
           reason: "implementation: timed out with no commits ahead of base",
+          fate: "stall",
         }),
       );
     }
@@ -82,6 +83,9 @@ export const implementationPhase = (
       return { kind: "open_draft_mr", issue, branch, worktree, deadline };
     }
     return yield* Effect.fail(
-      new HandlerError({ reason: "implementation: the implementer reported a blocker" }),
+      new HandlerError({
+        reason: "implementation: the implementer reported a blocker",
+        fate: "failure",
+      }),
     );
   });

@@ -19,10 +19,16 @@ import { LABELS, WORKTREES_DIR } from "../../config";
 import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
 import type { ProviderCallError } from "../../provider/types";
+import { RunArtifacts } from "../../run-artifacts";
 import { describeShellError, runShell, runShellGit } from "../../shell";
+import { writeLock } from "../../recovery/lockfile";
 import { HandlerError, providerHandlerError } from "../errors";
 import { branchName, worktreePath } from "../naming";
-import { dropStaleRemoteAgentBranch, reclaimAgentBranch } from "./reclaim-branch";
+import {
+  dropStaleRemoteAgentBranch,
+  reclaimAgentBranch,
+  resumableRemoteBranch,
+} from "./reclaim-branch";
 import type { IssueRef, State } from "../state";
 
 /**
@@ -82,9 +88,10 @@ export const onFetchQueue: Effect.Effect<State, ProviderCallError, GitProvider> 
 /** Claim_issue — re-check the labels, then claim by adding `picked-by-agent`. */
 export const onClaimIssue = (
   issue: IssueRef,
-): Effect.Effect<State, HandlerError, GitProvider> =>
+): Effect.Effect<State, HandlerError, GitProvider | RunArtifacts> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
+    const artifacts = yield* RunArtifacts;
     // Re-read the labels right before claiming. This narrows the window
     // where another instance claims the same issue. A label add is not a
     // compare-and-swap. Worst case both work it; the random pick keeps that rare.
@@ -96,6 +103,10 @@ export const onClaimIssue = (
       yield* Console.log(`  ↳ #${issue.iid} already claimed by another instance — skipping`);
       return { kind: "fetch_queue" };
     }
+
+    // Record liveness *before* the label so a concurrent sweep never sees a
+    // `picked-by-agent` claim without a live lock behind it (ADR 0004).
+    yield* writeLock(artifacts.dir, issue.iid);
 
     yield* provider
       .updateIssueLabels(issue.iid, {
@@ -125,15 +136,15 @@ export const onBranchCreate = (
       catch: (cause): HandlerError =>
         new HandlerError({
           reason: `branch_create: could not create the worktree parent directory — ${String(cause)}`,
+          fate: "interruption",
         }),
     });
 
     // Re-entrancy: a crashed prior run may have left this branch and worktree
     // behind (the sweep removes only the worktree, not the branch). Remove the
-    // worktree, refresh origin, then reclaim the branch — but only if it holds
-    // nothing that isn't already upstream, so a colliding human branch is never
-    // clobbered (#24). The fetch runs first so the containment check below sees
-    // a current origin/<defaultBranch>.
+    // worktree and refresh origin first, so both the resume probe and the
+    // containment check below see a current origin/<defaultBranch> and
+    // origin/<branch>.
     yield* runShell(() => $`git worktree remove --force ${worktree}`).pipe(Effect.ignore);
     yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
 
@@ -144,24 +155,59 @@ export const onBranchCreate = (
         ),
       ),
     );
+    // Best-effort: learn whether origin/<branch> carries pushed work from a prior
+    // interrupted attempt. Absent → exits non-zero → ignored.
+    yield* runShell(() => $`git fetch origin ${branch}`).pipe(Effect.ignore);
 
-    yield* reclaimAgentBranch({ repoDir: ".", branch, defaultBranch: env.defaultBranch });
+    const resume = yield* resumableRemoteBranch({
+      repoDir: ".",
+      branch,
+      defaultBranch: env.defaultBranch,
+    });
 
-    // Same re-entrancy on the remote side (#36): drop a stale origin/<branch>
-    // left by a sentinel-failed run, else the fresh push is rejected non-fast-
-    // forward.
-    yield* dropStaleRemoteAgentBranch({ repoDir: ".", branch });
+    if (resume) {
+      // Resume (ADR 0004, G1.5): origin/<branch> holds commits beyond the default
+      // branch. Rebuild the worktree FROM that tip so the implementer continues
+      // where the interrupted run left off — do NOT reclaim or drop the remote
+      // branch, that work is exactly what we resume from. Drop only the stale
+      // LOCAL ref so `worktree add -b` can recreate it on the pushed tip.
+      yield* Console.log(
+        `  ↻ #${issue.iid}: resuming from origin/${branch} (a prior attempt pushed work before it was interrupted)`,
+      );
+      yield* runShell(() => $`git branch -D ${branch}`).pipe(Effect.ignore);
+      yield* runShell(
+        () => $`git worktree add -b ${branch} ${worktree} origin/${branch}`,
+      ).pipe(
+        Effect.mapError(
+          (error): HandlerError =>
+            new HandlerError({
+              reason: `branch_create: worktree add (resume) failed — ${describeShellError(error)}`,
+              fate: "interruption",
+            }),
+        ),
+      );
+    } else {
+      // Fresh start: reclaim the leftover branch — but only if it holds nothing
+      // that isn't already upstream, so a colliding human branch is never
+      // clobbered (#24)...
+      yield* reclaimAgentBranch({ repoDir: ".", branch, defaultBranch: env.defaultBranch });
 
-    yield* runShell(
-      () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,
-    ).pipe(
-      Effect.mapError(
-        (error): HandlerError =>
-          new HandlerError({
-            reason: `branch_create: worktree add failed — ${describeShellError(error)}`,
-          }),
-      ),
-    );
+      // ...and drop a stale origin/<branch> left by a sentinel-failed run, else
+      // the fresh push is rejected non-fast-forward (#36).
+      yield* dropStaleRemoteAgentBranch({ repoDir: ".", branch });
+
+      yield* runShell(
+        () => $`git worktree add -b ${branch} ${worktree} origin/${env.defaultBranch}`,
+      ).pipe(
+        Effect.mapError(
+          (error): HandlerError =>
+            new HandlerError({
+              reason: `branch_create: worktree add failed — ${describeShellError(error)}`,
+              fate: "interruption",
+            }),
+        ),
+      );
+    }
 
     yield* excludeStopHookConfig(worktree);
     return { kind: "branch_push", issue, branch, worktree };
@@ -178,6 +224,7 @@ export const onBranchPush = (
         (error): HandlerError =>
           new HandlerError({
             reason: `branch_push: push failed — ${describeShellError(error)}`,
+            fate: "interruption",
           }),
       ),
     );

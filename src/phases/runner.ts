@@ -11,7 +11,7 @@ import { Effect } from "effect";
 import { MAX_FIX_CYCLES, SCRIPTS_DIR } from "../config";
 import { HandlerError } from "../pipeline/errors";
 import type { PipelineContext, State } from "../pipeline/state";
-import { describePhaseError } from "../session/errors";
+import { describePhaseError, fateOfPhaseError } from "../session/errors";
 import type { PhaseError } from "../session/errors";
 import type { RunPhaseSessionInput } from "../session/phase";
 
@@ -59,11 +59,19 @@ export const toFixUnlessCapped = (
   capDetail: string,
 ): Effect.Effect<State, HandlerError> =>
   MAX_FIX_CYCLES <= state.fixCycles
-    ? Effect.fail(new HandlerError({ reason: `fix_cycle_cap: ${MAX_FIX_CYCLES} ${capDetail}` }))
+    ? Effect.fail(
+        new HandlerError({
+          reason: `fix_cycle_cap: ${MAX_FIX_CYCLES} ${capDetail}`,
+          fate: "failure",
+        }),
+      )
     : Effect.succeed({ kind: "fix", ...pipelineContext(state), fixCycles: state.fixCycles });
 
-/** Map a Session error into a `HandlerError` with a phase-prefixed reason. */
+/** Map a Session error into a `HandlerError` with a phase-prefixed reason and fate. */
 export const phaseHandlerError =
   (prefix: string) =>
   (error: PhaseError): HandlerError =>
-    new HandlerError({ reason: `${prefix}: ${describePhaseError(error)}` });
+    new HandlerError({
+      reason: `${prefix}: ${describePhaseError(error)}`,
+      fate: fateOfPhaseError(error),
+    });

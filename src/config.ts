@@ -115,6 +115,11 @@ export const ISSUE_BUDGET_MS = 240 * 60 * 1000;
  * How long a `picked-by-agent` claim may sit untouched before the startup
  * sweep treats it as stale and returns the issue to the queue (#35).
  *
+ * Demoted to a last-ditch backstop by ADR 0004: the PID lockfile (`lockfile.ts`)
+ * is now the primary liveness signal, so a crashed run's orphan is reaped in
+ * seconds. This age threshold only covers a claim with no lockfile at all (e.g.
+ * a crash before the first lock write, or a pre-lockfile run).
+ *
  * The signal is the issue's `updated_at`, which a run only bumps at claim time
  * (the phases work the MR, not the issue) — so it is the claim's age, not a
  * heartbeat. A healthy run can therefore carry a claim as old as the whole
@@ -144,6 +149,22 @@ export const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
 /** The most review→fix cycles allowed before the issue is failed for a human. */
 export const MAX_FIX_CYCLES = 2;
+
+/**
+ * How many *consecutive* Stalls (a run that consumed its session/budget without
+ * a verdict) an issue may accrue before it converts to a Failure (`failed-by-
+ * agent`). Reset to zero on any non-Stall outcome (success, Interruption, human
+ * re-queue). See ADR 0004.
+ */
+export const STALL_CAP = 3;
+
+/**
+ * Absolute backstop: how many times an issue may be re-picked by *any* fate
+ * (Stall or Interruption) before it converts to a Failure. Bounds the
+ * uncapped-Interruption tail (e.g. an issue Ctrl-C'd in `implementation` every
+ * time) so no issue loops forever re-minting budget. See ADR 0004.
+ */
+export const REPICK_CAP = 10;
 
 /**
  * Max attempts (initial + retries) the review router gets to emit a parseable
@@ -178,6 +199,14 @@ export const WORKTREES_DIR = join(homedir(), ".afk-worktrees");
 
 /** Where per-run logs live — one timestamped subdirectory per run. */
 export const RUNS_DIR = join(homedir(), ".afk-runs");
+
+/**
+ * Where the cross-run interruption sidecar lives — one JSON per repository
+ * (`<repo>/interruptions.json`) keyed by issue iid. Holds the consecutive-Stall
+ * and total-re-pick counts that drive the {@link STALL_CAP} / {@link REPICK_CAP}
+ * conversions. Mono-host; survives across runs. See ADR 0004.
+ */
+export const STATE_DIR = join(homedir(), ".afk-state");
 
 /**
  * The directory holding the five phase prompt templates.

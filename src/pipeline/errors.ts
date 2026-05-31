@@ -10,18 +10,67 @@ import type { ProviderCallError } from "../provider/types";
 import { describeProviderError } from "../provider/types";
 
 /**
- * A handler decided the issue cannot proceed. `reason` enters the failed state.
+ * What a handler failure *means* for the issue — the seam routes on this, not on
+ * the reason string (see ADR 0004). The fate is decided where the error is born,
+ * while its typed cause is still in hand.
+ *
+ * - `interruption` — an external/environment cut-off; re-queue free (uncapped).
+ * - `stall` — the work consumed its session/budget without a verdict, or a cause
+ *   that recurs on resume; re-queue but capped ({@link STALL_CAP}).
+ * - `failure` — the agent judged, or a safety refusal; `failed-by-agent`, human.
+ * - `fatal` — a deploy bug (e.g. a missing prompt template); crash the *run*, do
+ *   not park the issue.
+ */
+export type Fate = "interruption" | "stall" | "failure" | "fatal";
+
+/**
+ * A handler decided the issue cannot proceed. `reason` enters the end state;
+ * `fate` decides which end state (failed / stalled / interrupted) the seam
+ * routes to.
  *
  * Pipeline context (branch / worktree / pullRequestIid) is recovered by the
- * seam via `failedFieldsOf(current)` — handlers do not plumb it through the
+ * seam via `endFieldsOf(current)` — handlers do not plumb it through the
  * error. Each state variant is the source of truth for the fields it has.
  */
 export class HandlerError extends Data.TaggedError("HandlerError")<{
   readonly reason: string;
+  readonly fate: Fate;
 }> {}
+
+/**
+ * The fate of a provider call failure, by status — `providerHandlerError`'s
+ * single shared wrapper cannot use a constant, so it computes one here from the
+ * *typed* error (not a regex on a flattened string). 5xx / network / 429 are
+ * transient → `interruption`; an auth/config 401-403 is a deploy bug → `fatal`;
+ * any other 4xx the retry will only re-hit → `failure`.
+ */
+export const fateOfProviderError = (error: ProviderCallError): Fate => {
+  switch (error._tag) {
+    case "ProviderNetworkError":
+    case "ProviderResponseError": {
+      return "interruption";
+    }
+    case "ProviderHttpError": {
+      if (error.status >= 500 || error.status === 429) {
+        return "interruption";
+      }
+      if (error.status === 401 || error.status === 403) {
+        return "fatal";
+      }
+      return "failure";
+    }
+    default: {
+      const _exhaustive: never = error;
+      return "interruption";
+    }
+  }
+};
 
 /** Map a `ProviderCallError` into a `HandlerError` with a phase-prefixed reason. */
 export const providerHandlerError =
   (prefix: string) =>
   (error: ProviderCallError): HandlerError =>
-    new HandlerError({ reason: `${prefix}: ${describeProviderError(error)}` });
+    new HandlerError({
+      reason: `${prefix}: ${describeProviderError(error)}`,
+      fate: fateOfProviderError(error),
+    });

@@ -12,6 +12,7 @@
  */
 import { Data } from "effect";
 import type { Phase } from "../config";
+import type { Fate } from "../pipeline/errors";
 import type { VerdictToken } from "./verdict";
 
 /** A tmux command failed — the session could not be created or driven. */
@@ -66,6 +67,37 @@ export type PhaseError =
   | SessionTimedOut
   | NoVerdict
   | UnexpectedVerdictError;
+
+/**
+ * The fate of a phase-session failure (ADR 0004), by tag — not by reason string.
+ *
+ * A `SessionTimedOut` / `NoVerdict` / `BudgetExhausted` consumed the session
+ * without a verdict → `stall`. An `UnexpectedVerdictError` is a diff-correlated
+ * emission glitch that recurs on resume → `stall`. A `TmuxError` / `WorkspaceError`
+ * is an environment cut-off, the issue innocent → `interruption`. A `PromptError`
+ * is a deploy bug affecting every issue → `fatal` (crash the run).
+ */
+export const fateOfPhaseError = (error: PhaseError): Fate => {
+  switch (error._tag) {
+    case "SessionTimedOut":
+    case "NoVerdict":
+    case "BudgetExhausted":
+    case "UnexpectedVerdictError": {
+      return "stall";
+    }
+    case "TmuxError":
+    case "WorkspaceError": {
+      return "interruption";
+    }
+    case "PromptError": {
+      return "fatal";
+    }
+    default: {
+      const _exhaustive: never = error;
+      return "interruption";
+    }
+  }
+};
 
 const MAX_STDERR_CHARS = 160;
 const MS_PER_SECOND = 1000;

@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { $ } from "bun";
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { dropStaleRemoteAgentBranch, reclaimAgentBranch } from "./reclaim-branch";
+import {
+  dropStaleRemoteAgentBranch,
+  reclaimAgentBranch,
+  resumableRemoteBranch,
+} from "./reclaim-branch";
 
 const BRANCH = "issue-42";
 
@@ -93,6 +97,44 @@ const remoteBranchExists = async (repoDir: string): Promise<boolean> => {
   const probe = await $`git -C ${repoDir} ls-remote --exit-code --heads origin ${BRANCH}`.nothrow();
   return probe.exitCode === 0;
 };
+
+describe("resumableRemoteBranch", () => {
+  test("false when origin/<branch> does not exist", async () => {
+    const repoDir = await buildClonedRepo();
+    const resumable = await Effect.runPromise(
+      resumableRemoteBranch({ repoDir, branch: BRANCH, defaultBranch: "main" }),
+    );
+    expect(resumable).toBe(false);
+  });
+
+  test("false when origin/<branch> exists but is not ahead of origin/main", async () => {
+    const repoDir = await buildClonedRepo();
+    // Push the branch at main's tip — present on origin, zero commits ahead.
+    await $`git -C ${repoDir} checkout -q -b ${BRANCH} main`;
+    await $`git -C ${repoDir} push -q -u origin ${BRANCH}`;
+    await $`git -C ${repoDir} fetch -q origin ${BRANCH}`;
+
+    const resumable = await Effect.runPromise(
+      resumableRemoteBranch({ repoDir, branch: BRANCH, defaultBranch: "main" }),
+    );
+    expect(resumable).toBe(false);
+  });
+
+  test("true when origin/<branch> holds commits beyond origin/main (resumable work)", async () => {
+    const repoDir = await buildClonedRepo();
+    await $`git -C ${repoDir} checkout -q -b ${BRANCH}`;
+    writeFileSync(join(repoDir, "wip.ts"), "partial work\n");
+    await $`git -C ${repoDir} add wip.ts`;
+    await $`git -C ${repoDir} commit -q -m wip`;
+    await $`git -C ${repoDir} push -q -u origin ${BRANCH}`;
+    await $`git -C ${repoDir} fetch -q origin ${BRANCH}`;
+
+    const resumable = await Effect.runPromise(
+      resumableRemoteBranch({ repoDir, branch: BRANCH, defaultBranch: "main" }),
+    );
+    expect(resumable).toBe(true);
+  });
+});
 
 describe("dropStaleRemoteAgentBranch", () => {
   test("no-op when the remote branch does not exist", async () => {

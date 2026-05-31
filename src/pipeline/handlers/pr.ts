@@ -17,8 +17,9 @@ import { GitProvider } from "../../provider/provider";
 import type { ProviderCallError } from "../../provider/types";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
+import { clearIssue } from "../../recovery/sidecar";
 import { describeShellError, runShell } from "../../shell";
-import { HandlerError, providerHandlerError } from "../errors";
+import { fateOfProviderError, HandlerError, providerHandlerError } from "../errors";
 import { rebaseBranchOntoDefault } from "./rebase-branch";
 import type { State } from "../state";
 
@@ -98,6 +99,7 @@ export const onMerge = (
         (error): HandlerError =>
           new HandlerError({
             reason: `merge: could not un-draft — ${describeProviderError(error)}`,
+            fate: "interruption",
           }),
       ),
     );
@@ -129,7 +131,10 @@ export const onMerge = (
       Effect.catchAll((mergeError): Effect.Effect<State, HandlerError, GitProvider> => {
         if (!isBranchOutOfDate(mergeError)) {
           return Effect.fail(
-            new HandlerError({ reason: `merge: ${describeProviderError(mergeError)}` }),
+            new HandlerError({
+              reason: `merge: ${describeProviderError(mergeError)}`,
+              fate: fateOfProviderError(mergeError),
+            }),
           );
         }
         return Effect.gen(function* () {
@@ -137,13 +142,17 @@ export const onMerge = (
             `  ↳ merge rejected (branch out of date) — rebasing ${branch} onto ${env.defaultBranch}`,
           );
           yield* rebaseBranchOntoDefault({ worktree, branch, defaultBranch: env.defaultBranch }).pipe(
-            Effect.mapError((error): HandlerError => new HandlerError({ reason: `merge: ${error.reason}` })),
+            Effect.mapError(
+              (error): HandlerError =>
+                new HandlerError({ reason: `merge: ${error.reason}`, fate: error.fate }),
+            ),
           );
           return yield* attemptMerge.pipe(
             Effect.mapError(
               (retryError): HandlerError =>
                 new HandlerError({
                   reason: `merge: still failing after rebase — ${describeProviderError(retryError)}`,
+                  fate: fateOfProviderError(retryError),
                 }),
             ),
           );
@@ -155,6 +164,7 @@ export const onMerge = (
 /** Done — unlabel the issue, remove the worktree, loop back to the queue. */
 export const onDone = (
   state: Extract<State, { kind: "done" }>,
+  env: Environment,
 ): Effect.Effect<State, never, GitProvider> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
@@ -176,6 +186,10 @@ export const onDone = (
       ),
     );
     yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
+    // A success resets the issue's re-queue history — forget it so a future
+    // unrelated re-pick starts from a clean Stall/re-pick count (ADR 0004). Its
+    // own internal catchAll keeps a swallowed fs error from preserving the count.
+    yield* clearIssue(env.repoName, issue.iid);
     yield* Console.log(`  ✓ #${issue.iid} merged (!${pullRequestIid})`);
     return { kind: "fetch_queue" };
   });

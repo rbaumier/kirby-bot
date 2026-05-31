@@ -28,6 +28,16 @@ and the orchestrator fails the issue.
 
 If `cd` fails or the branch is wrong, end with `VERDICT: BLOCKER_SUSPECTED`.
 
+## Maybe resuming
+
+This branch may already hold commits from an earlier attempt that was
+interrupted. Check before starting fresh:
+
+    git -C "{worktree}" log --oneline origin/{branch} 2>/dev/null
+
+Continue that work — do not redo it or revert it. If the issue is already fully
+implemented and its tests pass, skip straight to `VERDICT: READY_FOR_REVIEW`.
+
 ## What to do
 
 1. Read the project's `CLAUDE.md` and follow its conventions. If the project

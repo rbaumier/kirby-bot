@@ -28,7 +28,7 @@ import type { GitProvider } from "../provider/provider";
 import { aggregateFindings } from "../review/aggregate";
 import { postReviewToMr } from "../review/post";
 import { readChangedFiles } from "../review/read-changed-files";
-import { describePhaseError } from "../session/errors";
+import { describePhaseError, fateOfPhaseError } from "../session/errors";
 import { DEFAULT_MCP_CONFIG_PATH, DEFAULT_TEMPLATES_DIR, runFanOutPhase } from "../session/fanout";
 import { pipelineContext } from "./runner";
 
@@ -44,7 +44,11 @@ export const reviewPhase = (
 
     const files = yield* readChangedFiles({ worktree, defaultBranch: env.defaultBranch }).pipe(
       Effect.mapError(
-        (error) => new HandlerError({ reason: `${tag}: readChangedFiles ${error.operation} — ${error.reason}` }),
+        (error) =>
+          new HandlerError({
+            reason: `${tag}: readChangedFiles ${error.operation} — ${error.reason}`,
+            fate: "interruption",
+          }),
       ),
     );
 
@@ -60,7 +64,11 @@ export const reviewPhase = (
       mcpConfigPath: DEFAULT_MCP_CONFIG_PATH,
     }).pipe(
       Effect.mapError(
-        (error) => new HandlerError({ reason: `${tag}: ${describePhaseError(error)}` }),
+        (error) =>
+          new HandlerError({
+            reason: `${tag}: ${describePhaseError(error)}`,
+            fate: fateOfPhaseError(error),
+          }),
       ),
     );
 
@@ -79,13 +87,18 @@ export const reviewPhase = (
       return yield* Effect.fail(
         new HandlerError({
           reason: `${tag}: review_fanout_sterile — 0/${fanOut.totalCount} agents reached AGENT_DONE`,
+          fate: "stall",
         }),
       );
     }
 
     const review = yield* aggregateFindings(fanOut).pipe(
       Effect.mapError(
-        (error) => new HandlerError({ reason: `${tag}: aggregate ${error.agent} — ${error.reason}` }),
+        (error) =>
+          new HandlerError({
+            reason: `${tag}: aggregate ${error.agent} — ${error.reason}`,
+            fate: "interruption",
+          }),
       ),
     );
 

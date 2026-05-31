@@ -10,8 +10,12 @@
  * real `afk/issue-N-*` worktree can match. The path's branch-matching logic is
  * covered directly in `./stale.test.ts` (`worktreePathsForIssue`).
  */
-import { describe, expect, it } from "bun:test";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
+import { STATE_DIR } from "../config";
+import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
 import type { Issue, IssueLabelChange } from "../provider/types";
@@ -21,6 +25,11 @@ import { recoverStaleClaims } from "./sweep";
 
 const STALE_DATE = "2020-01-01T00:00:00Z"; // far older than the budget
 const freshDate = () => new Date(Date.now() - 60_000).toISOString(); // 1 min ago
+
+// A repo whose interruption sidecar this suite owns and wipes before each test,
+// so the on-disk re-pick counters never accrue across runs into a spurious park.
+const env: Environment = { repoName: "kirby-sweep-test", defaultBranch: "main" };
+beforeEach(() => rm(join(STATE_DIR, env.repoName), { recursive: true, force: true }));
 
 const issue = (iid: number, updatedAt: string): Issue => ({
   iid,
@@ -45,7 +54,7 @@ const recordingProvider = (
       return updateResult();
     },
     viewIssue: () => Effect.die("unused: viewIssue"),
-    addIssueNote: () => Effect.die("unused: addIssueNote"),
+    addIssueNote: () => Effect.void,
     findOpenPullRequestBySource: () => Effect.die("unused: findOpenPullRequestBySource"),
     createDraftPullRequest: () => Effect.die("unused: createDraftPullRequest"),
     viewPullRequest: () => Effect.die("unused: viewPullRequest"),
@@ -100,7 +109,10 @@ const recordingRunArtifacts = (sink: Record<string, unknown>[]): Layer.Layer<Run
 /** Run the sweep with a fresh event sink per call — no state shared across tests. */
 const run = (provider: Layer.Layer<GitProvider>, events: Record<string, unknown>[] = []) =>
   Effect.runPromise(
-    recoverStaleClaims.pipe(Effect.provide(provider), Effect.provide(recordingRunArtifacts(events))),
+    recoverStaleClaims(env).pipe(
+      Effect.provide(provider),
+      Effect.provide(recordingRunArtifacts(events)),
+    ),
   );
 
 describe("recoverStaleClaims", () => {

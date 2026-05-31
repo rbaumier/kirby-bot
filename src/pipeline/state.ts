@@ -34,11 +34,25 @@ export type PipelineContext = {
 };
 
 /**
+ * The fields every end-of-attempt state (`failed` / `stalled` / `interrupted`)
+ * shares. Reconstructed from the current node by `endFieldsOf` — the seam routes
+ * a `HandlerError` onto one of the three by its `fate` (ADR 0004).
+ */
+export type EndStateFields = {
+  readonly issue: IssueRef;
+  readonly branch: string | null;
+  readonly worktree: string | null;
+  readonly pullRequestIid: number | null;
+  readonly fixCycles: number | null;
+  readonly reason: string;
+};
+
+/**
  * Every node of the pipeline.
  *
  * The machine starts at `fetch_queue` and terminates at `end`.
- * `failed` is reachable from any node.
- * Both `done` and `failed` loop back to `fetch_queue`.
+ * `failed` / `stalled` / `interrupted` are reachable from any node.
+ * `done`, `failed`, `stalled`, and `interrupted` all loop back to `fetch_queue`.
  */
 export type State =
   | { readonly kind: "fetch_queue" }
@@ -74,13 +88,7 @@ export type State =
       readonly worktree: string;
       readonly pullRequestIid: number;
     }
-  | {
-      readonly kind: "failed";
-      readonly issue: IssueRef;
-      readonly branch: string | null;
-      readonly worktree: string | null;
-      readonly pullRequestIid: number | null;
-      readonly fixCycles: number | null;
-      readonly reason: string;
-    }
+  | ({ readonly kind: "failed" } & EndStateFields)
+  | ({ readonly kind: "stalled" } & EndStateFields)
+  | ({ readonly kind: "interrupted" } & EndStateFields)
   | { readonly kind: "end" };

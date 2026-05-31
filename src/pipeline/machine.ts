@@ -9,6 +9,7 @@ import { formatDuration } from "../duration";
 import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
+import { writeLock } from "../recovery/lockfile";
 import { recoverStaleClaims } from "../recovery/sweep";
 import { RunArtifacts } from "../run-artifacts";
 import { step } from "./step";
@@ -57,7 +58,10 @@ const advance = (
     const elapsedMs = endedAt - startedAt;
 
     const issue = issueOf(state) ?? issueOf(next);
-    const note = next.kind === "failed" ? next.reason : undefined;
+    const note =
+      next.kind === "failed" || next.kind === "stalled" || next.kind === "interrupted"
+        ? next.reason
+        : undefined;
 
     yield* Console.log(
       formatTransition({ issue, from: state.kind, to: next.kind, elapsedMs, note }),
@@ -93,10 +97,14 @@ export const runMachine = (
       defaultBranch: env.defaultBranch,
     });
 
+    // Stamp this run's liveness lock (no claim yet) so a sibling instance's
+    // sweep can tell our live claims from genuine orphans (ADR 0004).
+    yield* writeLock(artifacts.dir, null);
+
     // Return any claim stranded by a crashed prior run to the queue before
     // reading it — otherwise a stale `picked-by-agent` label hides the issue
     // and the run ends `fetch_queue → end` with no work (#35).
-    yield* recoverStaleClaims;
+    yield* recoverStaleClaims(env);
 
     const initialState: State = { kind: "fetch_queue" };
     yield* Effect.iterate(initialState, {
