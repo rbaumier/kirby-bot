@@ -12,7 +12,7 @@ import type { Environment } from "../preflight";
 import { writeLock } from "../recovery/lockfile";
 import { recoverStaleClaims } from "../recovery/sweep";
 import { RunArtifacts } from "../run-artifacts";
-import { writeRunSummary } from "../stats/write-summary";
+import { finishRun } from "../run-finish";
 import { step } from "./step";
 import type { IssueRef, State } from "./state";
 
@@ -46,6 +46,10 @@ const formatTransition = (transition: TransitionSummary): string => {
 /** The issue a state is about, or `null` for the queue-level states. */
 const issueOf = (state: State): IssueRef | null => ("issue" in state ? state.issue : null);
 
+/** The PR/MR iid a state carries, or `null` before the draft is opened. */
+const prIidOf = (state: State): number | null =>
+  "pullRequestIid" in state ? state.pullRequestIid : null;
+
 /** Run one handler, then print and log the transition it produced. */
 const advance = (
   state: State,
@@ -59,6 +63,7 @@ const advance = (
     const elapsedMs = endedAt - startedAt;
 
     const issue = issueOf(state) ?? issueOf(next);
+    const pullRequestIid = prIidOf(next) ?? prIidOf(state);
     const note =
       next.kind === "failed" || next.kind === "stalled" || next.kind === "interrupted"
         ? next.reason
@@ -73,6 +78,7 @@ const advance = (
       to: next.kind,
       elapsedMs,
       issue: issue ? { iid: issue.iid, title: issue.title } : null,
+      pullRequestIid,
       note,
     });
     return next;
@@ -114,7 +120,7 @@ export const runMachine = (
     });
 
     yield* artifacts.logEvent({ event: "run_end" });
-    yield* writeRunSummary(artifacts.dir);
+    yield* finishRun(artifacts.dir, env.repoName);
     yield* Console.log(
       "\nAFK done. Worktrees and run logs left under ~/.afk-runs/ and ~/.afk-worktrees/.",
     );

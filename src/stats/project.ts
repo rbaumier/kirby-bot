@@ -53,6 +53,8 @@ export type IssueStats = {
   fixCycles: number;
   terminal: TerminalStatus;
   failureReason?: string;
+  /** The PR/MR iid this issue's branch opened, once known. */
+  pullRequestIid?: number;
   qa: QaStatus;
   agents: AgentStats[];
   routing: RoutingSnapshot[];
@@ -90,6 +92,7 @@ type IssueAcc = {
   fixCycles: number;
   terminal: TerminalStatus;
   failureReason: string | undefined;
+  pullRequestIid: number | undefined;
   qa: QaStatus;
   agents: Map<string, AgentStats>;
   routing: RoutingSnapshot[];
@@ -119,6 +122,7 @@ const issueAcc = (iid: number): IssueAcc => ({
   fixCycles: 0,
   terminal: "incomplete",
   failureReason: undefined,
+  pullRequestIid: undefined,
   qa: "none",
   agents: new Map(),
   routing: [],
@@ -185,6 +189,10 @@ const applyEvent = (event: Record<string, unknown>, issues: Map<number, IssueAcc
     const from = asStr(event.from) ?? "?";
     const to = asStr(event.to);
     const ms = asNum(event.elapsedMs) ?? 0;
+    const prIid = asNum(event.pullRequestIid);
+    if (prIid !== undefined) {
+      acc.pullRequestIid = prIid;
+    }
     acc.totalMs += ms;
     acc.phaseMs.set(from, (acc.phaseMs.get(from) ?? 0) + ms);
     if (to === "fix") {
@@ -281,6 +289,7 @@ const finalize = (acc: IssueAcc): IssueStats => ({
   fixCycles: acc.fixCycles,
   terminal: acc.terminal,
   ...(acc.failureReason === undefined ? {} : { failureReason: acc.failureReason }),
+  ...(acc.pullRequestIid === undefined ? {} : { pullRequestIid: acc.pullRequestIid }),
   qa: acc.qa,
   agents: [...acc.agents.values()].toSorted((a, b) => b.findings - a.findings || a.agent.localeCompare(b.agent)),
   routing: acc.routing,

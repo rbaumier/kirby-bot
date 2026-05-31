@@ -23,7 +23,7 @@ const RUN_LINES = [
   j({ event: "triage_results", issueIid: 42, iteration: 1, triages: [{ discussionId: "d3", triage: "real" }] }),
   j({ event: "transition", from: "evaluate", to: "qa", elapsedMs: 300, issue: { iid: 42, title: "Add X" } }),
   j({ event: "transition", from: "qa", to: "merge", elapsedMs: 4000, issue: { iid: 42, title: "Add X" } }),
-  j({ event: "transition", from: "merge", to: "done", elapsedMs: 600, issue: { iid: 42, title: "Add X" } }),
+  j({ event: "transition", from: "merge", to: "done", elapsedMs: 600, issue: { iid: 42, title: "Add X" }, pullRequestIid: 99 }),
   "{ this line is torn and should be skipped",
   j({ event: "run_end" }),
 ];
@@ -40,6 +40,7 @@ describe("projectRunStats", () => {
     expect(issue?.totalMs).toBe(13_300);
     expect(issue?.fixCycles).toBe(1);
     expect(issue?.terminal).toBe("done");
+    expect(issue?.pullRequestIid).toBe(99);
     expect(issue?.qa).toBe("pass");
   });
 

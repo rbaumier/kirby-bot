@@ -12,9 +12,34 @@
  * renders "—" and the footer documents the limit rather than hiding it.
  */
 import { formatDuration } from "../duration";
-import { type IssueStats, projectRunStats } from "./project";
+import { projectRunStats } from "./project";
 
 export type Fate = "done" | "failed" | "stalled" | "interrupted" | "incomplete";
+
+/** One issue's run-level facts, folded from the log. */
+export type RunFactIssue = {
+  readonly iid: number;
+  readonly title: string;
+  readonly fate: Fate;
+  readonly totalMs: number;
+  readonly fixCycles: number;
+  /** PR/MR iid this issue opened, or null when none was logged. */
+  readonly pullRequestIid: number | null;
+};
+
+/**
+ * The structured facts of one run — the shared projection behind both the
+ * markdown report (#71) and the Discord digest (#72). Pure over the log lines.
+ */
+export type RunFacts = {
+  readonly repo: string | undefined;
+  readonly defaultBranch: string | undefined;
+  readonly startedAtMs: number | null;
+  readonly endedAtMs: number | null;
+  readonly durationMs: number | null;
+  readonly counts: Record<Fate, number>;
+  readonly issues: readonly RunFactIssue[];
+};
 
 /** Run-level token/cost totals (from transcripts); null when unavailable. */
 export type RunCostTotals = {
@@ -93,14 +118,48 @@ const scanLog = (lines: readonly string[]): LogScan => {
 export const runStartedAtMs = (lines: readonly string[]): number | null =>
   scanLog(lines).startedAtMs;
 
-const fateOf = (issue: IssueStats, fateByIid: Map<number, Fate>): Fate =>
-  // No terminal transition for this iid → still mid-flight (incomplete);
-  // projection's terminal (done | failed | incomplete) is already a valid Fate.
-  fateByIid.get(issue.iid) ?? issue.terminal;
+const emptyCounts = (): Record<Fate, number> => ({
+  done: 0,
+  failed: 0,
+  stalled: 0,
+  interrupted: 0,
+  incomplete: 0,
+});
 
-const issueRow = (issue: IssueStats, fate: Fate): string =>
-  // MR link, tokens and cost are "—" by design — see the limits footer.
-  `| #${issue.iid} | ${issue.title || "—"} | ${fate} | ${formatDuration(issue.totalMs)} | ${issue.fixCycles} | — | — | — |`;
+/** Fold a run's log lines into the structured {@link RunFacts}. */
+export const projectRunFacts = (lines: readonly string[]): RunFacts => {
+  const stats = projectRunStats(lines);
+  const { startedAtMs, endedAtMs, fateByIid } = scanLog(lines);
+  const counts = emptyCounts();
+  const issues = stats.issues.map((issue): RunFactIssue => {
+    // No terminal transition for this iid → still mid-flight (incomplete);
+    // projection's terminal (done | failed | incomplete) is already a Fate.
+    const fate = fateByIid.get(issue.iid) ?? issue.terminal;
+    counts[fate] += 1;
+    return {
+      iid: issue.iid,
+      title: issue.title,
+      fate,
+      totalMs: issue.totalMs,
+      fixCycles: issue.fixCycles,
+      pullRequestIid: issue.pullRequestIid ?? null,
+    };
+  });
+  return {
+    repo: stats.repo,
+    defaultBranch: stats.defaultBranch,
+    startedAtMs,
+    endedAtMs,
+    durationMs:
+      startedAtMs !== null && endedAtMs !== null ? endedAtMs - startedAtMs : null,
+    counts,
+    issues,
+  };
+};
+
+const issueRow = (issue: RunFactIssue): string =>
+  // Tokens and cost are "—" by design (no per-issue attribution); see footer.
+  `| #${issue.iid} | ${issue.title || "—"} | ${issue.fate} | ${formatDuration(issue.totalMs)} | ${issue.fixCycles} | ${issue.pullRequestIid != null ? `#${issue.pullRequestIid}` : "—"} | — | — |`;
 
 const costSection = (cost: RunCostTotals | null): string => {
   if (cost === null || cost.perModel.length === 0) {
@@ -129,7 +188,7 @@ const costSection = (cost: RunCostTotals | null): string => {
 const LIMITS = [
   "> **Limites de ce rapport**",
   "> - Coût/tokens **par issue** non attribués : les transcripts Claude ne portent pas l'iid de l'issue. Seul le total du run est disponible.",
-  "> - **Lien MR par issue** absent : l'iid de la MR vit dans l'état du pipeline, pas dans `run.jsonl`.",
+  "> - La colonne **MR** montre l'iid de la PR/MR, pas une URL cliquable (le host n'est pas dans `run.jsonl`).",
   "> - Le total agrège tous les transcripts AFK de la fenêtre `[début, fin]` du run ; un run concurrent serait compté ensemble.",
 ].join("\n");
 
@@ -140,40 +199,25 @@ export const renderRunSummary = (input: {
   readonly cost: RunCostTotals | null;
 }): string => {
   const { runId, lines, cost } = input;
-  const stats = projectRunStats(lines);
-  const { startedAtMs, endedAtMs, fateByIid } = scanLog(lines);
-
-  const counts: Record<Fate, number> = {
-    done: 0,
-    failed: 0,
-    stalled: 0,
-    interrupted: 0,
-    incomplete: 0,
-  };
-  for (const issue of stats.issues) {
-    counts[fateOf(issue, fateByIid)] += 1;
-  }
-
-  const durationMs =
-    startedAtMs !== null && endedAtMs !== null ? endedAtMs - startedAtMs : null;
-  const countsLine = FATE_ORDER.map((f) => `${counts[f]} ${f}`).join(", ");
+  const facts = projectRunFacts(lines);
+  const countsLine = FATE_ORDER.map((f) => `${facts.counts[f]} ${f}`).join(", ");
 
   const issueTable =
-    stats.issues.length === 0
+    facts.issues.length === 0
       ? "_Aucune issue traitée dans ce run._"
       : [
           "| iid | titre | fate | durée | fix cycles | MR | tokens | coût |",
           "| --- | --- | --- | --- | ---: | --- | ---: | ---: |",
-          ...stats.issues.map((i) => issueRow(i, fateOf(i, fateByIid))),
+          ...facts.issues.map(issueRow),
         ].join("\n");
 
   return [
-    `# Run summary — ${stats.repo ?? "?"} (${stats.defaultBranch ?? "?"})`,
+    `# Run summary — ${facts.repo ?? "?"} (${facts.defaultBranch ?? "?"})`,
     "",
     `- **Run ID :** ${runId}`,
-    `- **Date :** ${startedAtMs !== null ? fmtDate(startedAtMs) : "—"}`,
-    `- **Durée totale :** ${durationMs !== null ? formatDuration(durationMs) : "—"}`,
-    `- **Issues :** ${stats.issues.length} — ${countsLine}`,
+    `- **Date :** ${facts.startedAtMs !== null ? fmtDate(facts.startedAtMs) : "—"}`,
+    `- **Durée totale :** ${facts.durationMs !== null ? formatDuration(facts.durationMs) : "—"}`,
+    `- **Issues :** ${facts.issues.length} — ${countsLine}`,
     "",
     "## Issues",
     "",

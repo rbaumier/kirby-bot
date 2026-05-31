@@ -50,6 +50,7 @@ const RUN_LINES = [
     to: "done",
     elapsedMs: 600,
     issue: { iid: 42, title: "Add X" },
+    pullRequestIid: 1234,
   }),
   // #43 → stalled (projection collapses this to "incomplete"; the scan keeps it)
   j("2026-05-31T10:00:30.000Z", {
@@ -102,8 +103,8 @@ describe("renderRunSummary", () => {
     );
   });
 
-  it("renders per-issue rows with fate, and '—' for MR/tokens/cost", () => {
-    expect(md).toContain("| #42 | Add X | done | 10.0s | 1 | — | — | — |");
+  it("renders per-issue rows: PR iid in MR column, '—' for tokens/cost", () => {
+    expect(md).toContain("| #42 | Add X | done | 10.0s | 1 | #1234 | — | — |");
     expect(md).toContain("| #43 | Broken Y | stalled | 5.0s | 0 | — | — | — |");
   });
 
@@ -113,9 +114,9 @@ describe("renderRunSummary", () => {
     expect(md).toContain("| **Total** | | | | **$1.23** |");
   });
 
-  it("documents the per-issue cost and MR-link limits", () => {
+  it("documents the per-issue cost limit and the MR-iid (not URL) caveat", () => {
     expect(md).toContain("Coût/tokens **par issue** non attribués");
-    expect(md).toContain("**Lien MR par issue** absent");
+    expect(md).toContain("La colonne **MR** montre l'iid");
   });
 
   it("falls back to '—' totals when no transcript cost is available", () => {

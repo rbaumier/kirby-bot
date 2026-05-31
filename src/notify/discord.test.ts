@@ -1,6 +1,13 @@
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { buildDiscordPayload, notifyIssueEnd, type IssueEndNotification } from "./discord";
+import {
+  buildDiscordPayload,
+  buildRunDigestPayload,
+  type IssueEndNotification,
+  notifyIssueEnd,
+  notifyRunDigest,
+  type RunDigestNotification,
+} from "./discord";
 
 type Embed = {
   readonly title: string;
@@ -139,5 +146,109 @@ describe("notifyIssueEnd", () => {
       throw new Error("connection refused");
     }) as unknown as typeof fetch;
     await Effect.runPromise(notifyIssueEnd(notification));
+  });
+});
+
+describe("buildRunDigestPayload", () => {
+  const base: RunDigestNotification = {
+    source: { repo: "rbaumier/kirby-bot", runId: "20260531-abc" },
+    durationMs: 754_000,
+    counts: { done: 2, failed: 1, stalled: 1, interrupted: 0, incomplete: 0 },
+    totalCostUsd: 3.5,
+    actionable: [
+      { iid: 5, title: "boom", fate: "failed" },
+      { iid: 6, title: "stuck", fate: "stalled" },
+    ],
+    merged: [
+      { iid: 1, title: "ok", pullRequestIid: 11 },
+      { iid: 2, title: "no pr", pullRequestIid: null },
+    ],
+  };
+
+  it("summarizes counts, duration and cost in the description", () => {
+    const embed = embedOf(buildRunDigestPayload(base));
+    expect(embed.description).toBe(
+      "**4 issue(s)** · ✅ 2 · ❌ 1 · 🔁 1 · … 0\n⏱ 12m34s · 💰 $3.50",
+    );
+  });
+
+  it("lists actionable fates first, then merged issues with their PR iid", () => {
+    expect(embedOf(buildRunDigestPayload(base)).fields).toEqual([
+      { name: "⚠️ À traiter", value: "#5 — boom (failed)\n#6 — stuck (stalled)" },
+      { name: "✅ Mergées", value: "#1 — ok (PR #11)\n#2 — no pr" },
+    ]);
+  });
+
+  it("colours red on any failure, orange on requeue-only, green otherwise", () => {
+    expect(embedOf(buildRunDigestPayload(base)).color).toBe(0xe74c3c);
+    const requeued = { ...base, counts: { ...base.counts, failed: 0 } };
+    expect(embedOf(buildRunDigestPayload(requeued)).color).toBe(0xf39c12);
+    const clean: RunDigestNotification = {
+      ...base,
+      counts: { done: 3, failed: 0, stalled: 0, interrupted: 0, incomplete: 0 },
+      actionable: [],
+    };
+    expect(embedOf(buildRunDigestPayload(clean)).color).toBe(0x2ecc71);
+  });
+
+  it("drops the À-traiter field when nothing needs action", () => {
+    const clean: RunDigestNotification = { ...base, actionable: [] };
+    const names = embedOf(buildRunDigestPayload(clean)).fields.map((f) => f.name);
+    expect(names).toEqual(["✅ Mergées"]);
+  });
+
+  it("omits the cost/duration meta line when both are absent", () => {
+    const embed = embedOf(
+      buildRunDigestPayload({ ...base, durationMs: null, totalCostUsd: null }),
+    );
+    expect(embed.description).toBe("**4 issue(s)** · ✅ 2 · ❌ 1 · 🔁 1 · … 0");
+  });
+
+  it("always sets the username to repo + runId", () => {
+    expect(buildRunDigestPayload(base).username).toBe(
+      "kirby · rbaumier/kirby-bot · 20260531-abc",
+    );
+  });
+});
+
+describe("notifyRunDigest", () => {
+  const digest: RunDigestNotification = {
+    source: { repo: "kirby-bot", runId: "r1" },
+    durationMs: 1000,
+    counts: { done: 1, failed: 0, stalled: 0, interrupted: 0, incomplete: 0 },
+    totalCostUsd: null,
+    actionable: [],
+    merged: [{ iid: 1, title: "ok", pullRequestIid: 2 }],
+  };
+
+  const originalFetch = globalThis.fetch;
+  const savedUrl = process.env.KIRBY_DISCORD_WEBHOOK_URL;
+  let calls: Array<{ url: string; body: string }>;
+
+  beforeEach(() => {
+    calls = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: String(init?.body ?? "") });
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (savedUrl === undefined) delete process.env.KIRBY_DISCORD_WEBHOOK_URL;
+    else process.env.KIRBY_DISCORD_WEBHOOK_URL = savedUrl;
+  });
+
+  it("is a no-op when the webhook env var is unset", async () => {
+    delete process.env.KIRBY_DISCORD_WEBHOOK_URL;
+    await Effect.runPromise(notifyRunDigest(digest));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POSTs exactly one digest payload to the webhook", async () => {
+    process.env.KIRBY_DISCORD_WEBHOOK_URL = "https://discord.test/webhook/abc";
+    await Effect.runPromise(notifyRunDigest(digest));
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual(buildRunDigestPayload(digest));
   });
 });

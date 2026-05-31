@@ -10,6 +10,7 @@
  * requirement let it compose into any handler without widening its services.
  */
 import { Console, Effect } from "effect";
+import { formatDuration } from "../duration";
 
 /** The webhook env var. Optional: unset disables Discord notifications entirely. */
 const WEBHOOK_ENV = "KIRBY_DISCORD_WEBHOOK_URL";
@@ -97,19 +98,24 @@ export const buildDiscordPayload = (n: IssueEndNotification): Record<string, unk
 };
 
 /**
- * Push one end-of-attempt notification to Discord, best-effort.
+ * POST a prebuilt payload to the webhook, best-effort.
  *
  * No-op when `$KIRBY_DISCORD_WEBHOOK_URL` is unset. Otherwise POSTs once (no
- * retry) and swallows every failure (timeout, non-2xx, network) into a logged
- * warning — the run is never affected.
+ * retry — a webhook is non-idempotent) and swallows every failure (timeout,
+ * non-2xx, network) into a logged warning keyed by `label`, so the run is
+ * never affected. The `never` error/requirement channels let it compose
+ * anywhere.
  */
-export const notifyIssueEnd = (n: IssueEndNotification): Effect.Effect<void> =>
+const postToDiscord = (
+  payload: Record<string, unknown>,
+  label: string,
+): Effect.Effect<void> =>
   Effect.gen(function* () {
     const url = process.env[WEBHOOK_ENV];
     if (url === undefined || url === "") {
       return;
     }
-    const body = JSON.stringify(buildDiscordPayload(n));
+    const body = JSON.stringify(payload);
     yield* Effect.tryPromise({
       try: () =>
         fetch(url, {
@@ -126,7 +132,123 @@ export const notifyIssueEnd = (n: IssueEndNotification): Effect.Effect<void> =>
           : Effect.fail(new Error(`Discord webhook returned ${response.status}`)),
       ),
       Effect.catchAll((error) =>
-        Console.error(`  ⚠ #${n.issue.iid}: Discord notification failed — ${error.message}`),
+        Console.error(`  ⚠ ${label}: Discord notification failed — ${error.message}`),
       ),
     );
   });
+
+/**
+ * Push one end-of-attempt notification to Discord, best-effort.
+ *
+ * No-op when `$KIRBY_DISCORD_WEBHOOK_URL` is unset. Otherwise POSTs once and
+ * swallows every failure — the run is never affected.
+ */
+export const notifyIssueEnd = (n: IssueEndNotification): Effect.Effect<void> =>
+  postToDiscord(buildDiscordPayload(n), `#${n.issue.iid}`);
+
+/** Per-fate issue counts for one run. */
+export type RunDigestCounts = {
+  readonly done: number;
+  readonly failed: number;
+  readonly stalled: number;
+  readonly interrupted: number;
+  readonly incomplete: number;
+};
+
+/** The single run-level digest pushed once at run_end (#72). */
+export type RunDigestNotification = {
+  readonly source: { readonly repo: string; readonly runId: string };
+  readonly durationMs: number | null;
+  readonly counts: RunDigestCounts;
+  readonly totalCostUsd: number | null;
+  /** Issues needing a human (failed / stalled / interrupted) — surfaced first. */
+  readonly actionable: readonly {
+    readonly iid: number;
+    readonly title: string;
+    readonly fate: string;
+  }[];
+  /** Merged issues, with their PR/MR iid when known. */
+  readonly merged: readonly {
+    readonly iid: number;
+    readonly title: string;
+    readonly pullRequestIid: number | null;
+  }[];
+};
+
+/** Discord caps embed field values at 1024 chars; keep lists comfortably under. */
+const FIELD_MAX = 1000;
+
+/** Join lines into one field value, truncating with a "+N de plus" tail. */
+const cappedList = (lines: readonly string[]): string => {
+  const kept: string[] = [];
+  let len = 0;
+  for (const line of lines) {
+    if (len + line.length + 1 > FIELD_MAX) {
+      kept.push(`… +${lines.length - kept.length} de plus`);
+      break;
+    }
+    kept.push(line);
+    len += line.length + 1;
+  }
+  return kept.join("\n");
+};
+
+/** The category a run reads as: any failure → failure, else any requeue → requeued. */
+const digestCategory = (c: RunDigestCounts): NotificationCategory =>
+  c.failed > 0 ? "failure" : c.stalled + c.interrupted > 0 ? "requeued" : "success";
+
+/**
+ * Build the run-digest webhook payload. Pure (no env, no I/O). Actionable
+ * fates lead; merged issues follow with their PR iid. Empty sections are
+ * dropped rather than rendered blank.
+ */
+export const buildRunDigestPayload = (n: RunDigestNotification): Record<string, unknown> => {
+  const c = n.counts;
+  const total = c.done + c.failed + c.stalled + c.interrupted + c.incomplete;
+  const requeued = c.stalled + c.interrupted;
+  const meta = [
+    n.durationMs !== null ? `⏱ ${formatDuration(n.durationMs)}` : undefined,
+    n.totalCostUsd !== null ? `💰 $${n.totalCostUsd.toFixed(2)}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  const description = [
+    `**${total} issue(s)** · ✅ ${c.done} · ❌ ${c.failed} · 🔁 ${requeued} · … ${c.incomplete}`,
+    ...(meta.length > 0 ? [meta.join(" · ")] : []),
+  ].join("\n");
+
+  const fields: EmbedField[] = [];
+  if (n.actionable.length > 0) {
+    fields.push({
+      name: "⚠️ À traiter",
+      value: cappedList(n.actionable.map((i) => `#${i.iid} — ${i.title} (${i.fate})`)),
+    });
+  }
+  if (n.merged.length > 0) {
+    fields.push({
+      name: "✅ Mergées",
+      value: cappedList(
+        n.merged.map(
+          (i) => `#${i.iid} — ${i.title}${i.pullRequestIid != null ? ` (PR #${i.pullRequestIid})` : ""}`,
+        ),
+      ),
+    });
+  }
+
+  const category = digestCategory(c);
+  const embed = {
+    title: `${EMOJI[category]} Run terminé — ${n.source.repo}`.slice(0, 256),
+    color: COLOR[category],
+    description,
+    ...(fields.length > 0 ? { fields } : {}),
+  };
+  const username = `kirby · ${n.source.repo} · ${n.source.runId}`.slice(0, USERNAME_MAX);
+  return { embeds: [embed], username };
+};
+
+/**
+ * Push the single run-level digest to Discord, best-effort.
+ *
+ * No-op when `$KIRBY_DISCORD_WEBHOOK_URL` is unset. Otherwise POSTs once and
+ * swallows every failure — the run is never affected.
+ */
+export const notifyRunDigest = (n: RunDigestNotification): Effect.Effect<void> =>
+  postToDiscord(buildRunDigestPayload(n), `run ${n.source.runId}`);
