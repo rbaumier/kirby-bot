@@ -126,8 +126,9 @@ export const onClaimIssue = (
 export const onBranchCreate = (
   issue: IssueRef,
   env: Environment,
-): Effect.Effect<State, HandlerError> =>
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
+    const artifacts = yield* RunArtifacts;
     const branch = branchName(issue);
     const worktree = worktreePath(env.repoName, branch);
 
@@ -171,9 +172,26 @@ export const onBranchCreate = (
       // where the interrupted run left off — do NOT reclaim or drop the remote
       // branch, that work is exactly what we resume from. Drop only the stale
       // LOCAL ref so `worktree add -b` can recreate it on the pushed tip.
-      yield* Console.log(
-        `  ↻ #${issue.iid}: resuming from origin/${branch} (a prior attempt pushed work before it was interrupted)`,
+      // Count the salvaged commits for the audit trail — this is the prompt-only
+      // softness of the resume path (the implementer re-runs blind to the MR), so
+      // a structured event makes every resume greppable in run.jsonl for review.
+      const ahead = yield* runShell(
+        () => $`git rev-list --count origin/${env.defaultBranch}..origin/${branch}`,
+      ).pipe(
+        Effect.map((output) => parseInt(output.stdout.trim(), 10)),
+        Effect.catchAll(() => Effect.succeed(Number.NaN)),
       );
+      const commitsAhead = Number.isNaN(ahead) ? null : ahead;
+      yield* Console.log(
+        `  ↻ #${issue.iid}: resuming from origin/${branch}` +
+          ` (${commitsAhead ?? "?"} commit(s) of prior work pushed before it was interrupted)`,
+      );
+      yield* artifacts.logEvent({
+        event: "branch_resume",
+        issueIid: issue.iid,
+        branch,
+        commitsAhead,
+      });
       yield* runShell(() => $`git branch -D ${branch}`).pipe(Effect.ignore);
       yield* runShell(
         () => $`git worktree add -b ${branch} ${worktree} origin/${branch}`,
