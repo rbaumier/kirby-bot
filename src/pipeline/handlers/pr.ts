@@ -17,6 +17,7 @@ import { GitProvider } from "../../provider/provider";
 import type { ProviderCallError } from "../../provider/types";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
+import { notifyIssueEnd } from "../../notify/discord";
 import { clearIssue } from "../../recovery/sidecar";
 import { describeShellError, runShell } from "../../shell";
 import { fateOfProviderError, HandlerError, providerHandlerError } from "../errors";
@@ -165,9 +166,10 @@ export const onMerge = (
 export const onDone = (
   state: Extract<State, { kind: "done" }>,
   env: Environment,
-): Effect.Effect<State, never, GitProvider> =>
+): Effect.Effect<State, never, GitProvider | RunArtifacts> =>
   Effect.gen(function* () {
     const provider = yield* GitProvider;
+    const artifacts = yield* RunArtifacts;
     const { issue, worktree, pullRequestIid } = state;
     const unlabelOne = (label: string) =>
       provider.updateIssueLabels(issue.iid, { add: [], remove: [label] }).pipe(
@@ -191,5 +193,15 @@ export const onDone = (
     // own internal catchAll keeps a swallowed fs error from preserving the count.
     yield* clearIssue(env.repoName, issue.iid);
     yield* Console.log(`  ✓ #${issue.iid} merged (!${pullRequestIid})`);
+    // Success leaves no issue note (unlike the end-of-attempt fates), so it is
+    // off the `announceEnd` seam. The `done` state is not an `EndStateFields`:
+    // the ping carries only the PR + title, with no branch / fix-cycle context.
+    yield* notifyIssueEnd({
+      category: "success",
+      headline: "merged",
+      issue,
+      pullRequestIid,
+      source: { repo: env.repoName, runId: artifacts.runId },
+    });
     return { kind: "fetch_queue" };
   });

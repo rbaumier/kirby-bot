@@ -126,6 +126,7 @@ const makeTestArtifacts = (): { artifacts: RunArtifactsShape; events: Record<str
   const events: Record<string, unknown>[] = [];
   const artifacts: RunArtifactsShape = {
     dir: "/tmp/test-run",
+    runId: "test-run",
     logPath: "/tmp/test-run/run.jsonl",
     sentinelPath: () => "/tmp/sentinel",
     tmuxLogPath: () => "/tmp/tmux.log",

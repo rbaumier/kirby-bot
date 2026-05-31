@@ -93,6 +93,7 @@ const listFailingProvider = (): Layer.Layer<GitProvider> =>
 const recordingRunArtifacts = (sink: Record<string, unknown>[]): Layer.Layer<RunArtifacts> =>
   Layer.succeed(RunArtifacts, {
     dir: "/tmp/test-run-dir",
+    runId: "test-run-dir",
     logPath: "/tmp/test-run-dir/run.jsonl",
     sentinelPath: () => "/tmp/test-run-dir/sentinel.flag",
     tmuxLogPath: () => "/tmp/test-run-dir/tmux.log",

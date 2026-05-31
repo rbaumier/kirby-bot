@@ -21,6 +21,7 @@ import type { State } from "./state";
 
 const noopRunArtifacts: RunArtifactsShape = {
   dir: "/tmp/test-run-dir",
+  runId: "test-run-dir",
   logPath: "/tmp/test-run-dir/run.jsonl",
   sentinelPath: () => "/tmp/test-run-dir/sentinel.flag",
   tmuxLogPath: () => "/tmp/test-run-dir/tmux.log",

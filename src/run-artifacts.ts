@@ -10,7 +10,7 @@
  * at the top level rather than inside either.
  */
 import { appendFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Clock, Console, Context, Effect, Layer, Random } from "effect";
 import type { Phase } from "./config";
 import { RUNS_DIR } from "./config";
@@ -35,6 +35,8 @@ export type PhaseRef = {
 export type RunArtifactsShape = {
   /** This run's unique directory under ~/.afk-runs/. */
   readonly dir: string;
+  /** This run's identity — the `dir` basename (`<timestamp>-<hex>`). */
+  readonly runId: string;
   /** The run's machine-readable event log. */
   readonly logPath: string;
   /**
@@ -86,6 +88,7 @@ const shapeFor = (dir: string): RunArtifactsShape => {
       : `${issueIid}-${phase}-${iteration}-${agent}`;
   return {
     dir,
+    runId: basename(dir),
     logPath,
     sentinelPath: (ref) => join(dir, `sentinel-${refSuffix(ref)}.flag`),
     tmuxLogPath: (ref) => join(dir, `tmux-${refSuffix(ref)}.log`),

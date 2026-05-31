@@ -110,6 +110,9 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
 > export GITLAB_PROJECT_PATH=<owner>/<repo>
 > ```
 
+> [!TIP]
+> **Discord notifications (optional)** — set `KIRBY_DISCORD_WEBHOOK_URL` to a Discord channel webhook and the orchestrator pushes one message per end-of-attempt fate: a merge (`done`), a give-up (`failed`), or a re-queue (`stalled` / `interrupted`). Unset, it is a silent no-op — no network call. Delivery is best-effort: a webhook failure is logged, never aborts a run. Each message's sender name is `kirby · <owner/repo> · <run-id>`, so several concurrent processes sharing one channel — even two runs on the same repo — stay distinguishable.
+
 ## Quick start
 
 ```bash

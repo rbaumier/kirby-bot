@@ -50,6 +50,13 @@ describe("RunArtifacts", () => {
     expect(out.logPath.startsWith(out.dir)).toBe(true);
   });
 
+  it("runId is the dir basename", async () => {
+    const out = await Effect.runPromise(buildAt(1_700_000_000_000, 42));
+    expect(out.dir.endsWith(out.runId)).toBe(true);
+    expect(out.runId).toMatch(DIR_PATTERN);
+    expect(out.runId).not.toContain("/");
+  });
+
   it("phase paths root in dir", async () => {
     const out = await Effect.runPromise(buildAt(1_700_000_000_000, 42));
     expect(out.sentinelPath(fixedRef).startsWith(out.dir)).toBe(true);

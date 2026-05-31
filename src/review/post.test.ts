@@ -46,6 +46,7 @@ const makeProvider = (calls: ProviderCalls): Layer.Layer<GitProvider> =>
 const makeArtifacts = (): Layer.Layer<RunArtifacts> =>
   Layer.succeed(RunArtifacts, {
     dir: "/tmp/test",
+    runId: "test",
     logPath: "/tmp/test/run.jsonl",
     sentinelPath: () => "/tmp/test/sentinel",
     tmuxLogPath: () => "/tmp/test/tmux.log",

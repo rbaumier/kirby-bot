@@ -22,6 +22,7 @@ import type { ProviderCallError } from "../provider/types";
 import { describeProviderError } from "../provider/types";
 import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
+import { notifyIssueEnd, type NotificationCategory } from "../notify/discord";
 import { clearIssue, recordInterruption, recordStall } from "../recovery/sidecar";
 import type { Outcome } from "../recovery/sidecar-policy";
 import type { HandlerError } from "./errors";
@@ -83,6 +84,32 @@ const swapLabels = (
   });
 
 /**
+ * Announce the end of an attempt on both channels: the issue note (always) and,
+ * best-effort, a Discord push. Both carry the same `header` + state, so the
+ * `EndStateFields → IssueEndNotification` mapping lives here once.
+ */
+const announceEnd = (
+  state: EndStateFields,
+  header: string,
+  category: NotificationCategory,
+  logPath: string,
+  source: { readonly repo: string; readonly runId: string },
+): Effect.Effect<void, never, GitProvider> =>
+  Effect.gen(function* () {
+    yield* postEndNote(state.issue.iid, endNote(header, state, logPath));
+    yield* notifyIssueEnd({
+      category,
+      headline: header,
+      issue: state.issue,
+      branch: state.branch,
+      pullRequestIid: state.pullRequestIid,
+      fixCycles: state.fixCycles,
+      reason: state.reason,
+      source,
+    });
+  });
+
+/**
  * Park an issue as a Failure: note it, label `failed-by-agent`, forget its
  * re-queue history. Shared by `onFailed` (the agent judged) and by `onStalled`
  * / `onInterrupted` when the cap converts a re-queue into a terminal Failure.
@@ -94,7 +121,10 @@ const parkAsFailed = (
 ): Effect.Effect<void, never, HandlerServices> =>
   Effect.gen(function* () {
     const artifacts = yield* RunArtifacts;
-    yield* postEndNote(state.issue.iid, endNote(header, state, artifacts.logPath));
+    yield* announceEnd(state, header, "failure", artifacts.logPath, {
+      repo: repoName,
+      runId: artifacts.runId,
+    });
     yield* swapLabels(
       state.issue.iid,
       [LABELS.failedByAgent],
@@ -111,10 +141,14 @@ const parkAsFailed = (
 const returnToQueue = (
   state: EndStateFields,
   header: string,
+  repoName: string,
 ): Effect.Effect<void, never, HandlerServices> =>
   Effect.gen(function* () {
     const artifacts = yield* RunArtifacts;
-    yield* postEndNote(state.issue.iid, endNote(header, state, artifacts.logPath));
+    yield* announceEnd(state, header, "requeued", artifacts.logPath, {
+      repo: repoName,
+      runId: artifacts.runId,
+    });
     yield* swapLabels(state.issue.iid, [LABELS.readyForAgent], [LABELS.pickedByAgent]);
   });
 
@@ -146,6 +180,7 @@ const onStalled = (
       yield* returnToQueue(
         state,
         `**AFK stalled** — returned to queue (attempt ${outcome.counts.totalRepicks + 1})`,
+        env.repoName,
       );
     }
     return { kind: "fetch_queue" };
@@ -172,6 +207,7 @@ const onInterrupted = (
       yield* returnToQueue(
         state,
         `**AFK interrupted** — returned to queue (attempt ${outcome.counts.totalRepicks + 1})`,
+        env.repoName,
       );
     }
     return { kind: "fetch_queue" };
