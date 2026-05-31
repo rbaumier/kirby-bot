@@ -12,6 +12,7 @@ import type { Environment } from "../preflight";
 import { writeLock } from "../recovery/lockfile";
 import { recoverStaleClaims } from "../recovery/sweep";
 import { RunArtifacts } from "../run-artifacts";
+import { writeRunSummary } from "../stats/write-summary";
 import { step } from "./step";
 import type { IssueRef, State } from "./state";
 
@@ -113,6 +114,7 @@ export const runMachine = (
     });
 
     yield* artifacts.logEvent({ event: "run_end" });
+    yield* writeRunSummary(artifacts.dir);
     yield* Console.log(
       "\nAFK done. Worktrees and run logs left under ~/.afk-runs/ and ~/.afk-worktrees/.",
     );
