@@ -94,9 +94,14 @@ export const rebaseBranchOntoDefault = (
           Effect.ignore,
           Effect.andThen(
             Effect.fail(
+              // Diff-correlated and recurs on resume (the branch genuinely diverges
+              // from the default), so it's a Stall — capped at STALL_CAP and parked
+              // for a human to resolve, not retried up to the looser re-pick backstop
+              // (ADR 0004's re-runnability rule). The transient git wrappers around
+              // this stay `interruption`.
               new HandlerError({
                 reason: `rebase onto ${defaultBranch} hit conflicts — ${describeShellError(error)}`,
-                fate: "interruption",
+                fate: "stall",
               }),
             ),
           ),

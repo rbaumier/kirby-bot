@@ -110,6 +110,9 @@ describe("rebaseBranchOntoDefault", () => {
 
     expect(error._tag).toBe("HandlerError");
     expect(error.reason).toContain("hit conflicts");
+    // A conflict recurs on resume (the branch diverges from default) → Stall, so
+    // it parks at STALL_CAP for a human, not the looser re-pick backstop (ADR 0004).
+    expect(error.fate).toBe("stall");
   });
 
   test("aborts the conflicting rebase, leaving the branch intact", async () => {

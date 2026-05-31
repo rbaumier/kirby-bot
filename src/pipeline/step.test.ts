@@ -33,7 +33,7 @@ const noopRunArtifacts: RunArtifactsShape = {
 const TestRunArtifacts: Layer.Layer<RunArtifacts> = Layer.succeed(RunArtifacts, noopRunArtifacts);
 
 const issue = { iid: 42, title: "Test issue", body: "body" } as const;
-const env: Environment = { repoName: "test-repo", defaultBranch: "main" };
+const env: Environment = { repoName: "kirby-steptest", defaultBranch: "main" };
 
 describe("endFieldsOf", () => {
   it("issue-only states leave branch/worktree/pullRequestIid/fixCycles null", () => {
