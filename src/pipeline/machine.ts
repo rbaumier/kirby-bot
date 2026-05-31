@@ -9,10 +9,12 @@ import { formatDuration } from "../duration";
 import type { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import type { Environment } from "../preflight";
+import { writeCheckpoint } from "../recovery/checkpoint";
 import { writeLock } from "../recovery/lockfile";
 import { recoverStaleClaims } from "../recovery/sweep";
 import { RunArtifacts } from "../run-artifacts";
 import { finishRun } from "../run-finish";
+import { checkpointAfter } from "./resume";
 import { step } from "./step";
 import type { IssueRef, State } from "./state";
 
@@ -81,6 +83,13 @@ const advance = (
       pullRequestIid,
       note,
     });
+
+    // Persist where a resumed run should re-enter (#73). The decision is pure
+    // (`checkpointAfter`); a write failure is best-effort inside the store.
+    const checkpoint = checkpointAfter(state, next);
+    if (checkpoint !== null && "issue" in next) {
+      yield* writeCheckpoint(env.repoName, next.issue.iid, checkpoint);
+    }
     return next;
   });
 

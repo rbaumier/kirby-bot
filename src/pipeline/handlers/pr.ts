@@ -18,7 +18,9 @@ import type { ProviderCallError } from "../../provider/types";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
 import { notifyIssueEnd } from "../../notify/discord";
+import { clearCheckpoint, readCheckpoint } from "../../recovery/checkpoint";
 import { clearIssue } from "../../recovery/sidecar";
+import { resumeStateFor } from "../resume";
 import { describeShellError, runShell } from "../../shell";
 import { fateOfProviderError, HandlerError, providerHandlerError } from "../errors";
 import { rebaseBranchOntoDefault } from "./rebase-branch";
@@ -41,15 +43,19 @@ export const onOpenDraftMr = (
       .pipe(Effect.mapError(providerHandlerError("open_draft_mr")));
     if (Option.isSome(existing)) {
       yield* Console.log(`  ↳ reusing open MR !${existing.value.iid} for ${branch}`);
-      return {
-        kind: "review",
+      // Resume routing (#73): an existing MR means a prior attempt reached at
+      // least this far, so route to its checkpointed Phase (or `review` if there
+      // is none). The create path below never honors a checkpoint — a brand-new
+      // MR has no Discussions, so resuming `evaluate` / `fix` would read an empty
+      // MR (exactly the MR-inference failure mode this design rejects).
+      const checkpoint = yield* readCheckpoint(env.repoName, issue.iid);
+      return resumeStateFor(checkpoint, {
         issue,
         branch,
         worktree,
         deadline,
         pullRequestIid: existing.value.iid,
-        fixCycles: 0,
-      };
+      });
     }
 
     const artifacts = yield* RunArtifacts;
@@ -192,6 +198,7 @@ export const onDone = (
     // unrelated re-pick starts from a clean Stall/re-pick count (ADR 0004). Its
     // own internal catchAll keeps a swallowed fs error from preserving the count.
     yield* clearIssue(env.repoName, issue.iid);
+    yield* clearCheckpoint(env.repoName, issue.iid);
     yield* Console.log(`  ✓ #${issue.iid} merged (!${pullRequestIid})`);
     // Success leaves no issue note (unlike the end-of-attempt fates), so it is
     // off the `announceEnd` seam. The `done` state is not an `EndStateFields`:

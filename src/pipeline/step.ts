@@ -23,6 +23,7 @@ import { describeProviderError } from "../provider/types";
 import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
 import { notifyIssueEnd, type NotificationCategory } from "../notify/discord";
+import { clearCheckpoint } from "../recovery/checkpoint";
 import { clearIssue, recordInterruption, recordStall } from "../recovery/sidecar";
 import type { Outcome } from "../recovery/sidecar-policy";
 import type { HandlerError } from "./errors";
@@ -131,6 +132,7 @@ const parkAsFailed = (
       [LABELS.pickedByAgent, LABELS.readyForAgent],
     );
     yield* clearIssue(repoName, state.issue.iid);
+    yield* clearCheckpoint(repoName, state.issue.iid);
   });
 
 /**
@@ -233,7 +235,7 @@ const dispatchHandler = (
       return onBranchCreate(current.issue, env);
     }
     case "branch_push": {
-      return onBranchPush(current);
+      return onBranchPush(current, env);
     }
     case "implementation": {
       return implementationPhase(current, env);

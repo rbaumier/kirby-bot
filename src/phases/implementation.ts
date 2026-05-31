@@ -10,8 +10,8 @@
  * (the implementer pushed commits before the cap), advancing to `open_draft_mr`
  * instead of discarding the work (#51).
  */
-import { Clock, Console, Effect } from "effect";
-import { ISSUE_BUDGET_MS } from "../config";
+import { Console, Effect } from "effect";
+import { freshDeadline } from "../deadline";
 import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { Environment } from "../preflight";
@@ -29,7 +29,7 @@ export const implementationPhase = (
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { issue, branch, worktree } = state;
-    const deadline = (yield* Clock.currentTimeMillis) + ISSUE_BUDGET_MS;
+    const deadline = yield* freshDeadline;
 
     const verdict = yield* runPhaseSession(
       {

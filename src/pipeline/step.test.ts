@@ -9,11 +9,12 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { STATE_DIR } from "../config";
 import type { Environment } from "../preflight";
 import { GitProvider } from "../provider/provider";
 import { ProviderHttpError } from "../provider/types";
+import { writeCheckpoint } from "../recovery/checkpoint";
 import { RunArtifacts } from "../run-artifacts";
 import type { RunArtifactsShape } from "../run-artifacts";
 import { endFieldsOf, step } from "./step";
@@ -221,5 +222,67 @@ describe("onStalled (cold sidecar)", () => {
     expect(result.kind).toBe("fetch_queue");
     expect(noted).toBe(true);
     expect(labelCalls).toEqual([{ add: ["ready-for-agent"], remove: ["picked-by-agent"] }]);
+  });
+});
+
+/**
+ * The resume routing the checkpoint feeds (#73), exercised through the real
+ * `step` seam + checkpoint store. `open_draft_mr` is the choke point that reads
+ * the checkpoint and routes — but ONLY when the MR already exists; a freshly
+ * created MR must ignore the checkpoint (an empty MR has no Discussions to
+ * resume `evaluate`/`fix` against).
+ */
+describe("open_draft_mr resume routing (#73)", () => {
+  const resumeEnv: Environment = { repoName: "kirby-steptest-resume", defaultBranch: "main" };
+  // This suite owns its checkpoint file; wipe it so a prior run can't leak in.
+  beforeEach(() => rm(join(STATE_DIR, resumeEnv.repoName), { recursive: true, force: true }));
+
+  const openDraftMr: Extract<State, { kind: "open_draft_mr" }> = {
+    kind: "open_draft_mr",
+    issue,
+    branch: "issue-42",
+    worktree: "/wt/42",
+    deadline: 999_999,
+  };
+  const withExistingMr = Layer.succeed(GitProvider, {
+    ...providerStub,
+    findOpenPullRequestBySource: () => Effect.succeed(Option.some({ iid: 7, isMerged: false })),
+  });
+
+  it("an existing MR + a Phase checkpoint resumes that Phase with its fix-cycle count", async () => {
+    await Effect.runPromise(writeCheckpoint(resumeEnv.repoName, issue.iid, { phase: "evaluate", fixCycles: 1 }));
+    const result = await Effect.runPromise(
+      step(openDraftMr, resumeEnv).pipe(Effect.provide(withExistingMr), Effect.provide(TestRunArtifacts)),
+    );
+    const evaluate = result.kind === "evaluate" ? result : null;
+    expect(evaluate).not.toBeNull();
+    expect(evaluate?.fixCycles).toBe(1);
+    expect(evaluate?.pullRequestIid).toBe(7);
+  });
+
+  it("an existing MR with no checkpoint starts the review cycle from scratch", async () => {
+    const result = await Effect.runPromise(
+      step(openDraftMr, resumeEnv).pipe(Effect.provide(withExistingMr), Effect.provide(TestRunArtifacts)),
+    );
+    const review = result.kind === "review" ? result : null;
+    expect(review).not.toBeNull();
+    expect(review?.fixCycles).toBe(0);
+    expect(review?.pullRequestIid).toBe(7);
+  });
+
+  it("a freshly created MR ignores the checkpoint and routes to review/0 (no empty-MR resume)", async () => {
+    await Effect.runPromise(writeCheckpoint(resumeEnv.repoName, issue.iid, { phase: "qa", fixCycles: 2 }));
+    const withCreatedMr = Layer.succeed(GitProvider, {
+      ...providerStub,
+      findOpenPullRequestBySource: () => Effect.succeed(Option.none()),
+      createDraftPullRequest: () => Effect.succeed({ iid: 8, isMerged: false }),
+    });
+    const result = await Effect.runPromise(
+      step(openDraftMr, resumeEnv).pipe(Effect.provide(withCreatedMr), Effect.provide(TestRunArtifacts)),
+    );
+    const review = result.kind === "review" ? result : null;
+    expect(review).not.toBeNull();
+    expect(review?.fixCycles).toBe(0);
+    expect(review?.pullRequestIid).toBe(8);
   });
 });

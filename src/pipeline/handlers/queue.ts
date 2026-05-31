@@ -21,6 +21,8 @@ import { GitProvider } from "../../provider/provider";
 import type { ProviderCallError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
 import { describeShellError, runShell, runShellGit } from "../../shell";
+import { freshDeadline } from "../../deadline";
+import { clearCheckpoint, readCheckpoint } from "../../recovery/checkpoint";
 import { writeLock } from "../../recovery/lockfile";
 import { HandlerError, providerHandlerError } from "../errors";
 import { branchName, worktreePath } from "../naming";
@@ -221,6 +223,14 @@ export const onBranchCreate = (
         ),
       );
     } else {
+      // Correctness-critical (#73): a fresh start must forget any resume
+      // checkpoint left by a prior attempt on this issue, BEFORE branch_push can
+      // read it. The invariant "a checkpoint at branch_push ⟺ we resumed" rests
+      // on this clear — without it, a human re-queue of a failed issue would let
+      // its stale checkpoint skip `implementation` on a branch that starts empty.
+      // The clear logs (it does not swallow) any fs failure inside the store.
+      yield* clearCheckpoint(env.repoName, issue.iid);
+
       // Fresh start: reclaim the leftover branch — but only if it holds nothing
       // that isn't already upstream, so a colliding human branch is never
       // clobbered (#24)...
@@ -247,10 +257,21 @@ export const onBranchCreate = (
     return { kind: "branch_push", issue, branch, worktree };
   });
 
-/** Branch_push — push the freshly-created branch to origin. */
+/**
+ * Branch_push — push the freshly-created branch to origin, then either run
+ * `implementation` (fresh) or skip straight to `open_draft_mr` (resume, #73).
+ *
+ * A resume checkpoint here means a prior attempt already finished (or salvaged)
+ * `implementation`: by the invariant, a fresh start clears the checkpoint, so
+ * its presence implies we rebuilt the worktree from `origin/<branch>`. Mint a
+ * fresh per-issue budget and jump to the idempotent `open_draft_mr` (it
+ * reconstructs the MR and routes to the checkpointed Phase), skipping the
+ * up-to-180-min blind re-implementation.
+ */
 export const onBranchPush = (
   state: Extract<State, { kind: "branch_push" }>,
-): Effect.Effect<State, HandlerError> =>
+  env: Environment,
+): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { issue, branch, worktree } = state;
     yield* runShellGit(worktree, ["push", "-u", "origin", branch]).pipe(
@@ -262,5 +283,23 @@ export const onBranchPush = (
           }),
       ),
     );
+
+    const checkpoint = yield* readCheckpoint(env.repoName, issue.iid);
+    if (checkpoint !== null) {
+      const deadline = yield* freshDeadline;
+      const artifacts = yield* RunArtifacts;
+      yield* artifacts.logEvent({
+        event: "resume_skip",
+        issue: issue.iid,
+        branch,
+        resumePhase: checkpoint.phase,
+        fixCycles: checkpoint.fixCycles,
+        skippedImplementation: true,
+      });
+      yield* Console.log(
+        `  ↻ #${issue.iid}: checkpoint at ${checkpoint.phase} — skipping implementation`,
+      );
+      return { kind: "open_draft_mr", issue, branch, worktree, deadline };
+    }
     return { kind: "implementation", issue, branch, worktree };
   });
