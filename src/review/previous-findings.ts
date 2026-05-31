@@ -21,12 +21,7 @@
  * Each agent already ignores out-of-scope lines via {@link agentScope}.
  */
 import type { DiscussionSummary } from "../provider/types";
-
-/** Pre-compiled — the first line of every posted finding follows this shape. */
-const HEADER_RE = /^severity:\s+(\S+)\s+\|\s+(\S+):(\d+)\s*$/;
-
-/** Synthetic location used by `postReviewToMr` for the prose summary thread. */
-const PROSE_SUMMARY_FILE = "review-summary";
+import { decodeFindingHeader, REVIEW_SUMMARY_FILE } from "./finding-header";
 
 /** One parsed previous finding — the minimum needed to render the block line. */
 type PreviousFinding = {
@@ -47,23 +42,17 @@ const parseDiscussion = (discussion: DiscussionSummary): PreviousFinding | null 
     return null;
   }
   const firstLine = firstNote.body.split("\n", 1)[0] ?? "";
-  const match = HEADER_RE.exec(firstLine);
-  if (match === null) {
+  const header = decodeFindingHeader(firstLine);
+  if (header === null) {
     return null;
   }
-  const [, severity, file, lineStr] = match;
-  const allFieldsPresent =
-    severity !== undefined && file !== undefined && lineStr !== undefined;
-  if (!allFieldsPresent) {
-    return null;
-  }
-  if (file === PROSE_SUMMARY_FILE) {
+  if (header.file === REVIEW_SUMMARY_FILE) {
     return null;
   }
   return {
-    file,
-    line: Number(lineStr),
-    severity,
+    file: header.file,
+    line: header.line,
+    severity: header.severity,
     status: discussion.isResolved ? "resolved" : "unresolved",
   };
 };

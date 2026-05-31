@@ -30,6 +30,7 @@ import { GitProvider } from "../provider/provider";
 import type { ProviderCallError } from "../provider/types";
 import { RunArtifacts } from "../run-artifacts";
 import type { AggregatedReview, LineAnchoredFinding, ProseFinding } from "./aggregate";
+import { encodeFindingHeader, REVIEW_SUMMARY_LOCATION } from "./finding-header";
 
 /** Parallel discussion-posts per request — keeps GitLab happy on big diffs. */
 const POST_CONCURRENCY = 6;
@@ -42,7 +43,11 @@ const isActionable = (f: LineAnchoredFinding): boolean => f.severity !== "sugges
  * the contract `evaluate.md` parses — preserve it verbatim.
  */
 const formatLineAnchoredBody = (finding: LineAnchoredFinding): string => {
-  const header = `severity: ${finding.severity} | ${finding.file}:${finding.line}`;
+  const header = encodeFindingHeader({
+    severity: finding.severity,
+    file: finding.file,
+    line: finding.line,
+  });
   const analysis = finding.analysisChain.length === 0
     ? "_(no analysis chain)_"
     : finding.analysisChain.map((line) => `- ${line}`).join("\n");
@@ -77,7 +82,7 @@ const formatProseSummary = (findings: readonly ProseFinding[]): string => {
     ].join("\n"),
   );
   return [
-    "severity: suggestion | review-summary:0",
+    encodeFindingHeader(REVIEW_SUMMARY_LOCATION),
     "",
     "## Prose findings (architectural / scope-level)",
     "",
