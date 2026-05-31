@@ -174,8 +174,8 @@ describe("buildRunDigestPayload", () => {
 
   it("lists actionable fates first, then merged issues with their PR iid", () => {
     expect(embedOf(buildRunDigestPayload(base)).fields).toEqual([
-      { name: "⚠️ À traiter", value: "#5 — boom (failed)\n#6 — stuck (stalled)" },
-      { name: "✅ Mergées", value: "#1 — ok (PR #11)\n#2 — no pr" },
+      { name: "⚠️ Needs attention", value: "#5 — boom (failed)\n#6 — stuck (stalled)" },
+      { name: "✅ Merged", value: "#1 — ok (PR #11)\n#2 — no pr" },
     ]);
   });
 
@@ -191,10 +191,10 @@ describe("buildRunDigestPayload", () => {
     expect(embedOf(buildRunDigestPayload(clean)).color).toBe(0x2ecc71);
   });
 
-  it("drops the À-traiter field when nothing needs action", () => {
+  it("drops the needs-attention field when nothing needs action", () => {
     const clean: RunDigestNotification = { ...base, actionable: [] };
     const names = embedOf(buildRunDigestPayload(clean)).fields.map((f) => f.name);
-    expect(names).toEqual(["✅ Mergées"]);
+    expect(names).toEqual(["✅ Merged"]);
   });
 
   it("omits the cost/duration meta line when both are absent", () => {

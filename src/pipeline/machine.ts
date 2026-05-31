@@ -120,7 +120,7 @@ export const runMachine = (
     });
 
     yield* artifacts.logEvent({ event: "run_end" });
-    yield* finishRun(artifacts.dir, env.repoName);
+    yield* finishRun(artifacts.dir, artifacts.runId, env.repoName);
     yield* Console.log(
       "\nAFK done. Worktrees and run logs left under ~/.afk-runs/ and ~/.afk-worktrees/.",
     );

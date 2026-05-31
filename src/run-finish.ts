@@ -8,8 +8,8 @@
  * degrades the report rather than aborting the run.
  */
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { Clock, Effect, Option } from "effect";
+import { dirname, join } from "node:path";
+import { Clock, Console, Effect, Option } from "effect";
 import { type RunDigestNotification, notifyRunDigest } from "./notify/discord";
 import { buildAnalyticsReport } from "./stats/aggregate";
 import { projectRunFacts, type RunCostTotals, runStartedAtMs } from "./stats/summary";
@@ -33,7 +33,15 @@ const gatherCost = (
     const now = yield* Clock.currentTimeMillis;
     const report = yield* Effect.tryPromise(() =>
       buildAnalyticsReport({ runsDir: dirname(runDir), sinceMs, untilMs: now }),
-    ).pipe(Effect.timeout(COST_SCAN_TIMEOUT), Effect.option);
+    ).pipe(
+      Effect.timeout(COST_SCAN_TIMEOUT),
+      // Distinguish a timed-out / failed scan from a genuine "no transcripts":
+      // both degrade to null, but only the former is worth a diagnostic line.
+      Effect.tapError((cause) =>
+        Console.error(`[summary] cost scan skipped (timeout/error): ${String(cause)}`),
+      ),
+      Effect.option,
+    );
     return Option.isSome(report)
       ? { totalCostUsd: report.value.totalCostUsd, perModel: report.value.perModel }
       : null;
@@ -65,7 +73,11 @@ const toDigest = (
  * Finish a run: write `summary.md` and push the single Discord digest, from one
  * read + one cost scan. Never fails the run.
  */
-export const finishRun = (runDir: string, repo: string): Effect.Effect<void> =>
+export const finishRun = (
+  runDir: string,
+  runId: string,
+  repo: string,
+): Effect.Effect<void> =>
   Effect.gen(function* () {
     const text = yield* Effect.tryPromise(() =>
       readFile(join(runDir, "run.jsonl"), "utf8"),
@@ -75,7 +87,6 @@ export const finishRun = (runDir: string, repo: string): Effect.Effect<void> =>
       return;
     }
     const cost = yield* gatherCost(runDir, lines);
-    const runId = basename(runDir);
     yield* writeSummaryFile(runDir, runId, lines, cost);
     yield* notifyRunDigest(toDigest(runId, repo, lines, cost));
   }).pipe(Effect.ignore);

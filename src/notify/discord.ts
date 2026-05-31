@@ -178,13 +178,13 @@ export type RunDigestNotification = {
 /** Discord caps embed field values at 1024 chars; keep lists comfortably under. */
 const FIELD_MAX = 1000;
 
-/** Join lines into one field value, truncating with a "+N de plus" tail. */
+/** Join lines into one field value, truncating with a "+N more" tail. */
 const cappedList = (lines: readonly string[]): string => {
   const kept: string[] = [];
   let len = 0;
   for (const line of lines) {
     if (len + line.length + 1 > FIELD_MAX) {
-      kept.push(`… +${lines.length - kept.length} de plus`);
+      kept.push(`… +${lines.length - kept.length} more`);
       break;
     }
     kept.push(line);
@@ -218,13 +218,13 @@ export const buildRunDigestPayload = (n: RunDigestNotification): Record<string, 
   const fields: EmbedField[] = [];
   if (n.actionable.length > 0) {
     fields.push({
-      name: "⚠️ À traiter",
+      name: "⚠️ Needs attention",
       value: cappedList(n.actionable.map((i) => `#${i.iid} — ${i.title} (${i.fate})`)),
     });
   }
   if (n.merged.length > 0) {
     fields.push({
-      name: "✅ Mergées",
+      name: "✅ Merged",
       value: cappedList(
         n.merged.map(
           (i) => `#${i.iid} — ${i.title}${i.pullRequestIid != null ? ` (PR #${i.pullRequestIid})` : ""}`,
@@ -235,7 +235,7 @@ export const buildRunDigestPayload = (n: RunDigestNotification): Record<string, 
 
   const category = digestCategory(c);
   const embed = {
-    title: `${EMOJI[category]} Run terminé — ${n.source.repo}`.slice(0, 256),
+    title: `${EMOJI[category]} Run finished — ${n.source.repo}`.slice(0, 256),
     color: COLOR[category],
     description,
     ...(fields.length > 0 ? { fields } : {}),
