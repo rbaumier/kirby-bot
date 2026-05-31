@@ -116,6 +116,12 @@ const AGENTS_DATA = {
       skillName: "matt-improve-codebase-architecture",
     },
   },
+  "type-design": {
+    model: "haiku",
+    description:
+      "Type & data-model design: make illegal states unrepresentable — discriminated unions over flag/optional bags, branded ids, parse-don't-validate, switch exhaustiveness. Spawn when the diff adds or changes data models, type definitions, function signatures, or domain types.",
+    prompt: { kind: "line-anchored", roleFile: "skill-agent.md", skillName: "coding-standards:design" },
+  },
   // "matt-review": {
   //   model: "sonnet",
   //   description: "Senior-eng prose review: what's the missing piece, what's the wrong abstraction. Spawn for non-trivial diffs.",
