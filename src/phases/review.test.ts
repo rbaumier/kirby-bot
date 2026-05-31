@@ -8,7 +8,7 @@
  * tests stay in-process. RunArtifacts and GitProvider are provided via
  * Effect service injection.
  */
-import { describe, expect, it, mock } from "bun:test";
+import { afterAll, describe, expect, it, mock } from "bun:test";
 import { Effect, Layer, Option } from "effect";
 import type { FanOutResult } from "../session/fanout";
 import type { AggregatedReview } from "../review/aggregate";
@@ -19,6 +19,19 @@ import { RunArtifacts } from "../run-artifacts";
 import type { RunArtifactsShape } from "../run-artifacts";
 import type { Environment } from "../preflight";
 import type { State } from "../pipeline/state";
+
+// Capture the real modules before mocking. Bun's `mock.module` is global and is
+// not undone by `mock.restore()`, so without an explicit restore these mocks
+// leak into every later test file that imports them. The afterAll below
+// re-mocks each back to its captured original.
+import * as realFanout from "../session/fanout";
+import * as realReadChangedFiles from "../review/read-changed-files";
+import * as realAggregate from "../review/aggregate";
+import * as realPost from "../review/post";
+const capturedFanout = { ...realFanout };
+const capturedReadChangedFiles = { ...realReadChangedFiles };
+const capturedAggregate = { ...realAggregate };
+const capturedPost = { ...realPost };
 
 // ── Module-level mutable state (read lazily by the mock closures) ─────────────
 
@@ -55,6 +68,13 @@ mock.module("../review/post", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const E = require("effect").Effect as typeof Effect;
   return { postReviewToMr: () => E.void };
+});
+
+afterAll(() => {
+  mock.module("../session/fanout", () => capturedFanout);
+  mock.module("../review/read-changed-files", () => capturedReadChangedFiles);
+  mock.module("../review/aggregate", () => capturedAggregate);
+  mock.module("../review/post", () => capturedPost);
 });
 
 // ── Module under test (imported after mocks are registered) ───────────────────

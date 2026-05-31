@@ -4,13 +4,23 @@
  * `runPhaseSession` and `runShellGit` are module-mocked so no tmux or git
  * process is spawned. Control variables are set per-test.
  */
-import { mock, describe, it, expect, beforeEach } from "bun:test";
+import { mock, describe, it, expect, beforeEach, afterAll } from "bun:test";
 import { Effect, Layer } from "effect";
 import { SessionTimedOut } from "../session/errors";
 import { HandlerError } from "../pipeline/errors";
 import { RunArtifacts } from "../run-artifacts";
 import type { RunArtifactsShape } from "../run-artifacts";
 import type { State } from "../pipeline/state";
+
+// Capture the real modules before mocking them. Bun's `mock.module` is global
+// and `mock.restore()` does NOT undo it, so without an explicit restore these
+// mocks leak into every test file that runs later and imports `../shell` or
+// `../session/phase` (e.g. rebase-branch and phase-primitives). The afterAll
+// below re-mocks them back to the captured originals.
+import * as realPhase from "../session/phase";
+import * as realShell from "../shell";
+const capturedPhase = { ...realPhase };
+const capturedShell = { ...realShell };
 
 // --- module-level mock state (mutated per test) ---
 let _sessionEffect: Effect.Effect<"READY_FOR_REVIEW" | "BLOCKER_SUSPECTED", any, any> =
@@ -24,6 +34,11 @@ mock.module("../session/phase", () => ({
 mock.module("../shell", () => ({
   runShellGit: () => Effect.succeed({ stdout: _revListStdout, stderr: "" }),
 }));
+
+afterAll(() => {
+  mock.module("../session/phase", () => capturedPhase);
+  mock.module("../shell", () => capturedShell);
+});
 
 // Import AFTER mocks are registered (Bun hoists mock.module above static imports)
 import { implementationPhase } from "./implementation";
