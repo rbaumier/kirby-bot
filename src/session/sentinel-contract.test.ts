@@ -9,7 +9,7 @@
  * position would break capture silently.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,7 +66,6 @@ describe("round-trip: config written ⇒ values read by the hook", () => {
       const sentinel = join(run, "sentinel.flag");
       const transcript = join(run, "transcript.jsonl");
       const verdict = "VERDICT: READY_FOR_REVIEW";
-      const { writeFileSync } = await import("node:fs");
       writeFileSync(
         transcript,
         JSON.stringify({
