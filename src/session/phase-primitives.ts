@@ -29,20 +29,10 @@ import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
 import type { TmuxError } from "./errors";
 import { NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
+import { AGENT_SENTINEL_VAR, stopHookSettings } from "./sentinel-contract";
 import { bootClaudeSession, createSession, killSession, repromptForVerdict } from "./tmux";
 import type { VerdictToken } from "./verdict";
 import { parseVerdict } from "./verdict";
-
-/** Absolute path to the Stop-hook handler script — resolved at module load. */
-const STOP_HOOK_SCRIPT = join(import.meta.dirname, "stop-hook.ts");
-
-/**
- * Env-var name the Stop hook reads to know which sentinel file to write.
- * Sourced from a single const so the hook command-line (`"$AGENT_SENTINEL"`)
- * and the session-launch env (`env: { AGENT_SENTINEL: sentinel }`) cannot
- * drift via typo — changing the name once propagates to both.
- */
-const AGENT_SENTINEL_VAR = "AGENT_SENTINEL";
 
 /**
  * Write the Claude Code Stop-hook config into a worktree's `.claude/`.
@@ -87,8 +77,6 @@ export const writeStopHookConfig = (
     try: async () => {
       const claudeDir = join(worktree, ".claude");
       await mkdir(claudeDir, { recursive: true });
-      const command = `bun "${STOP_HOOK_SCRIPT}" "$${AGENT_SENTINEL_VAR}"`;
-      const hookEntry = [{ matcher: "", hooks: [{ type: "command", command }] }];
       const settingsPath = join(claudeDir, "settings.local.json");
       // Read-merge-write: a malformed or absent file — or a non-object root
       // (array/scalar) — degrades to an empty base so we never throw on a
@@ -105,7 +93,7 @@ export const writeStopHookConfig = (
         typeof existing.hooks === "object" && existing.hooks !== null ? existing.hooks : {};
       const merged = {
         ...existing,
-        hooks: { ...existingHooks, Stop: hookEntry, StopFailure: hookEntry },
+        hooks: { ...existingHooks, ...stopHookSettings() },
       };
       await writeFile(settingsPath, JSON.stringify(merged, null, 2));
     },
