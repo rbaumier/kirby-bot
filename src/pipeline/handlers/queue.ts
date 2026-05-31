@@ -29,6 +29,7 @@ import {
   reclaimAgentBranch,
   resumableRemoteBranch,
 } from "./reclaim-branch";
+import { worktreePathsForIssue } from "../../recovery/stale";
 import type { IssueRef, State } from "../state";
 
 /**
@@ -149,6 +150,21 @@ export const onBranchCreate = (
     yield* runShell(() => $`git worktree remove --force ${worktree}`).pipe(Effect.ignore);
     yield* runShell(() => $`git worktree prune`).pipe(Effect.ignore);
 
+    // Also drop any OTHER worktree still holding this issue's branch (a manual
+    // checkout, or a path-scheme change across runs). git refuses to delete or
+    // re-add a branch that is checked out elsewhere, so without this the later
+    // `branch -D` / `worktree add -b` fails and the issue loops on re-pick — on
+    // both the resume and fresh-start paths.
+    const priorWorktrees = yield* runShell(() => $`git worktree list --porcelain`).pipe(
+      Effect.map((output) => worktreePathsForIssue(output.stdout, issue.iid)),
+      Effect.catchAll(() => Effect.succeed([] as readonly string[])),
+    );
+    yield* Effect.forEach(
+      priorWorktrees,
+      (path) => runShell(() => $`git worktree remove --force ${path}`).pipe(Effect.ignore),
+      { discard: true },
+    );
+
     yield* runShell(() => $`git fetch origin ${env.defaultBranch}`).pipe(
       Effect.catchAll(() =>
         Console.error(
@@ -188,7 +204,7 @@ export const onBranchCreate = (
       );
       yield* artifacts.logEvent({
         event: "branch_resume",
-        issueIid: issue.iid,
+        issue: issue.iid,
         branch,
         commitsAhead,
       });
