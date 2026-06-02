@@ -18,7 +18,8 @@ import { Console, Effect } from "effect";
 import { LABELS, WORKTREES_DIR } from "../../config";
 import type { Environment } from "../../preflight";
 import { GitProvider } from "../../provider/provider";
-import type { ProviderCallError } from "../../provider/types";
+import type { Issue, ProviderCallError } from "../../provider/types";
+import { parseBlockers } from "../blockers";
 import { RunArtifacts } from "../../run-artifacts";
 import { describeShellError, runShell, runShellGit } from "../../shell";
 import { freshDeadline } from "../../deadline";
@@ -63,7 +64,69 @@ const excludeStopHookConfig = (worktree: string): Effect.Effect<void> =>
     }),
   );
 
-/** Fetch_queue — read the ready queue, pick one issue at random, or end. */
+/**
+ * Drop issues still gated behind an open "Blocked by #N" dependency.
+ *
+ * Authors write the dependency by hand in the issue body/title — neither forge
+ * exposes a portable native signal (see ../blockers.ts). Every distinct blocker
+ * is fetched once and counts as resolved only when it is closed; a blocker we
+ * cannot read (deleted, cross-repo, typo) is treated as still-open, so the bot
+ * errs toward waiting rather than starting dependent work early. A skipped
+ * issue logs one console line — the skip is silent on the forge (no label, no
+ * note), but visible to whoever watches the run.
+ */
+const filterUnblocked = (
+  issues: readonly Issue[],
+): Effect.Effect<readonly Issue[], ProviderCallError, GitProvider> =>
+  Effect.gen(function* () {
+    const blockersOf = new Map<number, readonly number[]>();
+    const distinct = new Set<number>();
+    for (const issue of issues) {
+      // Self-references can't gate an issue on itself; drop them.
+      const blockers = parseBlockers(`${issue.title}\n${issue.description ?? ""}`).filter(
+        (iid) => iid !== issue.iid,
+      );
+      blockersOf.set(issue.iid, blockers);
+      for (const iid of blockers) distinct.add(iid);
+    }
+    if (distinct.size === 0) {
+      return issues;
+    }
+
+    const provider = yield* GitProvider;
+    const isClosed = new Map<number, boolean>();
+    // Independent reads: fetch in parallel, but cap the fan-out so a long
+    // blocker list can't burst past the forge's rate limit. Each effect writes
+    // a distinct key, so the shared Map is safe under concurrency.
+    yield* Effect.forEach(
+      [...distinct],
+      (iid) =>
+        provider.viewIssue(iid).pipe(
+          Effect.map((blocker) => isClosed.set(iid, !blocker.isOpen)),
+          Effect.catchAll(() =>
+            Console.error(`  ⚠ blocker #${iid} unreadable — treating it as still-open`).pipe(
+              Effect.map(() => isClosed.set(iid, false)),
+            ),
+          ),
+        ),
+      { concurrency: 10, discard: true },
+    );
+
+    const eligible: Issue[] = [];
+    for (const issue of issues) {
+      const open = (blockersOf.get(issue.iid) ?? []).filter((iid) => isClosed.get(iid) !== true);
+      if (open.length === 0) {
+        eligible.push(issue);
+      } else {
+        yield* Console.log(
+          `  ⏸ #${issue.iid} blocked by ${open.map((iid) => `#${iid}`).join(", ")} — skipping`,
+        );
+      }
+    }
+    return eligible;
+  });
+
+/** Fetch_queue — read the ready queue, pick one unblocked issue at random, or end. */
 export const onFetchQueue: Effect.Effect<State, ProviderCallError, GitProvider> = Effect.gen(
   function* () {
     const provider = yield* GitProvider;
@@ -71,13 +134,20 @@ export const onFetchQueue: Effect.Effect<State, ProviderCallError, GitProvider> 
       include: [LABELS.readyForAgent],
       exclude: [LABELS.failedByAgent, LABELS.pickedByAgent],
     });
-    const count = issues.length;
-    if (count === 0) {
+    if (issues.length === 0) {
+      return { kind: "end" };
+    }
+
+    // Honour "Blocked by #N": hold any issue whose named blockers are still
+    // open out of the pick, so a dependent task never starts before its
+    // dependency closes. The next fetch_queue re-checks once a blocker closes.
+    const eligible = yield* filterUnblocked(issues);
+    if (eligible.length === 0) {
       return { kind: "end" };
     }
 
     // Random pick keeps multi-instance collisions probabilistically rare.
-    const picked = issues.at(Math.floor(Math.random() * count));
+    const picked = eligible.at(Math.floor(Math.random() * eligible.length));
     if (picked === undefined) {
       return { kind: "end" };
     }

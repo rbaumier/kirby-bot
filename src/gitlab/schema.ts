@@ -47,6 +47,12 @@ export const IssueSchema = Schema.Struct({
     default: () => [],
   }),
   updated_at: Schema.optionalWith(Schema.String, { default: () => "" }),
+  // `opened` | `closed`. Deliberately lenient, unlike the strict MR `state`
+  // decoder: an MR state drives merge routing, so a wrong/missing value is
+  // dangerous and must fail loudly; an issue state only feeds the blocker gate,
+  // where the mapper reduces it fail-safe (anything but `closed` → open). So a
+  // missing/unknown value defaults to opened and the gate just over-waits.
+  state: Schema.optionalWith(Schema.String, { default: () => "opened" }),
 });
 
 /**

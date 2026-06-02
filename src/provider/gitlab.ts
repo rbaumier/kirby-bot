@@ -67,6 +67,8 @@ const mapIssue = (issue: GitLabIssue): Issue => ({
   description: issue.description,
   labels: issue.labels,
   updatedAt: issue.updated_at,
+  // Fail-safe: only an explicit `closed` releases the blocker gate (`opened` → open).
+  isOpen: issue.state !== "closed",
 });
 
 const mapPullRequest = (mr: GitLabMergeRequest): PullRequestRef => ({

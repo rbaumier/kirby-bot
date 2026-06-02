@@ -62,6 +62,12 @@ export const IssueSchema = Schema.Struct({
   }).pipe(Schema.fromKey("body")),
   labels: Schema.optionalWith(LabelNames, { default: () => [] }),
   updated_at: Schema.optionalWith(Schema.String, { default: () => "" }),
+  // `open` | `closed`. Deliberately lenient, unlike the strict PR `state`
+  // decoder: a PR state drives merge routing, so a wrong/missing value is
+  // dangerous and must fail loudly; an issue state only feeds the blocker gate,
+  // where the mapper reduces it fail-safe (anything but `closed` → open). So a
+  // missing/unknown value defaults to open and the gate just over-waits.
+  state: Schema.optionalWith(Schema.String, { default: () => "open" }),
   pull_request: Schema.optional(Schema.Object),
 });
 

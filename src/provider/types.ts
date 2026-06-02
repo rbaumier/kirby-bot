@@ -12,6 +12,8 @@ export type Issue = {
   readonly labels: Labels;
   /** ISO-8601 last-update time, or `""` when the endpoint omits it. */
   readonly updatedAt: string;
+  /** Whether the issue is still open — the bit the "Blocked by #N" gate resolves a blocker on. */
+  readonly isOpen: boolean;
 };
 
 export type PullRequestRef = {

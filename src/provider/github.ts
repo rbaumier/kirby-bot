@@ -66,6 +66,8 @@ const mapIssue = (issue: GitHubIssue): Issue => ({
   description: issue.description,
   labels: issue.labels,
   updatedAt: issue.updated_at,
+  // Fail-safe: only an explicit `closed` releases the blocker gate.
+  isOpen: issue.state !== "closed",
 });
 
 // GitHub carries an explicit `merged` boolean (a closed-but-unmerged PR keeps

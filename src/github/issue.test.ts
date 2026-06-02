@@ -13,6 +13,7 @@ const issue = (over: Partial<GitHubIssue>): GitHubIssue => ({
   description: null,
   labels: [],
   updated_at: "",
+  state: "open",
   pull_request: undefined,
   ...over,
 });

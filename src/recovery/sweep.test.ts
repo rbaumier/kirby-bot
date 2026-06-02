@@ -37,6 +37,7 @@ const issue = (iid: number, updatedAt: string): Issue => ({
   description: null,
   labels: ["picked-by-agent"],
   updatedAt,
+  isOpen: true,
 });
 
 type LabelCall = { readonly iid: number; readonly changes: IssueLabelChange };
