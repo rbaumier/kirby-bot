@@ -147,6 +147,9 @@ describe("step seam", () => {
     expect(interrupted?.worktree).toBeNull();
     expect(interrupted?.pullRequestIid).toBeNull();
     expect(interrupted?.fixCycles).toBeNull();
+    // A non-usage-limit interruption carries no reset substring (#78): the seam
+    // defaults the field to null, so the machine never backs off for it.
+    expect(interrupted?.usageLimitResetText).toBeNull();
     expect(interrupted?.reason).toContain("claim_issue:");
     expect(interrupted?.reason).toContain("HTTP 500");
   });

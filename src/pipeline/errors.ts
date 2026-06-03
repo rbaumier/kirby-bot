@@ -31,10 +31,18 @@ export type Fate = "interruption" | "stall" | "failure" | "fatal";
  * Pipeline context (branch / worktree / pullRequestIid) is recovered by the
  * seam via `endFieldsOf(current)` — handlers do not plumb it through the
  * error. Each state variant is the source of truth for the fields it has.
+ *
+ * `usageLimitResetText` is the one carrier the seam *does* read off the error:
+ * when a phase fails because Claude's usage-limit dialog fired (an
+ * `interruption`), #77's detection sets it to the captured "resets … (tz)"
+ * substring, and the seam threads it onto the `interrupted` state so the
+ * orchestrator can back off until the limit resets (#78). Unset (and ignored)
+ * for every other failure.
  */
 export class HandlerError extends Data.TaggedError("HandlerError")<{
   readonly reason: string;
   readonly fate: Fate;
+  readonly usageLimitResetText?: string;
 }> {}
 
 /**
