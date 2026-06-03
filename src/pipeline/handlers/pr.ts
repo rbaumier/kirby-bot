@@ -18,6 +18,7 @@ import type { ProviderCallError } from "../../provider/types";
 import { describeProviderError } from "../../provider/types";
 import { RunArtifacts } from "../../run-artifacts";
 import { notifyIssueEnd } from "../../notify/discord";
+import { issueWebUrl, pullRequestWebUrl } from "../../notify/web-links";
 import { clearCheckpoint, readCheckpoint } from "../../recovery/checkpoint";
 import { clearIssue } from "../../recovery/sidecar";
 import { resumeStateFor } from "../resume";
@@ -208,6 +209,8 @@ export const onDone = (
       headline: "merged",
       issue,
       pullRequestIid,
+      issueUrl: issueWebUrl(issue.iid),
+      pullRequestUrl: pullRequestWebUrl(pullRequestIid),
       source: { repo: env.repoName, runId: artifacts.runId },
     });
     return { kind: "fetch_queue" };

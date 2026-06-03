@@ -61,6 +61,30 @@ describe("buildDiscordPayload", () => {
     ]);
   });
 
+  it("renders the Issue and PR fields as masked links when URLs are given", () => {
+    const fields = embedOf(
+      buildDiscordPayload({
+        ...base,
+        issueUrl: "https://github.com/o/r/issues/42",
+        pullRequestUrl: "https://github.com/o/r/pull/7",
+      }),
+    ).fields;
+    expect(fields.find((f) => f.name === "Issue")?.value).toBe(
+      "[#42 — Fix the thing](https://github.com/o/r/issues/42)",
+    );
+    expect(fields.find((f) => f.name === "PR")?.value).toBe(
+      "[#7](https://github.com/o/r/pull/7)",
+    );
+  });
+
+  it("falls back to plain text when a URL is null or empty", () => {
+    const fields = embedOf(
+      buildDiscordPayload({ ...base, issueUrl: null, pullRequestUrl: "" }),
+    ).fields;
+    expect(fields.find((f) => f.name === "Issue")?.value).toBe("#42 — Fix the thing");
+    expect(fields.find((f) => f.name === "PR")?.value).toBe("#7");
+  });
+
   it("keeps fixCycles: 0 (a real value, not absence)", () => {
     const fields = embedOf(buildDiscordPayload({ ...base, fixCycles: 0 })).fields;
     expect(fields.some((f) => f.name === "Fix cycles")).toBe(true);

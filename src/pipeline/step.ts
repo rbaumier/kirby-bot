@@ -23,6 +23,7 @@ import { describeProviderError } from "../provider/types";
 import type { Environment } from "../preflight";
 import { RunArtifacts } from "../run-artifacts";
 import { notifyIssueEnd, type NotificationCategory } from "../notify/discord";
+import { issueWebUrl, pullRequestWebUrl } from "../notify/web-links";
 import { clearCheckpoint } from "../recovery/checkpoint";
 import { clearIssue, recordInterruption, recordStall } from "../recovery/sidecar";
 import type { Outcome } from "../recovery/sidecar-policy";
@@ -104,6 +105,9 @@ const announceEnd = (
       issue: state.issue,
       branch: state.branch,
       pullRequestIid: state.pullRequestIid,
+      issueUrl: issueWebUrl(state.issue.iid),
+      pullRequestUrl:
+        state.pullRequestIid != null ? pullRequestWebUrl(state.pullRequestIid) : null,
       fixCycles: state.fixCycles,
       reason: state.reason,
       source,

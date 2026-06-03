@@ -33,6 +33,10 @@ export type IssueEndNotification = {
   readonly issue: { readonly iid: number; readonly title: string };
   readonly branch?: string | null;
   readonly pullRequestIid?: number | null;
+  /** Web URL of the issue — renders the `Issue` field as a tappable link when set. */
+  readonly issueUrl?: string | null;
+  /** Web URL of the PR/MR — renders the `PR` field as a tappable link when set. */
+  readonly pullRequestUrl?: string | null;
   readonly fixCycles?: number | null;
   readonly reason?: string | null;
   /**
@@ -66,6 +70,10 @@ const USERNAME_MAX = 80;
 /** Strip the markdown bold the issue notes use — Discord embeds render plain. */
 const plain = (text: string): string => text.replace(/\*\*/g, "");
 
+/** Wrap a label as a Discord masked link when a non-empty URL is present. */
+const link = (label: string, url?: string | null): string =>
+  url != null && url !== "" ? `[${label}](${url})` : label;
+
 /** One Discord embed field; omitted entirely when its source value is absent. */
 type EmbedField = { readonly name: string; readonly value: string; readonly inline?: boolean };
 
@@ -75,12 +83,14 @@ type EmbedField = { readonly name: string; readonly value: string; readonly inli
  * than rendered as empty rows.
  */
 export const buildDiscordPayload = (n: IssueEndNotification): Record<string, unknown> => {
-  const fields: EmbedField[] = [{ name: "Issue", value: `#${n.issue.iid} — ${n.issue.title}` }];
+  const fields: EmbedField[] = [
+    { name: "Issue", value: link(`#${n.issue.iid} — ${n.issue.title}`, n.issueUrl) },
+  ];
   if (n.branch != null && n.branch !== "") {
     fields.push({ name: "Branch", value: n.branch, inline: true });
   }
   if (n.pullRequestIid != null) {
-    fields.push({ name: "PR", value: `#${n.pullRequestIid}`, inline: true });
+    fields.push({ name: "PR", value: link(`#${n.pullRequestIid}`, n.pullRequestUrl), inline: true });
   }
   if (n.fixCycles != null) {
     fields.push({ name: "Fix cycles", value: String(n.fixCycles), inline: true });
