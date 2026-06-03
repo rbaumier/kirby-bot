@@ -27,9 +27,10 @@ export type Phase = (typeof PHASES)[number];
 /**
  * Claude tier each single-session phase runs on.
  *
- * Implementation, evaluate and fix are creative or judgment-heavy and stay on
- * Sonnet. The qa phase orchestrates dogfood-persona subagents that do the real
- * work in their own sessions, so the qa orchestrator runs on Haiku.
+ * Implementation runs on Opus — the heaviest reasoning of the pipeline. Evaluate
+ * and fix are creative or judgment-heavy and stay on Sonnet. The qa phase
+ * orchestrates dogfood-persona subagents that do the real work in their own
+ * sessions, so the qa orchestrator runs on Haiku.
  *
  * `review` is deliberately absent: it has no single orchestrator session. The
  * review phase fans out one `claude` session per agent (see
@@ -42,7 +43,7 @@ export type Phase = (typeof PHASES)[number];
  * `runPhaseSession` — the model is no longer hard-coded.
  */
 export const PHASE_MODELS: Record<Exclude<Phase, "review">, AgentModel> = {
-  implementation: "sonnet",
+  implementation: "opus",
   evaluate: "sonnet",
   fix: "sonnet",
   qa: "haiku",
