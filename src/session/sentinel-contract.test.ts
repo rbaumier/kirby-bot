@@ -9,7 +9,7 @@
  * position would break capture silently.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +17,10 @@ import { describe, expect, it, test } from "bun:test";
 import { Effect } from "effect";
 import { writeStopHookConfig } from "./phase-primitives";
 import {
+  AGENT_READY_VAR,
   AGENT_SENTINEL_VAR,
+  sessionStartHookCommand,
+  sessionStartHookSettings,
   STOP_HOOK_EVENTS,
   STOP_HOOK_SCRIPT,
   stopHookCommand,
@@ -37,6 +40,39 @@ describe("stopHookSettings / stopHookCommand", () => {
     const command = stopHookCommand();
     expect(command).toContain(`"$${AGENT_SENTINEL_VAR}"`);
     expect(command).toContain(STOP_HOOK_SCRIPT);
+  });
+});
+
+describe("sessionStartHookSettings / sessionStartHookCommand", () => {
+  it("registers a single SessionStart event running the readiness command", () => {
+    const settings = sessionStartHookSettings();
+    expect(Object.keys(settings)).toEqual(["SessionStart"]);
+    expect(settings.SessionStart?.[0]?.hooks?.[0]?.command).toBe(sessionStartHookCommand());
+  });
+
+  it("references the env-var name (no drift between wires)", () => {
+    expect(sessionStartHookCommand()).toContain(`"$${AGENT_READY_VAR}"`);
+  });
+});
+
+describe("round-trip: SessionStart command writes the ready marker at $AGENT_READY", () => {
+  test("executing the command with AGENT_READY set writes the marker at that path", () => {
+    const run = mkdtempSync(join(tmpdir(), "kirby-ready-roundtrip-"));
+    try {
+      const readyPath = join(run, "sentinel.flag.ready");
+      // Run the command verbatim through a shell with only AGENT_READY exported
+      // — exactly how Claude Code invokes the SessionStart hook. If the
+      // command's `$AGENT_READY` reference drifted from the env-var name we
+      // export, the marker stays absent and this fails.
+      const result = spawnSync("sh", ["-c", sessionStartHookCommand()], {
+        encoding: "utf8",
+        env: { ...process.env, [AGENT_READY_VAR]: readyPath },
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(readyPath, "utf8")).toBe("ready");
+    } finally {
+      rmSync(run, { recursive: true, force: true });
+    }
   });
 });
 

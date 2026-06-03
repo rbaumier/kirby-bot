@@ -1,25 +1,21 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
-import { Effect, Ref } from "effect";
+import { Effect, Fiber, Option, Ref, TestClock, TestContext } from "effect";
 import {
   buildClaudeCmd,
   ENV_KEY_RE,
   MODEL_ALIAS_RE,
   paneShowsPaste,
-  paneShowsTuiReady,
   pollPaneUntil,
   sqEscape,
   TUI_PASTE_MARKER,
+  waitForReadyMarker,
 } from "./tmux";
 
-/** The rendered claude input prompt box, once the REPL is ready for input. */
-const READY_BOX = [
-  "╭─────────────────────────────────╮",
-  '│ > Try "fix typecheck errors"    │',
-  "╰─────────────────────────────────╯",
-].join("\n");
-
-/** A single boot-spinner frame — churns the pane but renders no prompt box. */
-const spinner = (glyph: string): string => `${glyph} Booting claude…`;
+/** The ready-marker existence predicate `waitForReadyMarker` polls with. */
+const markerReady = (s: string): boolean => s === "1";
 
 describe("sqEscape", () => {
   it("wraps a normal string in single quotes", () => {
@@ -151,38 +147,6 @@ describe("paneShowsPaste", () => {
   });
 });
 
-describe("paneShowsTuiReady", () => {
-  it("detects the rendered input prompt box", () => {
-    expect(paneShowsTuiReady(READY_BOX)).toBe(true);
-  });
-
-  it("detects the prompt box once a paste has collapsed into it", () => {
-    expect(
-      paneShowsTuiReady("╭───╮\n│ > [Pasted text #1 +312 lines] │\n╰───╯"),
-    ).toBe(true);
-  });
-
-  it("returns false for an animating boot spinner (issue #25 failure mode)", () => {
-    expect(paneShowsTuiReady(spinner("⠋"))).toBe(false);
-    expect(paneShowsTuiReady(spinner("⠙"))).toBe(false);
-  });
-
-  it("returns false for a boxed welcome banner that carries no prompt", () => {
-    const welcome = ["╭──────────────────╮", "│ Welcome to Claude │", "╰──────────────────╯"].join(
-      "\n",
-    );
-    expect(paneShowsTuiReady(welcome)).toBe(false);
-  });
-
-  it("returns false for an npm update banner", () => {
-    expect(paneShowsTuiReady("Update available: 1.2.3 → run npm i -g")).toBe(false);
-  });
-
-  it("returns false for an empty pane (capture failure)", () => {
-    expect(paneShowsTuiReady("")).toBe(false);
-  });
-});
-
 describe("pollPaneUntil", () => {
   /** Build a capture Effect that replays `frames` one per tick (last sticks). */
   const scriptedCapture = (frames: readonly string[]) =>
@@ -194,39 +158,80 @@ describe("pollPaneUntil", () => {
       ),
     );
 
-  it("returns ready once the prompt box appears after spinner frames", async () => {
+  it("returns ready once the marker appears after absent frames", async () => {
     const ready = await Effect.runPromise(
-      scriptedCapture([spinner("⠋"), spinner("⠙"), spinner("⠹"), READY_BOX]).pipe(
-        Effect.flatMap((capture) =>
-          pollPaneUntil(capture, paneShowsTuiReady, 20, "1 millis"),
-        ),
+      scriptedCapture(["", "", "", "1"]).pipe(
+        Effect.flatMap((capture) => pollPaneUntil(capture, markerReady, 20, "1 millis")),
       ),
     );
     expect(ready).toBe(true);
   });
 
-  it("stops polling at the ready frame, not before or after", async () => {
+  it("stops polling at the marker frame, not before or after", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const calls = yield* Ref.make(0);
-        const frames = [spinner("⠋"), spinner("⠙"), READY_BOX, READY_BOX];
+        const frames = ["", "", "1", "1"];
         const capture = Ref.getAndUpdate(calls, (n) => n + 1).pipe(
           Effect.map((n) => frames[Math.min(n, frames.length - 1)] ?? ""),
         );
-        const ready = yield* pollPaneUntil(capture, paneShowsTuiReady, 20, "1 millis");
+        const ready = yield* pollPaneUntil(capture, markerReady, 20, "1 millis");
         return { ready, ticks: yield* Ref.get(calls) };
       }),
     );
     expect(result.ready).toBe(true);
-    expect(result.ticks).toBe(3); // two spinner ticks + the ready frame, then stop
+    expect(result.ticks).toBe(3); // two absent ticks + the marker frame, then stop
   });
 
-  it("caps out (best-effort fallback) when the prompt box never appears", async () => {
+  it("caps out (best-effort fallback) when the marker never appears", async () => {
     const ready = await Effect.runPromise(
-      scriptedCapture([spinner("⠋"), spinner("⠙"), spinner("⠹")]).pipe(
-        Effect.flatMap((capture) => pollPaneUntil(capture, paneShowsTuiReady, 5, "1 millis")),
+      scriptedCapture(["", "", ""]).pipe(
+        Effect.flatMap((capture) => pollPaneUntil(capture, markerReady, 5, "1 millis")),
       ),
     );
     expect(ready).toBe(false);
+  });
+});
+
+describe("waitForReadyMarker under a virtual clock", () => {
+  it("keeps polling while the marker is absent, then resolves once it appears", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kirby-ready-"));
+    const readyPath = join(dir, "sentinel.flag.ready");
+    try {
+      const keptPolling = await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(waitForReadyMarker(readyPath));
+          // A few ticks with the marker absent: the poll must NOT have resolved.
+          yield* TestClock.adjust("3 seconds");
+          const stillRunning = Option.isNone(yield* Fiber.poll(fiber));
+          // The SessionStart hook writes the marker; the next tick observes it.
+          writeFileSync(readyPath, "ready");
+          yield* TestClock.adjust("1 second");
+          yield* Fiber.join(fiber);
+          return stillRunning;
+        }).pipe(Effect.provide(TestContext.TestContext)),
+      );
+      expect(keptPolling).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns (does not hang) when the marker never appears within the cap", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kirby-ready-"));
+    const readyPath = join(dir, "never.ready");
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(waitForReadyMarker(readyPath));
+          // Advance to the 60-tick cap; the poll must terminate on its own.
+          yield* TestClock.adjust("60 seconds");
+          return yield* Fiber.join(fiber);
+        }).pipe(Effect.provide(TestContext.TestContext)),
+      );
+      expect(result).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
