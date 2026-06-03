@@ -28,9 +28,8 @@ import type { GitProvider } from "../provider/provider";
 import { aggregateFindings } from "../review/aggregate";
 import { postReviewToMr } from "../review/post";
 import { readChangedFiles } from "../review/read-changed-files";
-import { describePhaseError, fateOfPhaseError } from "../session/errors";
 import { DEFAULT_MCP_CONFIG_PATH, DEFAULT_TEMPLATES_DIR, runFanOutPhase } from "../session/fanout";
-import { pipelineContext } from "./runner";
+import { phaseHandlerError, pipelineContext } from "./runner";
 
 /** Review Phase Module — implements the review state's transition. */
 export const reviewPhase = (
@@ -62,15 +61,7 @@ export const reviewPhase = (
       files,
       templatesDir: DEFAULT_TEMPLATES_DIR,
       mcpConfigPath: DEFAULT_MCP_CONFIG_PATH,
-    }).pipe(
-      Effect.mapError(
-        (error) =>
-          new HandlerError({
-            reason: `${tag}: ${describePhaseError(error)}`,
-            fate: fateOfPhaseError(error),
-          }),
-      ),
-    );
+    }).pipe(Effect.mapError(phaseHandlerError(tag)));
 
     // When every fan-out agent failed (timed out / verdict-reprompt loop / error),
     // this is an infrastructure failure of the iteration — not "no findings".

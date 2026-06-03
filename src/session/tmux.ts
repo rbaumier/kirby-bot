@@ -65,7 +65,7 @@ export const repromptForVerdict = (session: string): Effect.Effect<void, TmuxErr
   tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER} Enter`);
 
 /** Capture the visible content of a session's pane. Empty string on any failure. */
-const capturePane = (session: string): Effect.Effect<string> =>
+export const capturePane = (session: string): Effect.Effect<string> =>
   runShell(() => $`tmux capture-pane -p -t ${session}`).pipe(
     Effect.map((result) => result.stdout),
     Effect.catchAll(() => Effect.succeed("")),
@@ -135,6 +135,26 @@ export const TUI_PASTE_MARKER = "[Pasted text";
 
 /** Whether the pane shows a delivered (collapsed) paste in the input area. */
 export const paneShowsPaste = (pane: string): boolean => pane.includes(TUI_PASTE_MARKER);
+
+/**
+ * Bottom-of-dialog markers of the Claude usage-limit prompt (issue #77).
+ *
+ * We anchor on the option block, NOT the `You've hit your <kind> limit` header:
+ * the header scrolls out of the captured region in ~15% of frozen sessions, but
+ * the option block stays visible the whole time the dialog blocks. Both markers
+ * are required so a stray mention of either phrase in normal agent output cannot
+ * trip the predicate on its own.
+ *
+ * Deliberately free of any model name ("Sonnet"): the same predicate must catch
+ * the per-model limit, the 5-hour `session` limit, and any future `Opus`/weekly
+ * phrasing — only the bottom option block is invariant across all of them.
+ */
+export const USAGE_LIMIT_STOP_MARKER = "Stop and wait for limit to reset";
+export const USAGE_LIMIT_CONFIRM_MARKER = "Enter to confirm";
+
+/** Whether the pane shows the blocking Claude usage-limit dialog. */
+export const paneShowsUsageLimit = (pane: string): boolean =>
+  pane.includes(USAGE_LIMIT_STOP_MARKER) && pane.includes(USAGE_LIMIT_CONFIRM_MARKER);
 
 /** Bounded load+paste attempts before falling through to Enter regardless. */
 const PASTE_MAX_ATTEMPTS = 3;

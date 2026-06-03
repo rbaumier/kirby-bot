@@ -51,6 +51,20 @@ const PAST_YEAR_TOLERANCE_MS = 12 * 60 * 60 * 1000;
 /** `resets <date> at <time> (<tz>)` — the clause, found anywhere in the capture. */
 const RESET_CLAUSE = /resets\s+(.+?)\s*\(([^)]+)\)/i;
 
+/**
+ * Pull the raw `resets … (tz)` clause out of a captured pane, or `undefined`
+ * when the header carrying it has scrolled out of the capture — which happens
+ * in ~15% of frozen dialogs (#77, the 82-vs-97 gap). The detection in
+ * {@link paneShowsUsageLimit} anchors on the always-visible option block, so a
+ * dialog can fire without the clause being present; this extractor is therefore
+ * best-effort. The substring is carried verbatim on `UsageLimitHit` and later
+ * fed back to {@link parseUsageLimitReset} by the #78 back-off.
+ */
+export const extractUsageLimitResetText = (pane: string): string | undefined => {
+  const match = RESET_CLAUSE.exec(pane);
+  return match === null ? undefined : match[0].trim();
+};
+
 /** `<Month>[.] <day> at <time>` — splits the date/time part the clause captured. */
 const DATE_TIME = /^([A-Za-z]+)\.?\s+(\d{1,2})\s+at\s+(.+?)\s*$/;
 
