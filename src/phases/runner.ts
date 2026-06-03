@@ -67,11 +67,19 @@ export const toFixUnlessCapped = (
       )
     : Effect.succeed({ kind: "fix", ...pipelineContext(state), fixCycles: state.fixCycles });
 
-/** Map a Session error into a `HandlerError` with a phase-prefixed reason and fate. */
+/**
+ * Map a Session error into a `HandlerError` with a phase-prefixed reason and
+ * fate. A `UsageLimitHit` additionally threads its raw `resets … (tz)`
+ * substring onto the error so the seam can copy it to the `interrupted` state
+ * and back off until the limit resets (#77 → #78).
+ */
 export const phaseHandlerError =
   (prefix: string) =>
   (error: PhaseError): HandlerError =>
     new HandlerError({
       reason: `${prefix}: ${describePhaseError(error)}`,
       fate: fateOfPhaseError(error),
+      ...(error._tag === "UsageLimitHit" && error.resetText !== undefined
+        ? { usageLimitResetText: error.resetText }
+        : {}),
     });

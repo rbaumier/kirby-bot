@@ -27,7 +27,7 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Cause, Clock, Console, Effect, Exit } from "effect";
+import { Cause, Chunk, Clock, Console, Effect, Exit } from "effect";
 import type { Phase } from "../config";
 import {
   MAX_CONCURRENT_AGENTS,
@@ -48,8 +48,9 @@ import type { RoutedAgent, RouterMalformedOutput } from "../review/router";
 import { routeAgents } from "../review/router";
 import { RunArtifacts } from "../run-artifacts";
 import type { PhaseError } from "./errors";
-import { BudgetExhausted, WorkspaceError } from "./errors";
+import { BudgetExhausted, UsageLimitHit, WorkspaceError } from "./errors";
 import { runOneClaudeSession, writeStopHookConfig } from "./phase-primitives";
+import type { VerdictToken } from "./verdict";
 
 /** Outcome for one agent in the fan-out. */
 export type AgentOutcome =
@@ -177,7 +178,43 @@ type RunOneAgentParams = {
   readonly reviewModel: AgentModel;
 };
 
-const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, never, RunArtifacts> =>
+/**
+ * Pull a {@link UsageLimitHit} out of a failed agent's `Cause`, if present.
+ * The plan limit is shared, so one agent hitting it means every sibling will
+ * too — that single failure is re-raised (not swallowed into an `error`
+ * outcome) to short-circuit the whole fan-out (#77).
+ */
+export const usageLimitFromCause = (cause: Cause.Cause<PhaseError>): UsageLimitHit | undefined =>
+  Chunk.toReadonlyArray(Cause.failures(cause)).find(
+    (error): error is UsageLimitHit => error._tag === "UsageLimitHit",
+  );
+
+/**
+ * Turn one agent session's `Exit` into a best-effort {@link AgentOutcome},
+ * except when the failure carries a {@link UsageLimitHit}: that is re-raised so
+ * the enclosing `Effect.forEach` interrupts the still-running and queued
+ * siblings instead of each idling to the cap (#77). Every other failure stays
+ * per-agent — a single hung agent must not nuke the whole review pass.
+ */
+export const agentOutcomeOrAbort = (params: {
+  readonly exit: Exit.Exit<VerdictToken, PhaseError>;
+  readonly agent: AgentName;
+  readonly findingsPath: string;
+  readonly totalMs: number;
+}): Effect.Effect<AgentOutcome, UsageLimitHit> => {
+  const { exit, agent, findingsPath, totalMs } = params;
+  if (Exit.isSuccess(exit)) {
+    return Effect.succeed({ kind: "ok" as const, agent, findingsPath, totalMs });
+  }
+  const usageLimit = usageLimitFromCause(exit.cause);
+  return usageLimit !== undefined
+    ? Effect.fail(usageLimit)
+    : Effect.succeed({ kind: "error" as const, agent, reason: Cause.pretty(exit.cause), totalMs });
+};
+
+const runOneAgent = (
+  params: RunOneAgentParams,
+): Effect.Effect<AgentOutcome, UsageLimitHit, RunArtifacts> =>
   Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
     const {
@@ -246,11 +283,7 @@ const runOneAgent = (params: RunOneAgentParams): Effect.Effect<AgentOutcome, nev
 
     const totalMs = (yield* Clock.currentTimeMillis) - startedAt;
 
-    if (Exit.isSuccess(result)) {
-      return { kind: "ok" as const, agent, findingsPath: findingsFile, totalMs };
-    }
-    const reason = Cause.pretty(result.cause);
-    return { kind: "error" as const, agent, reason, totalMs };
+    return yield* agentOutcomeOrAbort({ exit: result, agent, findingsPath: findingsFile, totalMs });
   });
 
 /**

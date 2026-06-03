@@ -8,9 +8,12 @@ import {
   ENV_KEY_RE,
   MODEL_ALIAS_RE,
   paneShowsPaste,
+  paneShowsUsageLimit,
   pollPaneUntil,
   sqEscape,
   TUI_PASTE_MARKER,
+  USAGE_LIMIT_CONFIRM_MARKER,
+  USAGE_LIMIT_STOP_MARKER,
   waitForReadyMarker,
 } from "./tmux";
 
@@ -144,6 +147,77 @@ describe("paneShowsPaste", () => {
 
   it("keys off the exported marker constant", () => {
     expect(paneShowsPaste(`prefix ${TUI_PASTE_MARKER} #2 +9 lines] suffix`)).toBe(true);
+  });
+});
+
+describe("paneShowsUsageLimit", () => {
+  /** A captured per-model (`Sonnet`) usage-limit dialog, header still in frame. */
+  const sonnetLimitDialog = [
+    "⎿  You've hit your Sonnet limit · resets Jun 1 at 2am (Europe/Paris)",
+    "   What do you want to do?",
+    " ❯ 1. Stop and wait for limit to reset",
+    "   2. Switch to usage credits",
+    "   3. Switch to Team plan",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+
+  /** The 5-hour rolling-window (`session`) variant — different header wording. */
+  const sessionLimitDialog = [
+    "⎿  You've hit your session limit · resets Jun 1 at 2am (Europe/Paris)",
+    "   What do you want to do?",
+    " ❯ 1. Stop and wait for limit to reset",
+    "   2. Switch to usage credits",
+    "   3. Switch to Team plan",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+
+  /** The option block with the header scrolled out (~15% of frozen captures). */
+  const headerlessDialog = [
+    " ❯ 1. Stop and wait for limit to reset",
+    "   2. Switch to usage credits",
+    "   3. Switch to Team plan",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+
+  it("detects the per-model (Sonnet) limit dialog", () => {
+    expect(paneShowsUsageLimit(sonnetLimitDialog)).toBe(true);
+  });
+
+  it("detects the 5-hour session limit dialog (not keyed on a model name)", () => {
+    expect(paneShowsUsageLimit(sessionLimitDialog)).toBe(true);
+  });
+
+  it("detects the dialog even when the header has scrolled out", () => {
+    expect(paneShowsUsageLimit(headerlessDialog)).toBe(true);
+  });
+
+  it("returns false for the ready prompt", () => {
+    const pane = [
+      "╭─────────────────────────────────╮",
+      '│ > Try "fix typecheck errors"    │',
+      "╰─────────────────────────────────╯",
+    ].join("\n");
+    expect(paneShowsUsageLimit(pane)).toBe(false);
+  });
+
+  it("returns false for a delivered paste marker", () => {
+    expect(paneShowsUsageLimit(`│ > ${TUI_PASTE_MARKER} #1 +312 lines]   │`)).toBe(false);
+  });
+
+  it("returns false for normal agent output", () => {
+    expect(paneShowsUsageLimit("Running tests… 42 pass, 0 fail")).toBe(false);
+  });
+
+  it("returns false for an empty pane (capture failure)", () => {
+    expect(paneShowsUsageLimit("")).toBe(false);
+  });
+
+  it("requires BOTH option markers, not either alone", () => {
+    expect(paneShowsUsageLimit(USAGE_LIMIT_STOP_MARKER)).toBe(false);
+    expect(paneShowsUsageLimit(USAGE_LIMIT_CONFIRM_MARKER)).toBe(false);
+    expect(
+      paneShowsUsageLimit(`${USAGE_LIMIT_STOP_MARKER}\n${USAGE_LIMIT_CONFIRM_MARKER}`),
+    ).toBe(true);
   });
 });
 

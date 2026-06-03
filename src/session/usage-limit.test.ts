@@ -8,7 +8,7 @@
  * self-checking rather than a magic number.
  */
 import { describe, expect, it } from "bun:test";
-import { parseUsageLimitReset } from "./usage-limit";
+import { extractUsageLimitResetText, parseUsageLimitReset } from "./usage-limit";
 
 // A reference "now" in May 2026, well before a Jun 1 reset.
 const MAY_31_2026 = Date.UTC(2026, 4, 31, 12, 0, 0);
@@ -118,5 +118,35 @@ describe("parseUsageLimitReset — unrecognized formats return null", () => {
     ["unknown timezone", "resets Jun 1 at 2am (Not/AZone)"],
   ])("returns null for %s", (_label, captured) => {
     expect(parseUsageLimitReset(captured, MAY_31_2026)).toBeNull();
+  });
+});
+
+describe("extractUsageLimitResetText", () => {
+  it("pulls the reset clause out of a full Sonnet-limit dialog line", () => {
+    const pane = [
+      "⎿  You've hit your Sonnet limit · resets Jun 1 at 2am (Europe/Paris)",
+      " ❯ 1. Stop and wait for limit to reset",
+      " Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(extractUsageLimitResetText(pane)).toBe("resets Jun 1 at 2am (Europe/Paris)");
+  });
+
+  it("round-trips through parseUsageLimitReset", () => {
+    const pane = "You've hit your session limit · resets Jun 1 at 2am (Europe/Paris)";
+    const extracted = extractUsageLimitResetText(pane);
+    expect(extracted).toBeDefined();
+    expect(parseUsageLimitReset(extracted ?? "", MAY_31_2026)).toBe(Date.UTC(2026, 5, 1, 0, 0, 0));
+  });
+
+  it("returns undefined when the header (and its clause) has scrolled out", () => {
+    const headerless = [
+      " ❯ 1. Stop and wait for limit to reset",
+      " Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(extractUsageLimitResetText(headerless)).toBeUndefined();
+  });
+
+  it("returns undefined for an empty pane", () => {
+    expect(extractUsageLimitResetText("")).toBeUndefined();
   });
 });

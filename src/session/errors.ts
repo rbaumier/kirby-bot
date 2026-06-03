@@ -45,6 +45,21 @@ export class SessionTimedOut extends Data.TaggedError("SessionTimedOut")<{
   readonly elapsedMs: number;
 }> {}
 
+/**
+ * The session hit Claude's usage limit mid-work: the interactive CLI raised its
+ * blocking usage-limit dialog, which `--dangerously-skip-permissions` does NOT
+ * dismiss, so the session would otherwise idle to the phase cap (issue #77).
+ * Detected by {@link paneShowsUsageLimit} during the sentinel poll and failed
+ * fast. An exhausted plan limit is not the issue's fault, so this maps to an
+ * `interruption` fate — never a stall. `resetText` carries the raw `resets …
+ * (tz)` substring when the dialog header was still in the capture; the
+ * orchestrator parses it to back off until the limit resets (#78).
+ */
+export class UsageLimitHit extends Data.TaggedError("UsageLimitHit")<{
+  readonly phase: Phase;
+  readonly resetText?: string;
+}> {}
+
 /** The session stopped, but its final message carried no clean verdict. */
 export class NoVerdict extends Data.TaggedError("NoVerdict")<{
   readonly phase: Phase;
@@ -65,6 +80,7 @@ export type PhaseError =
   | WorkspaceError
   | BudgetExhausted
   | SessionTimedOut
+  | UsageLimitHit
   | NoVerdict
   | UnexpectedVerdictError;
 
@@ -74,8 +90,11 @@ export type PhaseError =
  * A `SessionTimedOut` / `NoVerdict` / `BudgetExhausted` consumed the session
  * without a verdict → `stall`. An `UnexpectedVerdictError` is a diff-correlated
  * emission glitch that recurs on resume → `stall`. A `TmuxError` / `WorkspaceError`
- * is an environment cut-off, the issue innocent → `interruption`. A `PromptError`
- * is a deploy bug affecting every issue → `fatal` (crash the run).
+ * is an environment cut-off, the issue innocent → `interruption`. A `UsageLimitHit`
+ * is an exhausted plan limit, not the issue's content → `interruption` (so it
+ * resets the consecutive-stall run and never pushes a good issue toward
+ * `STALL_CAP`). A `PromptError` is a deploy bug affecting every issue → `fatal`
+ * (crash the run).
  */
 export const fateOfPhaseError = (error: PhaseError): Fate => {
   switch (error._tag) {
@@ -86,7 +105,8 @@ export const fateOfPhaseError = (error: PhaseError): Fate => {
       return "stall";
     }
     case "TmuxError":
-    case "WorkspaceError": {
+    case "WorkspaceError":
+    case "UsageLimitHit": {
       return "interruption";
     }
     case "PromptError": {
@@ -120,6 +140,9 @@ export const describePhaseError = (error: PhaseError): string => {
     }
     case "SessionTimedOut": {
       return `timed out after ${Math.round(error.elapsedMs / MS_PER_SECOND)}s without a verdict`;
+    }
+    case "UsageLimitHit": {
+      return `Claude usage limit hit${error.resetText === undefined ? "" : ` — ${error.resetText}`}`;
     }
     case "NoVerdict": {
       return `stopped without a clean verdict (got: ${error.captured.slice(0, MAX_CAPTURED_CHARS)})`;

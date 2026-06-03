@@ -8,12 +8,17 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
-import { Effect, Fiber, Random, TestClock, TestContext } from "effect";
+import { Effect, Fiber, Random, Ref, TestClock, TestContext } from "effect";
 import { SENTINEL_POLL_MS } from "../config";
 import { buildRunArtifacts, RunArtifacts } from "../run-artifacts";
-import { NoVerdict, SessionTimedOut } from "./errors";
+import { NoVerdict, SessionTimedOut, UsageLimitHit } from "./errors";
 import { runPhaseSession } from "./phase";
-import { pollSentinel, recoverNoVerdictOnce, writeStopHookConfig } from "./phase-primitives";
+import {
+  pollSentinel,
+  recoverNoVerdictOnce,
+  USAGE_LIMIT_SCAN_EVERY_TICKS,
+  writeStopHookConfig,
+} from "./phase-primitives";
 import type { VerdictToken } from "./verdict";
 
 const ABSENT_SENTINEL = "/kirby-bot-test-no-such-sentinel-xyz.flag";
@@ -23,7 +28,15 @@ describe("pollSentinel under a virtual clock", () => {
     const timeoutMs = SENTINEL_POLL_MS * 3;
     const program = Effect.gen(function* () {
       const fiber = yield* Effect.fork(
-        pollSentinel({ phase: "implementation", sentinel: ABSENT_SENTINEL, startedAt: 0, timeoutMs }),
+        pollSentinel({
+          phase: "implementation",
+          session: "kirby-test-no-session",
+          sentinel: ABSENT_SENTINEL,
+          startedAt: 0,
+          timeoutMs,
+          // Pane never shows the limit dialog — keeps this a pure timeout test.
+          capture: Effect.succeed(""),
+        }),
       );
       // One push past the budget: every queued poll sleep fires in sequence
       // until the elapsed-time predicate trips. A real clock could not do this
@@ -34,6 +47,63 @@ describe("pollSentinel under a virtual clock", () => {
 
     const error = await Effect.runPromise(program);
     expect(error._tag).toBe("SessionTimedOut");
+  });
+
+  it("fails UsageLimitHit (not SessionTimedOut) when the pane shows the dialog before the sentinel", async () => {
+    // Budget far larger than the time we advance, so a timeout cannot win the
+    // race — the only way out is the throttled usage-limit scan.
+    const timeoutMs = SENTINEL_POLL_MS * 100;
+    const dialog = [
+      "⎿  You've hit your Sonnet limit · resets Jun 1 at 2am (Europe/Paris)",
+      " ❯ 1. Stop and wait for limit to reset",
+      " Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const program = Effect.gen(function* () {
+      const fiber = yield* Effect.fork(
+        pollSentinel({
+          phase: "implementation",
+          session: "kirby-test-usage-limit",
+          sentinel: ABSENT_SENTINEL,
+          startedAt: 0,
+          timeoutMs,
+          capture: Effect.succeed(dialog),
+        }),
+      );
+      // Advance just past the first throttled scan tick (every 5th poll).
+      yield* TestClock.adjust(`${SENTINEL_POLL_MS * USAGE_LIMIT_SCAN_EVERY_TICKS} millis`);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.flip, Effect.provide(TestContext.TestContext));
+
+    const error = await Effect.runPromise(program);
+    expect(error._tag).toBe("UsageLimitHit");
+    expect((error as UsageLimitHit).resetText).toBe("resets Jun 1 at 2am (Europe/Paris)");
+  });
+
+  it("does not scan the pane before the throttle interval elapses", async () => {
+    const timeoutMs = SENTINEL_POLL_MS * 100;
+    const dialog = "Stop and wait for limit to reset\nEnter to confirm";
+    const program = Effect.gen(function* () {
+      const scans = yield* Ref.make(0);
+      const capture = Ref.update(scans, (n) => n + 1).pipe(Effect.as(dialog));
+      const fiber = yield* Effect.fork(
+        pollSentinel({
+          phase: "implementation",
+          session: "kirby-test-throttle",
+          sentinel: ABSENT_SENTINEL,
+          startedAt: 0,
+          timeoutMs,
+          capture,
+        }),
+      );
+      // Advance only 4 ticks — one short of the first scan tick (the 5th).
+      yield* TestClock.adjust(`${SENTINEL_POLL_MS * (USAGE_LIMIT_SCAN_EVERY_TICKS - 1)} millis`);
+      const scanCount = yield* Ref.get(scans);
+      yield* Fiber.interrupt(fiber);
+      return scanCount;
+    }).pipe(Effect.provide(TestContext.TestContext));
+
+    const scanCount = await Effect.runPromise(program);
+    expect(scanCount).toBe(0);
   });
 });
 

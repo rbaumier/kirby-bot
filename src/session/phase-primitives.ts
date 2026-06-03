@@ -28,9 +28,17 @@ import { SENTINEL_POLL_MS } from "../config";
 import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
 import type { TmuxError } from "./errors";
-import { NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
+import { NoVerdict, SessionTimedOut, UsageLimitHit, WorkspaceError } from "./errors";
 import { AGENT_SENTINEL_VAR, sessionStartHookSettings, stopHookSettings } from "./sentinel-contract";
-import { bootClaudeSession, createSession, killSession, repromptForVerdict } from "./tmux";
+import {
+  bootClaudeSession,
+  capturePane,
+  createSession,
+  killSession,
+  paneShowsUsageLimit,
+  repromptForVerdict,
+} from "./tmux";
+import { extractUsageLimitResetText } from "./usage-limit";
 import type { VerdictToken } from "./verdict";
 import { parseVerdict } from "./verdict";
 
@@ -106,45 +114,84 @@ export const writeStopHookConfig = (
       new WorkspaceError({ phase, operation: "write the Stop-hook config", reason: String(cause) }),
   });
 
+/**
+ * Scan the pane for the usage-limit dialog every Nth poll tick rather than
+ * every tick (issue #77). At {@link SENTINEL_POLL_MS}=5s this is a ~25s cadence
+ * — fast enough to reclaim an idle that would otherwise burn the whole phase
+ * cap, yet 5× fewer `capture-pane` shell-outs than the sentinel existence check,
+ * so 20 concurrent fan-out sessions do not re-create the tmux-server backlog of
+ * issue #30.
+ */
+export const USAGE_LIMIT_SCAN_EVERY_TICKS = 5;
+
 /** Input for {@link pollSentinel}. */
 export type PollSentinelInput = {
   readonly phase: Phase;
+  /** Session name — captured each throttled tick to scan for the limit dialog. */
+  readonly session: string;
   readonly sentinel: string;
   readonly startedAt: number;
   readonly timeoutMs: number;
+  /**
+   * Pane-capture Effect, defaulting to {@link capturePane} of `session`.
+   * Injected only by tests so the usage-limit scan can replay scripted pane
+   * frames without a live tmux server (mirrors {@link pollPaneUntil}).
+   */
+  readonly capture?: Effect.Effect<string>;
 };
 
 /**
  * Poll `sentinel` every {@link SENTINEL_POLL_MS} until it appears
  * or the timeout elapses. Returns the verdict, or fails with
- * {@link SessionTimedOut} / {@link NoVerdict}.
+ * {@link SessionTimedOut} / {@link NoVerdict} / {@link UsageLimitHit}.
+ *
+ * Every {@link USAGE_LIMIT_SCAN_EVERY_TICKS}th tick the captured pane is
+ * scanned for the blocking Claude usage-limit dialog; on a match the poll fails
+ * fast with {@link UsageLimitHit} (an `interruption`) instead of idling to the
+ * cap and surfacing {@link SessionTimedOut} hours later (issue #77).
  *
  * Killing the tmux session is not this function's job. The bracket
  * in {@link runOneClaudeSession} owns the session and kills it on every exit.
  */
 export const pollSentinel = (
   input: PollSentinelInput,
-): Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError> =>
+): Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError | UsageLimitHit> =>
   Effect.gen(function* () {
-    const { phase, sentinel, startedAt, timeoutMs } = input;
+    const { phase, session, sentinel, startedAt, timeoutMs } = input;
+    const capture = input.capture ?? capturePane(session);
 
     // Stack-safe poll loop: sleep one interval per tick until the
     // sentinel appears or the timeout elapses. The interruptible
     // sleep also lets a Ctrl-C unwind the wait promptly. The loop
-    // carries the current time as its state — read from `Clock`, not
-    // `Date.now()` — so a virtual clock controls both the sleep and
-    // the elapsed-time predicate together.
-    const lastNow = yield* Effect.iterate(yield* Clock.currentTimeMillis, {
-      while: (now) => !existsSync(sentinel) && now - startedAt <= timeoutMs,
-      body: () =>
-        Effect.gen(function* () {
-          yield* Effect.sleep(`${SENTINEL_POLL_MS} millis`);
-          return yield* Clock.currentTimeMillis;
-        }),
-    });
+    // carries the current time and a tick counter as its state — time is
+    // read from `Clock`, not `Date.now()`, so a virtual clock controls the
+    // sleep, the elapsed-time predicate, and the throttled scan together.
+    const last = yield* Effect.iterate(
+      { now: yield* Clock.currentTimeMillis, tick: 0 },
+      {
+        while: (state) => !existsSync(sentinel) && state.now - startedAt <= timeoutMs,
+        body: (state) =>
+          Effect.gen(function* () {
+            yield* Effect.sleep(`${SENTINEL_POLL_MS} millis`);
+            const tick = state.tick + 1;
+            // Throttled scan for the usage-limit dialog. A match fails the
+            // whole poll — the bracket then kills the session immediately.
+            if (tick % USAGE_LIMIT_SCAN_EVERY_TICKS === 0) {
+              const pane = yield* capture;
+              if (paneShowsUsageLimit(pane)) {
+                const resetText = extractUsageLimitResetText(pane);
+                return yield* Effect.fail(
+                  new UsageLimitHit({ phase, ...(resetText === undefined ? {} : { resetText }) }),
+                );
+              }
+            }
+            return { now: yield* Clock.currentTimeMillis, tick };
+          }),
+      },
+    );
 
     if (!existsSync(sentinel)) {
-      return yield* Effect.fail(new SessionTimedOut({ phase, elapsedMs: lastNow - startedAt }));
+      return yield* Effect.fail(new SessionTimedOut({ phase, elapsedMs: last.now - startedAt }));
     }
 
     const message = yield* Effect.tryPromise({
@@ -172,9 +219,13 @@ export const pollSentinel = (
  * Effect (re-checking the sentinel from scratch), not an already-forced result.
  */
 export const recoverNoVerdictOnce = <R, RP>(
-  poll: Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError, R>,
+  poll: Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError | UsageLimitHit, R>,
   reprompt: Effect.Effect<void, TmuxError | WorkspaceError, RP>,
-): Effect.Effect<VerdictToken, SessionTimedOut | NoVerdict | WorkspaceError | TmuxError, R | RP> =>
+): Effect.Effect<
+  VerdictToken,
+  SessionTimedOut | NoVerdict | WorkspaceError | TmuxError | UsageLimitHit,
+  R | RP
+> =>
   poll.pipe(Effect.catchTag("NoVerdict", () => reprompt.pipe(Effect.zipRight(poll))));
 
 /**
@@ -251,7 +302,7 @@ export const runOneClaudeSession = (
   input: RunOneClaudeSessionInput,
 ): Effect.Effect<
   VerdictToken,
-  TmuxError | SessionTimedOut | NoVerdict | WorkspaceError,
+  TmuxError | SessionTimedOut | NoVerdict | WorkspaceError | UsageLimitHit,
   RunArtifacts
 > =>
   Effect.gen(function* () {
@@ -323,7 +374,7 @@ export const runOneClaudeSession = (
             yield* repromptForVerdict(session);
           });
           const verdict = yield* recoverNoVerdictOnce(
-            pollSentinel({ phase, sentinel, startedAt, timeoutMs }),
+            pollSentinel({ phase, session, sentinel, startedAt, timeoutMs }),
             reprompt,
           );
           const totalMs = (yield* Clock.currentTimeMillis) - startedAt;

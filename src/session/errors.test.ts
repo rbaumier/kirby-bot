@@ -12,8 +12,10 @@ import {
   SessionTimedOut,
   TmuxError,
   UnexpectedVerdictError,
+  UsageLimitHit,
   WorkspaceError,
   describePhaseError,
+  fateOfPhaseError,
 } from "./errors";
 
 describe("describePhaseError", () => {
@@ -63,6 +65,37 @@ describe("describePhaseError", () => {
     const error = new NoVerdict({ phase: "fix", captured: "all good" });
     expect(describePhaseError(error)).toBe(
       "stopped without a clean verdict (got: all good)",
+    );
+  });
+
+  it("formats UsageLimitHit with the captured reset clause", () => {
+    const error = new UsageLimitHit({
+      phase: "implementation",
+      resetText: "resets Jun 1 at 2am (Europe/Paris)",
+    });
+    expect(describePhaseError(error)).toBe(
+      "Claude usage limit hit — resets Jun 1 at 2am (Europe/Paris)",
+    );
+  });
+
+  it("formats UsageLimitHit without a reset clause when the header scrolled out", () => {
+    const error = new UsageLimitHit({ phase: "review" });
+    expect(describePhaseError(error)).toBe("Claude usage limit hit");
+  });
+});
+
+describe("fateOfPhaseError", () => {
+  it("maps UsageLimitHit to interruption (an exhausted plan limit is not a stall)", () => {
+    expect(fateOfPhaseError(new UsageLimitHit({ phase: "implementation" }))).toBe("interruption");
+  });
+
+  it("keeps SessionTimedOut a stall", () => {
+    expect(fateOfPhaseError(new SessionTimedOut({ phase: "review", elapsedMs: 1 }))).toBe("stall");
+  });
+
+  it("keeps TmuxError an interruption", () => {
+    expect(fateOfPhaseError(new TmuxError({ step: "new-session", stderr: "x" }))).toBe(
+      "interruption",
     );
   });
 });
