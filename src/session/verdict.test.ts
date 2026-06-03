@@ -6,6 +6,10 @@ describe("parseVerdict", () => {
     expect(parseVerdict("did the work\nVERDICT: READY_FOR_REVIEW")).toBe("READY_FOR_REVIEW");
   });
 
+  it("parses the plan-gate PLAN_DONE verdict (#75)", () => {
+    expect(parseVerdict("plan approved\nVERDICT: PLAN_DONE")).toBe("PLAN_DONE");
+  });
+
   for (const token of VERDICT_TOKENS) {
     it(`accepts known token ${token}`, () => {
       expect(parseVerdict(`summary line\nVERDICT: ${token}`)).toBe(token);

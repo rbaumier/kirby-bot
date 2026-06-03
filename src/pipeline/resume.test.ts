@@ -28,7 +28,13 @@ const openDraftMr: State = {
 
 describe("checkpointAfter", () => {
   test("implementation → open_draft_mr marks implementation finished", () => {
-    const from: State = { kind: "implementation", issue, branch: "afk/issue-1", worktree: "/w" };
+    const from: State = {
+      kind: "implementation",
+      issue,
+      branch: "afk/issue-1",
+      worktree: "/w",
+      plan: "approved approach",
+    };
     expect(checkpointAfter(from, openDraftMr)).toEqual({ phase: "open_draft_mr", fixCycles: 0 });
   });
 

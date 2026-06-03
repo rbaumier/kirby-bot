@@ -65,10 +65,22 @@ export type State =
       readonly worktree: string;
     }
   | {
+      readonly kind: "plan";
+      readonly issue: IssueRef;
+      readonly branch: string;
+      readonly worktree: string;
+    }
+  | {
       readonly kind: "implementation";
       readonly issue: IssueRef;
       readonly branch: string;
       readonly worktree: string;
+      /**
+       * The approach the `plan` phase vetted and the in-session reviewer
+       * approved, threaded forward so the implementer follows the agreed plan
+       * instead of re-planning from scratch (#75).
+       */
+      readonly plan: string;
     }
   | {
       readonly kind: "open_draft_mr";

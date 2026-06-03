@@ -55,8 +55,25 @@ describe("endFieldsOf", () => {
       issue,
       branch: "issue-42",
       worktree: "/wt/42",
+      plan: "approved approach",
     };
     expect(endFieldsOf(runImpl)).toEqual({
+      issue,
+      branch: "issue-42",
+      worktree: "/wt/42",
+      pullRequestIid: null,
+      fixCycles: null,
+    });
+  });
+
+  it("plan exposes branch + worktree (pullRequestIid + fixCycles stay null)", () => {
+    const plan: Extract<State, { kind: "plan" }> = {
+      kind: "plan",
+      issue,
+      branch: "issue-42",
+      worktree: "/wt/42",
+    };
+    expect(endFieldsOf(plan)).toEqual({
       issue,
       branch: "issue-42",
       worktree: "/wt/42",

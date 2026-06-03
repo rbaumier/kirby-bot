@@ -328,8 +328,8 @@ export const onBranchCreate = (
   });
 
 /**
- * Branch_push — push the freshly-created branch to origin, then either run
- * `implementation` (fresh) or skip straight to `open_draft_mr` (resume, #73).
+ * Branch_push — push the freshly-created branch to origin, then either run the
+ * `plan` gate (fresh) or skip straight to `open_draft_mr` (resume, #73).
  *
  * A resume checkpoint here means a prior attempt already finished (or salvaged)
  * `implementation`: by the invariant, a fresh start clears the checkpoint, so
@@ -371,5 +371,5 @@ export const onBranchPush = (
       );
       return { kind: "open_draft_mr", issue, branch, worktree, deadline };
     }
-    return { kind: "implementation", issue, branch, worktree };
+    return { kind: "plan", issue, branch, worktree };
   });

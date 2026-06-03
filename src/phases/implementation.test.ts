@@ -63,6 +63,7 @@ const implState: Extract<State, { kind: "implementation" }> = {
   issue: { iid: 42, title: "Test issue", body: "body" },
   branch: "afk/issue-42-test",
   worktree: "/wt/42",
+  plan: "approved approach",
 };
 
 const env = { repoName: "test-repo", defaultBranch: "main" };

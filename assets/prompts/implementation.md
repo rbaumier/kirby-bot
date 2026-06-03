@@ -13,6 +13,15 @@ Title: {title}
 {body}
 </issue>
 
+## Approved plan
+
+The `plan` phase already vetted the approach below with an independent reviewer
+and approved it. Follow it — it is the agreed approach, not a suggestion. If
+real code forces a departure, deviate only as much as the issue requires and say
+why in your final summary.
+
+{plan}
+
 ## Preflight — before anything else
 
 `cd` into your worktree and verify you are in the right place:

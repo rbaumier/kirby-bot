@@ -18,18 +18,18 @@ export const LABELS = {
   failedByAgent: "failed-by-agent",
 } as const;
 
-/** The five pipeline phases — each runs as a fresh `claude` tmux session. */
-export const PHASES = ["implementation", "review", "evaluate", "fix", "qa"] as const;
+/** The six pipeline phases — each runs as a fresh `claude` tmux session. */
+export const PHASES = ["plan", "implementation", "review", "evaluate", "fix", "qa"] as const;
 
-/** One of the five session-driven pipeline phases. */
+/** One of the six session-driven pipeline phases. */
 export type Phase = (typeof PHASES)[number];
 
 /**
  * Claude tier each single-session phase runs on.
  *
- * Implementation, evaluate and fix are creative or judgment-heavy and stay on
- * Sonnet. The qa phase orchestrates dogfood-persona subagents that do the real
- * work in their own sessions, so the qa orchestrator runs on Haiku.
+ * Plan, implementation, evaluate and fix are creative or judgment-heavy and
+ * stay on Sonnet. The qa phase orchestrates dogfood-persona subagents that do
+ * the real work in their own sessions, so the qa orchestrator runs on Haiku.
  *
  * `review` is deliberately absent: it has no single orchestrator session. The
  * review phase fans out one `claude` session per agent (see
@@ -42,6 +42,7 @@ export type Phase = (typeof PHASES)[number];
  * `runPhaseSession` — the model is no longer hard-coded.
  */
 export const PHASE_MODELS: Record<Exclude<Phase, "review">, AgentModel> = {
+  plan: "sonnet",
   implementation: "sonnet",
   evaluate: "sonnet",
   fix: "sonnet",
@@ -94,13 +95,17 @@ export const selectReviewModel = (iteration: number, diffBytes: number): AgentMo
  * *secondary* guard: they stop a single hung phase from silently eating the
  * whole budget. `implementation` carries by far the largest cap — implementation is
  * the heavy phase and a hard issue can legitimately run for hours — while the
- * review/evaluate/fix/qa loop stays tight. Their sum (315) deliberately
+ * plan/review/evaluate/fix/qa loop stays tight. Their sum (330) deliberately
  * exceeds the budget, so a healthy run never reaches every cap.
+ *
+ * `plan` carries 15: the plan gate is a cheap approach-vetting pass (a
+ * lightweight plan plus one in-session reviewer subagent), not a coding phase.
  *
  * `fix` carries 45 (not 30): a multi-file fix on a large diff routinely runs
  * past 30 min, and a hard kill there discards the whole review+fix pass (#42).
  */
 export const PHASE_CAP_MINUTES: Record<Phase, number> = {
+  plan: 15,
   implementation: 180,
   review: 35,
   evaluate: 30,
