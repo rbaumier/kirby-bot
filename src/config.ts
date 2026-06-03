@@ -131,6 +131,32 @@ export const ISSUE_BUDGET_MS = 240 * 60 * 1000;
  */
 export const STALE_CLAIM_MS = ISSUE_BUDGET_MS + 30 * 60 * 1000;
 
+/**
+ * Fixed back-off when a Claude usage-limit hit's reset time cannot be parsed
+ * (#78). On a `null` from `parseUsageLimitReset`, the orchestrator pauses this
+ * long before the next `fetch_queue` instead of spinning straight back into the
+ * exhausted limit or assuming "now". One hour is conservative: short enough that
+ * a recovered limit is picked up within the hour, long enough that the loop does
+ * not re-hit the wall in a tight cycle. The unparseable case is also logged
+ * loudly so a new dialog phrasing gets a parser case.
+ */
+export const USAGE_LIMIT_BACKOFF_FALLBACK_MS = 60 * 60 * 1000;
+
+/**
+ * Margin added past the parsed reset instant before the orchestrator resumes
+ * (#78), absorbing clock skew between the local host and Anthropic so the next
+ * session does not race the reset and re-hit the limit by a few seconds.
+ */
+export const USAGE_LIMIT_BACKOFF_MARGIN_MS = 2 * 60 * 1000;
+
+/**
+ * Floor on the usage-limit back-off (#78). A reset already in the past (clock
+ * skew, or a capture processed after the reset) yields a non-positive sleep;
+ * clamping to this small minimum makes the loop proceed effectively at once
+ * rather than compute a negative or zero sleep.
+ */
+export const USAGE_LIMIT_BACKOFF_MIN_MS = 1000;
+
 /** How often the orchestrator polls a phase's sentinel file. */
 export const SENTINEL_POLL_MS = 5000;
 

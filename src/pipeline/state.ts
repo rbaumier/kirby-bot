@@ -90,5 +90,14 @@ export type State =
     }
   | ({ readonly kind: "failed" } & EndStateFields)
   | ({ readonly kind: "stalled" } & EndStateFields)
-  | ({ readonly kind: "interrupted" } & EndStateFields)
+  | ({ readonly kind: "interrupted" } & EndStateFields & {
+      /**
+       * When this interruption was a Claude usage-limit hit, the captured
+       * "resets <date> at <time> (<tz>)" substring; the orchestrator parses it
+       * and backs off until the limit returns before the next `fetch_queue`
+       * (#78). `null` for every other interruption cause. Populated by the seam
+       * from `HandlerError.usageLimitResetText`, which #77's detection sets.
+       */
+      readonly usageLimitResetText: string | null;
+    })
   | { readonly kind: "end" };

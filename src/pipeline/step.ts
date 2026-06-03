@@ -398,13 +398,18 @@ export const step = (
         // A deploy bug (missing prompt, bad auth): crash the run, do not park the issue.
         return Effect.die(`fatal: ${error.reason}`);
       }
-      const kind =
-        error.fate === "failure" ? "failed" : error.fate === "stall" ? "stalled" : "interrupted";
-      return Effect.succeed({
-        kind,
-        ...endFieldsOf(current),
-        reason: error.reason,
-      });
+      const endFields = { ...endFieldsOf(current), reason: error.reason };
+      if (error.fate === "interruption") {
+        // A usage-limit hit is an interruption carrying the reset substring; the
+        // machine reads it off the `interrupted` state to back off (#78). Every
+        // other interruption leaves it null.
+        return Effect.succeed({
+          kind: "interrupted",
+          ...endFields,
+          usageLimitResetText: error.usageLimitResetText ?? null,
+        });
+      }
+      return Effect.succeed({ kind: error.fate === "failure" ? "failed" : "stalled", ...endFields });
     }),
   );
 };
