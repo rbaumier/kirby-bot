@@ -28,6 +28,15 @@ import { join } from "node:path";
  */
 export const AGENT_SENTINEL_VAR = "AGENT_SENTINEL";
 
+/**
+ * Env-var name the SessionStart hook's ready-marker path is passed through.
+ * Mirrors {@link AGENT_SENTINEL_VAR}: the hook command references it as
+ * `"$AGENT_READY"` and each session exports its own value before launching
+ * `claude`, so one shared `settings.local.json` is correct for N parallel
+ * sessions in the same worktree (per-agent fan-out).
+ */
+export const AGENT_READY_VAR = "AGENT_READY";
+
 /** Absolute path to the Stop-hook handler script — sibling of this module. */
 export const STOP_HOOK_SCRIPT = join(import.meta.dirname, "stop-hook.ts");
 
@@ -64,3 +73,23 @@ export const stopHookSettings = (): Record<string, readonly HookEntry[]> => {
   ];
   return Object.fromEntries(STOP_HOOK_EVENTS.map((event) => [event, entry]));
 };
+
+/**
+ * The shell command Claude Code runs on `SessionStart` — once the interactive
+ * TUI is up and ready for keystrokes. Reads the per-session ready-marker path
+ * from `$AGENT_READY` and writes `ready` into it. No payload parsing is needed
+ * (unlike the Stop hook), so an inline shell command run through Claude Code's
+ * shell is enough — no separate `.ts` script. The path is double-quoted — the
+ * command runs through a shell and the marker path may contain spaces.
+ */
+export const sessionStartHookCommand = (): string => `printf ready > "$${AGENT_READY_VAR}"`;
+
+/**
+ * The `hooks` fragment to merge into a worktree's `settings.local.json`: our
+ * readiness hook registered for `SessionStart`, writing the marker
+ * {@link sessionStartHookCommand} polls for. Kept separate from
+ * {@link stopHookSettings} so each contract test stays stable.
+ */
+export const sessionStartHookSettings = (): Record<string, readonly HookEntry[]> => ({
+  SessionStart: [{ matcher: "", hooks: [{ type: "command", command: sessionStartHookCommand() }] }],
+});

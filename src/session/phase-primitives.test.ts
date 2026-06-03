@@ -158,7 +158,11 @@ describe("writeStopHookConfig merges into an existing settings.local.json", () =
       expect(settings.permissions).toEqual({ allow: ["Bash(git status)"] });
       expect(settings.hooks.Stop).toHaveLength(1);
       expect(settings.hooks.StopFailure).toHaveLength(1);
+      expect(settings.hooks.SessionStart).toHaveLength(1);
       expect(firstCommand(settings.hooks.Stop)).toContain("stop-hook.ts");
+      // The SessionStart readiness hook (issue #76) writes the per-session
+      // marker bootClaudeSession polls for, dispatched via $AGENT_READY.
+      expect(firstCommand(settings.hooks.SessionStart)).toContain("$AGENT_READY");
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }

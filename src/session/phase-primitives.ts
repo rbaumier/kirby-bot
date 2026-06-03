@@ -29,19 +29,24 @@ import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
 import type { TmuxError } from "./errors";
 import { NoVerdict, SessionTimedOut, WorkspaceError } from "./errors";
-import { AGENT_SENTINEL_VAR, stopHookSettings } from "./sentinel-contract";
+import { AGENT_SENTINEL_VAR, sessionStartHookSettings, stopHookSettings } from "./sentinel-contract";
 import { bootClaudeSession, createSession, killSession, repromptForVerdict } from "./tmux";
 import type { VerdictToken } from "./verdict";
 import { parseVerdict } from "./verdict";
 
 /**
- * Write the Claude Code Stop-hook config into a worktree's `.claude/`.
+ * Write the Claude Code Stop-hook + SessionStart-readiness config into a
+ * worktree's `.claude/`.
  *
- * The hook command reads its sentinel path from `$AGENT_SENTINEL` rather than
- * a hard-coded argument so a single shared `settings.local.json` is correct
+ * Two hooks are registered. The Stop hook captures the Verdict; the
+ * `SessionStart` hook writes a per-session ready-marker once the interactive
+ * TUI is up and accepting keystrokes, which {@link bootClaudeSession} polls for
+ * instead of screen-scraping the pane (issue #76). Both read their per-session
+ * path from an env var (`$AGENT_SENTINEL` / `$AGENT_READY`) rather than a
+ * hard-coded argument so a single shared `settings.local.json` is correct
  * for N parallel `claude` sessions in the same worktree (per-agent fan-out):
- * each session exports its own `AGENT_SENTINEL` before launching `claude`,
- * which propagates to the Stop hook subprocess via standard env inheritance.
+ * each session exports its own values before launching `claude`,
+ * which propagates to the hook subprocess via standard env inheritance.
  * Verified empirically that `--settings <file>` does NOT load Stop hooks —
  * only the cwd-discovered `.claude/settings.local.json` does — so env-var
  * dispatch is the only mechanism that scales to fan-out without per-agent
@@ -93,7 +98,7 @@ export const writeStopHookConfig = (
         typeof existing.hooks === "object" && existing.hooks !== null ? existing.hooks : {};
       const merged = {
         ...existing,
-        hooks: { ...existingHooks, ...stopHookSettings() },
+        hooks: { ...existingHooks, ...stopHookSettings(), ...sessionStartHookSettings() },
       };
       await writeFile(settingsPath, JSON.stringify(merged, null, 2));
     },
@@ -253,14 +258,21 @@ export const runOneClaudeSession = (
     const artifacts = yield* RunArtifacts;
     const { phase, worktree, session, tmuxLogPath, promptFile, sentinel, timeoutMs, logContext } =
       input;
+    // Per-session ready-marker the SessionStart hook writes — derived from the
+    // (already per-session unique) sentinel path, so no new public input field
+    // is needed and fan-out stays collision-free.
+    const readyPath = `${sentinel}.ready`;
     const prefix = logPrefix(phase, logContext);
     const baseEvent = baseEventFields(phase, logContext);
 
     yield* artifacts.logEvent({ event: "session_starting", ...baseEvent, session, timeoutMs });
     yield* Console.log(`${prefix} session starting (budget ${formatDuration(timeoutMs)})`);
 
-    // Clear any stale session of the same name from a crashed prior run.
+    // Clear any stale session of the same name from a crashed prior run, plus
+    // any stale ready-marker — otherwise the SessionStart poll would resolve
+    // instantly on a leftover marker and paste before this boot's TUI is up.
     yield* killSession(session);
+    yield* Effect.tryPromise(() => rm(readyPath, { force: true })).pipe(Effect.ignore);
 
     let startedAt = 0;
 
@@ -276,6 +288,9 @@ export const runOneClaudeSession = (
             session,
             tmuxLogPath,
             promptFile,
+            // bootClaudeSession folds readyPath into the exported env as
+            // AGENT_READY (for the SessionStart hook) and polls it for readiness.
+            readyPath,
             // The Stop hook reads AGENT_SENTINEL — single-session phases get
             // the same env var as fan-out, each with one value.
             env: { [AGENT_SENTINEL_VAR]: sentinel },

@@ -7,10 +7,12 @@
  * so the lifecycle composes cleanly into the `acquireUseRelease`
  * bracket in phase.ts.
  */
+import { existsSync } from "node:fs";
 import { $ } from "bun";
 import { Console, Duration, Effect } from "effect";
 import { describeShellError, runShell } from "../shell";
 import { TmuxError } from "./errors";
+import { AGENT_READY_VAR } from "./sentinel-contract";
 
 /**
  * Run one tmux command, failing {@link TmuxError} on a non-zero exit.
@@ -97,43 +99,30 @@ export const pollPaneUntil = (
     },
   ).pipe(Effect.map((state) => state.ready));
 
-/**
- * The claude TUI's input prompt box: a bordered box whose content line carries
- * the `>` prompt (`│ > …`), rendered once the REPL is ready to accept input.
- *
- * Unlike pane *stability*, this is a *positive* readiness signal. The old "two
- * identical ticks" heuristic declared readiness on quiescence, so any churn
- * during boot — a spinner animation, an "Update available" npm banner, a
- * MOTD/banner redraw, a responsive relayout, a system notification — kept the
- * pane changing until the 20-tick cap elapsed, after which it pasted into a
- * not-yet-ready pane and the prompt was eaten (issue #25). Waiting for the
- * prompt box to actually appear is immune to all of those: they churn the pane
- * but never render this line. The boxed welcome banner carries no prompt, so it
- * does not match.
- *
- * Caveat: this matches a `│ >` prompt line *anywhere* in the pane, which is
- * sound only on a fresh boot (the sole caller, {@link bootClaudeSession}, always
- * launches a clean `claude` — no transcript in the pane). A future `--resume`
- * caller could restore a transcript whose rendered content carries `│ >`,
- * matching before the live REPL is ready; anchor to the live input box if that
- * path is ever added.
- */
-const TUI_PROMPT_RE = /│\s*>/;
-export const paneShowsTuiReady = (pane: string): boolean => TUI_PROMPT_RE.test(pane);
-
 /** Bounded readiness poll before paste; on cap we proceed anyway (never hang). */
-const TUI_READY_MAX_TICKS = 60;
+const READY_MAX_TICKS = 60;
 
 /**
  * Wait for the `claude` TUI to be ready to accept input before pasting into it.
- * Polls the pane once a second for the input prompt box
- * ({@link paneShowsTuiReady}); on the cap it proceeds anyway rather than hang
- * forever — a wrong/absent marker therefore degrades to the pre-#25 "proceed
- * after cap" behaviour, never worse, and the paste-delivery check in
- * {@link loadAndPastePrompt} still guards against pasting into a dead pane.
+ *
+ * Instead of screen-scraping the pane for a rendered prompt box — a cosmetic
+ * heuristic that broke on any boot-time churn that redraws without the input
+ * box (an "Update available" banner, a MOTD, a spinner, a relayout — issue #25)
+ * — we trust a deterministic runtime signal: the `SessionStart` hook writes
+ * `readyPath` once the interactive TUI is up and accepting keystrokes (issue
+ * #76). We poll the filesystem for that marker by feeding the generic
+ * {@link pollPaneUntil} primitive a file-existence Effect in place of
+ * {@link capturePane}. On the cap it proceeds anyway rather than hang forever —
+ * an absent marker degrades to the pre-#25 "proceed after cap" behaviour, never
+ * worse, and the paste-delivery check in {@link loadAndPastePrompt} still guards
+ * against pasting into a dead pane.
  */
-const waitForTuiReady = (session: string): Effect.Effect<void> =>
-  pollPaneUntil(capturePane(session), paneShowsTuiReady, TUI_READY_MAX_TICKS).pipe(Effect.asVoid);
+export const waitForReadyMarker = (readyPath: string): Effect.Effect<void> =>
+  pollPaneUntil(
+    Effect.sync(() => (existsSync(readyPath) ? "1" : "")),
+    (s) => s === "1",
+    READY_MAX_TICKS,
+  ).pipe(Effect.asVoid);
 
 /**
  * Collapsed-paste marker the Claude TUI renders once a multi-line prompt has
@@ -205,6 +194,13 @@ type BootClaudeSessionInput = {
   readonly session: string;
   readonly tmuxLogPath: string;
   readonly promptFile: string;
+  /**
+   * Per-session ready-marker path. Exported into the tmux shell as
+   * `AGENT_READY` so the `SessionStart` hook writes it once the TUI is up, and
+   * polled by {@link waitForReadyMarker} to gate the paste — the deterministic
+   * replacement for the old pane-scrape readiness heuristic (issue #76).
+   */
+  readonly readyPath: string;
   /**
    * Env vars to export into the tmux shell *before* `claude` launches. Read by
    * the Stop-hook subprocess via standard inheritance — used to dispatch to a
@@ -278,22 +274,24 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
       "pipe-pane",
       () => $`tmux pipe-pane -t ${input.session} -O ${`cat >> "${input.tmuxLogPath}"`}`,
     );
-    if (input.env !== undefined) {
-      for (const [key] of Object.entries(input.env)) {
-        if (!ENV_KEY_RE.test(key)) {
-          yield* Effect.fail(
-            new TmuxError({ step: "export-env", stderr: `invalid env key: ${key}` }),
-          );
-        }
+    // Fold AGENT_READY into the exported env so the SessionStart hook subprocess
+    // inherits the per-session ready-marker path, exactly like AGENT_SENTINEL.
+    // readyPath is always present, so an export line always runs.
+    const env = { ...input.env, [AGENT_READY_VAR]: input.readyPath };
+    for (const key of Object.keys(env)) {
+      if (!ENV_KEY_RE.test(key)) {
+        yield* Effect.fail(
+          new TmuxError({ step: "export-env", stderr: `invalid env key: ${key}` }),
+        );
       }
-      const exports = Object.entries(input.env)
-        .map(([key, value]) => `export ${key}=${sqEscape(value)}`)
-        .join(" && ");
-      yield* tmuxStep(
-        "export-env",
-        () => $`tmux send-keys -t ${input.session} ${exports} Enter`,
-      );
     }
+    const exports = Object.entries(env)
+      .map(([key, value]) => `export ${key}=${sqEscape(value)}`)
+      .join(" && ");
+    yield* tmuxStep(
+      "export-env",
+      () => $`tmux send-keys -t ${input.session} ${exports} Enter`,
+    );
     let claudeCmd: string;
     try {
       claudeCmd = buildClaudeCmd(input.model, input.mcpConfigPath);
@@ -305,7 +303,7 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
       "start-claude",
       () => $`tmux send-keys -t ${input.session} ${claudeCmd} Enter`,
     );
-    yield* waitForTuiReady(input.session);
+    yield* waitForReadyMarker(input.readyPath);
     // Load + paste the prompt, verifying the paste actually landed before we
     // send Enter. See {@link loadAndPastePrompt} for the two races this guards
     // against (global-buffer cross-paste, async delivery under backlog — #30).
