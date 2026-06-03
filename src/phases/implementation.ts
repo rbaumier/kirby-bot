@@ -28,7 +28,7 @@ export const implementationPhase = (
   env: Environment,
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
-    const { issue, branch, worktree } = state;
+    const { issue, branch, worktree, plan } = state;
     const deadline = yield* freshDeadline;
 
     const verdict = yield* runPhaseSession(
@@ -44,6 +44,7 @@ export const implementationPhase = (
           branch,
           worktree,
           body: issue.body === "" ? "(no description)" : issue.body,
+          plan,
         },
       },
       ["READY_FOR_REVIEW", "BLOCKER_SUSPECTED"],

@@ -15,6 +15,7 @@ import { evaluatePhase } from "../phases/evaluate";
 import { fixPhase } from "../phases/fix";
 import { reviewPhase } from "../phases/review";
 import { qaPhase } from "../phases/qa";
+import { planPhase } from "../phases/plan";
 import { implementationPhase } from "../phases/implementation";
 import { LABELS } from "../config";
 import { GitProvider } from "../provider/provider";
@@ -237,6 +238,9 @@ const dispatchHandler = (
     case "branch_push": {
       return onBranchPush(current, env);
     }
+    case "plan": {
+      return planPhase(current);
+    }
     case "implementation": {
       return implementationPhase(current, env);
     }
@@ -303,6 +307,7 @@ export const endFieldsOf = (
       };
     }
     case "branch_push":
+    case "plan":
     case "implementation": {
       return {
         issue: state.issue,

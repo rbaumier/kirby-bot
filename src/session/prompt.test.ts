@@ -14,6 +14,7 @@ const RUN_IMPL_KEYS = {
   branch: "kirby/578-sort",
   worktree: "/tmp/kirby-test-worktree",
   body: "(no description)",
+  plan: "approved approach",
 };
 
 describe("renderPrompt", () => {

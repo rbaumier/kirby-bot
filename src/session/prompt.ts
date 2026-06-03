@@ -18,6 +18,7 @@ export type PromptablePhase = Exclude<Phase, "review">;
 
 /** The template file backing each promptable phase. */
 const TEMPLATE_FILE: Record<PromptablePhase, string> = {
+  plan: "plan.md",
   implementation: "implementation.md",
   evaluate: "evaluate.md",
   fix: "fix.md",
