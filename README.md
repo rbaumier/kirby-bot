@@ -15,7 +15,7 @@
 
 ---
 
-kirby-bot picks an issue off your GitLab board, spins up a fresh `claude` session in tmux for each phase of the work (implementation, review, evaluate, fix, qa), parses the verdict from the session, then opens an MR and merges it. If the reviewer disagrees, it loops back to `fix` until either the reviewer is satisfied or the cap is hit.
+kirby-bot picks an issue off your issue board, spins up a fresh `claude` session in tmux for each phase of the work (implementation, review, evaluate, fix, qa), parses the verdict from the session, then opens a pull request (a merge request on GitLab) and merges it. If the reviewer disagrees, it loops back to `fix` until either the reviewer is satisfied or the cap is hit.
 
 The bot is named after Kirby because, like Kirby, it eats issues whole and spits out merge requests.
 
@@ -130,9 +130,12 @@ bun install
 #    falls back to a shallow clone of rbaumier/skills for the rest. Idempotent.
 bun run setup-skills
 
-# 3. Check the prerequisites
+# 3. Check the prerequisites (env vars depend on $KIRBY_PROVIDER — see Configuration)
 which bun tmux claude
+# GitLab (default):
 test -n "$KIRBY_GITLAB_TOKEN" -a -n "$GITLAB_HOST" -a -n "$GITLAB_PROJECT_PATH" && echo "env set"
+# GitHub (KIRBY_PROVIDER=github):
+# test -n "$KIRBY_GITHUB_TOKEN" -a -n "$GITHUB_REPO" && echo "env set"
 
 # 4. Run
 bun run src/main.ts
