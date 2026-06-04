@@ -192,7 +192,7 @@ For the design rationale and the deeper docs:
 
 - [`CONTEXT.md`](CONTEXT.md) — living glossary. Canonical names for Phase / Verdict / Session / Provider / RunArtifacts / Module / Interface / Depth / Seam.
 - [`docs/provider-vocabulary.md`](docs/provider-vocabulary.md) — provider seam vocabulary (Issue, PullRequestRef, Discussion) and the GitLab/GitHub adapter asymmetries.
-- [`docs/2026-05-22-orchestrator-decomposition.md`](docs/2026-05-22-orchestrator-decomposition.md) — the decomposition into Phase / Session / Pipeline Modules.
+- [`docs/adr/`](docs/adr/) — architecture decision records (per-agent review, run-stats projection, line-anchored discussions, recovery).
 
 ## Scripts
 
