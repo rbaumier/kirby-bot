@@ -11,7 +11,7 @@
 ---
 
 > [!WARNING]
-> **Alpha — expect breaking changes.** kirby-bot is in early development and its API, configuration, and behavior will evolve significantly. Only **GitLab** is supported at the moment; GitHub (and other providers) are planned but not yet implemented.
+> **Alpha — expect breaking changes.** kirby-bot is in early development and its API, configuration, and behavior will evolve significantly. **GitLab** and **GitHub** are both supported; other providers are not yet implemented.
 
 ---
 
@@ -26,7 +26,7 @@ The bot is named after Kirby because, like Kirby, it eats issues whole and spits
 - **Self-healing fix loop** — `review` and `evaluate` decide whether to merge, fix, or fail. Up to `MAX_FIX_CYCLES` rounds before handing back to a human.
 - **Hard budgets** — a 90-minute wall-clock cap per issue, per-phase caps, and a 2-minute ceiling on every shell-out. No hung command can freeze the run.
 - **Run artifacts** — every run writes sentinel files, tmux logs, prompt files, and a structured `run.jsonl` to `~/.afk-runs/<run-id>/` for post-mortem.
-- **Provider seam** — the orchestrator talks to GitLab today through a clean `Provider` interface; GitHub support is the obvious next adapter.
+- **Provider seam** — the orchestrator talks to GitLab and GitHub through a clean `Provider` interface, selected at startup via `KIRBY_PROVIDER`.
 - **Crash recovery** — on startup, before reading the queue, the orchestrator releases issues whose `picked-by-agent` claim has gone stale (a crashed prior run), returning them to the queue.
 
 ## How it works
@@ -96,10 +96,17 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
   Missing a transitively-spawned skill won't crash the phase — the spawning subagent fails its own `Skill` load and that slot is dropped from the review object — but the review will be silently shallower than intended.
 
 > [!IMPORTANT]
-> **The GitLab connection is read from environment variables only** — no `glab` config file, no git-remote sniffing. All three are required, and a missing one fails fast at startup with a clear `ProviderConfigError`:
+> **The forge connection is read from environment variables only** — no `glab`/`gh` config file, no git-remote sniffing. `KIRBY_PROVIDER` selects the backend: `gitlab` (the default when unset) or `github`; any other value fails fast at startup with a clear `ProviderConfigError`. The chosen backend's variables are all required, and a missing one fails fast the same way.
+>
+> **GitLab** (`KIRBY_PROVIDER=gitlab`, or unset):
 > - `KIRBY_GITLAB_TOKEN` — a personal access token (PAT) with the `api` scope.
 > - `GITLAB_HOST` — the instance base URL, e.g. `https://gitlab.com`.
 > - `GITLAB_PROJECT_PATH` — the `owner/repo` project path.
+>
+> **GitHub** (`KIRBY_PROVIDER=github`):
+> - `KIRBY_GITHUB_TOKEN` — a personal access token (PAT) with the `repo` scope.
+> - `GITHUB_REPO` — the `owner/repo` slug.
+> - `GITHUB_HOST` — optional; defaults to `https://api.github.com`. Set it to a GitHub Enterprise base (e.g. `https://gh.corp.example/api/v3`) when needed.
 >
 > **OAuth2 tokens are not supported** — a single AFK run outlives their few-hour TTL. Create a long-lived PAT and export it before launching.
 > ```bash
@@ -163,7 +170,7 @@ src/
 ├── pipeline/            # state machine + handlers + the `step` seam
 ├── phases/              # the five interactive Phase Modules
 ├── session/             # tmux + Stop hook + sentinel + verdict parsing
-├── provider/            # forge adapter seam (GitLab today)
+├── provider/            # forge adapter seam (GitLab + GitHub)
 ├── recovery/            # startup stale-claim recovery sweep
 └── run-artifacts.ts     # per-run logs (run.jsonl, prompts, tmux output)
 
