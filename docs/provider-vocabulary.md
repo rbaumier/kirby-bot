@@ -1,12 +1,12 @@
 # Provider abstraction — vocabulary mapping & ADR
 
-This file is the seam between the bot core and any forge (GitLab today, GitHub next). It documents:
+This file is the seam between the bot core and any forge (GitLab and GitHub today). It documents:
 
 1. The vocabulary every operation borrows from when crossing the seam.
 2. The asymmetries between GitLab and GitHub the abstraction surfaces (not hides).
 3. The interface shape we picked and why.
 
-The interface itself lives in [`src/provider/provider.ts`](../src/provider/provider.ts); shared types in [`src/provider/types.ts`](../src/provider/types.ts). **No implementation lives behind this seam yet** — adapters arrive in issue #4 (GitLab) and issue #5 (GitHub).
+The interface itself lives in [`src/provider/provider.ts`](../src/provider/provider.ts); shared types in [`src/provider/types.ts`](../src/provider/types.ts). **Both adapters now live behind this seam** — [`src/provider/gitlab.ts`](../src/provider/gitlab.ts) and [`src/provider/github.ts`](../src/provider/github.ts), selected at startup by `KIRBY_PROVIDER` (see [`src/provider/select.ts`](../src/provider/select.ts)).
 
 ## 1. Vocabulary
 

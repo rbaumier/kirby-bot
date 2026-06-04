@@ -76,8 +76,8 @@ The full vocabulary (Phase / Verdict / Session / Provider / RunArtifacts / Modul
 - [Bun](https://bun.sh) ≥ 1.3.0
 - [`tmux`](https://github.com/tmux/tmux)
 - [`claude`](https://docs.claude.com/en/docs/claude-code) on your `$PATH`
-- A GitLab project with the orchestrator's labels configured (`ready-for-agent`, `picked-by-agent`, `failed-by-agent`, `code-review`, …)
-- A long-lived GitLab personal access token (`api` scope)
+- A GitLab or GitHub project with the orchestrator's labels configured (`ready-for-agent`, `picked-by-agent`, `failed-by-agent`, `code-review`, …)
+- A long-lived personal access token (GitLab `api` scope / GitHub `repo` scope)
 - The Claude Code skills the phase prompts (and their transitive fan-out) invoke via the `Skill` tool. All live in my [rbaumier/skills](https://github.com/rbaumier/skills) repo. The [Quick start](#quick-start) step `bun run setup-skills` populates them under `.claude/skills/` (project-scoped, which Claude Code resolves before `~/.claude/skills/`) — by symlinking from your `~/.claude/skills/` when present, or copying from a shallow clone of `rbaumier/skills` otherwise.
 
   **Directly invoked by the phase prompts:**
@@ -168,7 +168,7 @@ Phase prompts live in [`assets/prompts/`](assets/prompts) — one file per inter
 ```
 src/
 ├── main.ts              # entry point — preflight, then runMachine
-├── preflight.ts         # env + glab + tmux + claude checks
+├── preflight.ts         # tool (jq/tmux/claude/git) + git-repo checks
 ├── config.ts            # every tunable in one place
 ├── pipeline/            # state machine + handlers + the `step` seam
 ├── phases/              # the five interactive Phase Modules
