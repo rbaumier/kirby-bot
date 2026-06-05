@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseVerdict, VERDICT_TOKENS } from "./verdict";
+import { containsVerdictLine, parseVerdict, VERDICT_TOKENS } from "./verdict";
 
 describe("parseVerdict", () => {
   it("extracts a verdict that is the last line", () => {
@@ -77,5 +77,39 @@ describe("parseVerdict", () => {
 
   it("returns null on trailing content after the token on the verdict line", () => {
     expect(parseVerdict("done\nVERDICT: CONVERGED now")).toBeNull();
+  });
+});
+
+describe("containsVerdictLine", () => {
+  it("is true for a well-formed verdict line", () => {
+    expect(containsVerdictLine("done\nVERDICT: READY_FOR_REVIEW")).toBe(true);
+  });
+
+  it("is true even for an unknown token — validity is parseVerdict's job", () => {
+    // The Stop hook must still capture `VERDICT: DONE` so parseVerdict can
+    // reject the bad token and the orchestrator reprompts, rather than the
+    // hook silently dropping the agent's (malformed) attempt.
+    expect(containsVerdictLine("VERDICT: DONE")).toBe(true);
+    expect(parseVerdict("VERDICT: DONE")).toBeNull();
+  });
+
+  it("is true for a markdown-wrapped verdict line", () => {
+    expect(containsVerdictLine("MR créée\n**VERDICT: READY_FOR_REVIEW**")).toBe(true);
+  });
+
+  it("is true when two verdict lines appear (ambiguous for parse, present for capture)", () => {
+    // parseVerdict refuses to guess, but the line IS present — the hook should
+    // still prefer this message over a verdict-less trailing one.
+    expect(containsVerdictLine("VERDICT: NEEDS_FIX\nVERDICT: CONVERGED")).toBe(true);
+    expect(parseVerdict("VERDICT: NEEDS_FIX\nVERDICT: CONVERGED")).toBeNull();
+  });
+
+  it("is false for prose that merely mentions a token", () => {
+    expect(containsVerdictLine("it is not yet READY_FOR_REVIEW so I keep going")).toBe(false);
+  });
+
+  it("is false for empty or whitespace-only text", () => {
+    expect(containsVerdictLine("")).toBe(false);
+    expect(containsVerdictLine("   \n  \n")).toBe(false);
   });
 });

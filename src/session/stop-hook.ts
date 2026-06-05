@@ -3,11 +3,12 @@
  * Stop-hook.ts — Claude Code Stop-hook handler for kirby-bot phase sessions.
  *
  * Reads the Stop payload on stdin, walks the transcript JSONL pointed to by
- * `.transcript_path`, finds the LAST assistant entry, and routes on its
- * `stop_reason`:
+ * `.transcript_path`, and routes on the LAST assistant entry's `stop_reason`:
  *
- *  - `"end_turn"` → the model genuinely finished. Extract the message text
- *    (joined across `text` blocks) and write it atomically to the sentinel.
+ *  - `"end_turn"` → the model genuinely finished. Capture the most recent
+ *    assistant entry that carries a `VERDICT:` line (joined across `text`
+ *    blocks) and write it atomically to the sentinel; fall back to the last
+ *    assistant entry when none carries a verdict.
  *
  *  - anything else (`"tool_use"`, `"max_tokens"`, missing, …) AND this is a
  *    `Stop` (not `StopFailure`) → the runtime is between turns but the model
@@ -15,8 +16,15 @@
  *    ask Claude Code to resume the agent loop, and leave the sentinel
  *    untouched so the orchestrator keeps polling.
  *
- *  - `StopFailure` → write whatever last assistant text exists. Blocking a
- *    failure makes no sense.
+ *  - `StopFailure` → write the captured text anyway. Blocking a failure makes
+ *    no sense.
+ *
+ * Capturing the verdict-bearing entry — not blindly the last one — is what
+ * keeps a verdict from being lost when the model declares it and then keeps
+ * talking (opens the MR, appends a summary, emits content-less closing
+ * turns). The trailing verdict-less message would otherwise overwrite the
+ * capture and the orchestrator would stall the issue as if no verdict was
+ * ever emitted. See the `containsVerdictLine` selection below.
  *
  * The previous one-liner `jq -r '.last_assistant_message // empty'` read a
  * field that doesn't exist on Claude Code 2.1.150's Stop payload, so the
@@ -33,6 +41,7 @@
  *        `hook_event_name`.
  */
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { containsVerdictLine } from "./verdict";
 
 const sentinel = process.argv[2];
 if (sentinel === undefined) {
@@ -120,7 +129,8 @@ for (const line of rawTranscript.split("\n")) {
   if (entry !== null) { ENTRIES.push(entry); }
 }
 
-const lastAssistant = ENTRIES.findLast((e) => e.type === "assistant") ?? null;
+const ASSISTANTS = ENTRIES.filter((entry) => entry.type === "assistant");
+const lastAssistant = ASSISTANTS.at(-1) ?? null;
 
 const isStopFailure = payload.hook_event_name === "StopFailure";
 const stopReason = lastAssistant?.message?.stop_reason;
@@ -137,13 +147,32 @@ if (!isStopFailure && stopReason !== "end_turn") {
   process.exit(0);
 }
 
-const rawContent = lastAssistant?.message?.content;
-const blocks: readonly unknown[] = Array.isArray(rawContent) ? rawContent : [];
-const textPieces = blocks.filter(isTextBlock).map((b) => b.text);
+// Join the `text` blocks of one assistant entry; non-array content (a plain
+// string, or none) yields "".
+const assistantText = (entry: TranscriptEntry): string => {
+  const content = entry.message?.content;
+  const blocks: readonly unknown[] = Array.isArray(content) ? content : [];
+  return blocks.filter(isTextBlock).map((block) => block.text).join("\n");
+};
+
+// Capture the MOST RECENT assistant entry that carries a verdict line, not
+// blindly the last one — models routinely declare their verdict and then keep
+// going, and the trailing verdict-less message would otherwise clobber it.
+// Fall back to the last assistant entry when none carries a verdict, so a
+// genuine no-verdict stop still flows into the orchestrator's single reprompt.
+//
+// Newest verdict wins. A later turn that *reverses* an earlier verdict with
+// prose alone (no new VERDICT line) does NOT un-capture it — but that requires
+// violating the "verdict is the terminal line" contract (implementation.md),
+// and the right reversal is to emit the opposing VERDICT line, which this scan
+// then honours as the newest. We accept the prose-only-reversal corner rather
+// than reason about which trailing prose negates a prior verdict.
+const verdictBearing = ASSISTANTS.findLast((entry) => containsVerdictLine(assistantText(entry)));
+const captured = verdictBearing ?? lastAssistant;
 
 // PID-suffixed tmp path — two overlapping Stop hook invocations (possible if
 // Claude Code ever issues a Stop and a StopFailure back-to-back) won't race
 // on the same tmp file. Final rename remains atomic on POSIX.
 const tmp = `${sentinel}.${process.pid}.tmp`;
-writeFileSync(tmp, textPieces.join("\n"));
+writeFileSync(tmp, captured === null ? "" : assistantText(captured));
 renameSync(tmp, sentinel);

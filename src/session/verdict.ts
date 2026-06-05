@@ -44,6 +44,20 @@ const VERDICT_LINE = /^VERDICT: ([A-Z_]+)$/;
 const stripEmphasis = (line: string): string => line.replace(/^[*_]+|[*_]+$/g, "");
 
 /**
+ * Tokens carried by every line of the verdict shape `VERDICT: <TOKEN>` (after
+ * stripping markdown emphasis and surrounding whitespace), in document order.
+ * Token *validity* is deliberately NOT checked here — `VERDICT: DONE` yields
+ * `["DONE"]` — so the strict {@link parseVerdict} and the lenient
+ * {@link containsVerdictLine} share one line scanner.
+ */
+const verdictLineTokens = (message: string): readonly string[] =>
+  message
+    .split("\n")
+    .map((line) => VERDICT_LINE.exec(stripEmphasis(line.trim())))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => match[1] ?? "");
+
+/**
  * Extract the verdict a session declared, or `null` if none found.
  *
  * Strict on the *line* (still no substring scan into prose), lenient on
@@ -64,22 +78,30 @@ const stripEmphasis = (line: string): string => line.replace(/^[*_]+|[*_]+$/g, "
  * `null` means the caller must treat the session as failed.
  */
 export function parseVerdict(message: string): VerdictToken | null {
-  const matches = message
-    .split("\n")
-    .map((line) => VERDICT_LINE.exec(stripEmphasis(line.trim())))
-    .filter((m): m is RegExpExecArray => m !== null);
+  const tokens = verdictLineTokens(message);
 
   // Exactly one verdict line, or it is ambiguous and we refuse to guess.
-  if (matches.length !== 1) {
+  if (tokens.length !== 1) {
     return null;
   }
 
-  // match[1] is always set when exec succeeds with a participating group;
-  // the guard exists only to satisfy noUncheckedIndexedAccess.
-  const token = matches[0]?.[1];
-  if (token === undefined) {
-    return null;
-  }
+  const token = tokens.at(0);
+  return token !== undefined && isVerdictToken(token) ? token : null;
+}
 
-  return isVerdictToken(token) ? token : null;
+/**
+ * True iff `message` carries at least one line of the verdict shape
+ * `VERDICT: <TOKEN>`, regardless of whether the token is a known
+ * {@link VERDICT_TOKENS} member.
+ *
+ * The Stop hook uses this to pick *which* assistant message to capture: an
+ * agent that declares its verdict and then keeps talking — opens the MR,
+ * appends a summary, emits content-less closing turns — must not have that
+ * verdict clobbered by the verdict-less trailing message. Surfacing even a
+ * malformed `VERDICT: DONE` (rather than silently dropping it) lets
+ * {@link parseVerdict} reject the bad token and the orchestrator reprompt for
+ * a valid one.
+ */
+export function containsVerdictLine(message: string): boolean {
+  return verdictLineTokens(message).length > 0;
 }

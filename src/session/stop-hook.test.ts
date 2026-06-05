@@ -167,4 +167,75 @@ describe("stop-hook", () => {
     expect(failed.sentinelContent).toBe("");
   });
 
+  test("captures the verdict-bearing entry when a verdict-less message follows it", () => {
+    // Real #893 case: the implementer declared its verdict, then ended its
+    // turn again with a closing summary that carried no verdict line. Capturing
+    // only the last assistant entry wrote the summary and stalled the issue.
+    const transcript = [
+      assistantText("MR opened.\nVERDICT: READY_FOR_REVIEW"),
+      assistantText("Session terminée. Récapitulatif du travail livré."),
+    ];
+    const { sentinelContent, stdout } = runHook({ hook_event_name: "Stop" }, transcript);
+    expect(sentinelContent).toBe("MR opened.\nVERDICT: READY_FOR_REVIEW");
+    expect(stdout).toBe("");
+  });
+
+  test("skips trailing content-less closing turns to capture the verdict", () => {
+    // Real #882 case: the verdict was followed by two empty end_turn messages
+    // that overwrote the capture with an empty sentinel.
+    const transcript = [
+      assistantText("Implemented and pushed.\nVERDICT: READY_FOR_REVIEW"),
+      assistantText(""),
+      assistantText(""),
+    ];
+    const { sentinelContent } = runHook({ hook_event_name: "Stop" }, transcript);
+    expect(sentinelContent).toBe("Implemented and pushed.\nVERDICT: READY_FOR_REVIEW");
+  });
+
+  test("captures the most recent verdict when several appear across turns", () => {
+    // After a reprompt the agent may re-declare; the latest intent wins.
+    const transcript = [
+      assistantText("First pass.\nVERDICT: NEEDS_FIX"),
+      assistantText("On reflection it is fine.\nVERDICT: CONVERGED"),
+    ];
+    const { sentinelContent } = runHook({ hook_event_name: "Stop" }, transcript);
+    expect(sentinelContent).toBe("On reflection it is fine.\nVERDICT: CONVERGED");
+  });
+
+  test("captures a verdict emitted in a tool_use turn when the last turn is a verdict-less end_turn", () => {
+    // Decoupling check: the block-vs-write decision keys off the LAST entry's
+    // stop_reason (end_turn here → write), but the verdict lived in an earlier
+    // entry that also called a tool (stop_reason tool_use). The capture must
+    // still find it. This is the shape the implementer's self-diagnosis named.
+    const transcript = [
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Opening the MR.\nVERDICT: READY_FOR_REVIEW" },
+            { type: "tool_use", id: "t1", name: "Bash", input: {} },
+          ],
+          stop_reason: "tool_use",
+        },
+      }),
+      userToolResult("t1"),
+      assistantText("MR !900 opened."),
+    ];
+    const { sentinelContent, stdout } = runHook({ hook_event_name: "Stop" }, transcript);
+    expect(sentinelContent).toBe("Opening the MR.\nVERDICT: READY_FOR_REVIEW");
+    expect(stdout).toBe("");
+  });
+
+  test("falls back to the last assistant entry when none carries a verdict", () => {
+    // No verdict anywhere → the orchestrator must still see the last text so
+    // its single reprompt fires (it does not block, the turn ended cleanly).
+    const transcript = [
+      assistantText("Working on it."),
+      assistantText("Still going, no verdict yet."),
+    ];
+    const { sentinelContent, stdout } = runHook({ hook_event_name: "Stop" }, transcript);
+    expect(sentinelContent).toBe("Still going, no verdict yet.");
+    expect(stdout).toBe("");
+  });
+
 });
