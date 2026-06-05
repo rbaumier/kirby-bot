@@ -327,6 +327,19 @@ const routerErrorToPhase =
       : error;
 
 /**
+ * True when the full diff is empty even though the roster lists changed files.
+ * This is an infrastructure failure — the diff was taken against the wrong tree
+ * (the empty-diff bug fixed in diff-slices.ts), a shallow clone, or a bad
+ * default branch — never a legitimate "no changes" state: `git diff` over a
+ * non-empty numstat roster always emits content (a binary file renders as
+ * "Binary files … differ", a mode-only change renders a mode line). Routing
+ * reviewers over an empty diff is what silently produced "No findings." on
+ * every run (the #955 regression), so the caller fails loudly instead.
+ */
+export const diffEmptyDespiteRoster = (fileCount: number, fullDiff: string): boolean =>
+  fileCount > 0 && Buffer.byteLength(fullDiff, "utf8") === 0;
+
+/**
  * `runFanOutPhase` — main entry point of the per-agent review fan-out.
  *
  * Sequence:
@@ -391,6 +404,26 @@ export const runFanOutPhase = (
           reason: String(cause),
         }),
     });
+
+    // Roster says files changed but the diff is empty — fail loudly instead of
+    // routing reviewers over nothing and silently concluding "No findings."
+    // (the #955 regression). See {@link diffEmptyDespiteRoster}.
+    if (diffEmptyDespiteRoster(input.files.length, fullDiff)) {
+      yield* artifacts.logEvent({
+        event: "fanout_diff_empty",
+        phase: input.phase,
+        iteration: input.iteration,
+        issueIid: input.issueIid,
+        fileCount: input.files.length,
+      });
+      return yield* Effect.fail(
+        new WorkspaceError({
+          phase: input.phase,
+          operation: "verify full diff",
+          reason: `full diff is empty but ${input.files.length} file(s) changed — diff taken against the wrong tree?`,
+        }),
+      );
+    }
 
     // Review model floor: escalate haiku→sonnet on re-review or a large diff.
     // Reuses the full-diff byte length already read above — no second walk —

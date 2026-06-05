@@ -12,7 +12,7 @@ import { describe, expect, it } from "bun:test";
 import { Cause, Effect, Exit, Ref, TestContext } from "effect";
 import { SessionTimedOut, UsageLimitHit } from "./errors";
 import type { AgentOutcome } from "./fanout";
-import { agentOutcomeOrAbort, usageLimitFromCause } from "./fanout";
+import { agentOutcomeOrAbort, diffEmptyDespiteRoster, usageLimitFromCause } from "./fanout";
 
 /** Mirror of the aggregation runFanOutPhase computes internally. */
 const aggregate = (outcomes: AgentOutcome[]) => ({
@@ -55,6 +55,28 @@ describe("FanOutResult okCount / totalCount", () => {
     const { okCount, totalCount } = aggregate([]);
     expect(okCount).toBe(0);
     expect(totalCount).toBe(0);
+  });
+});
+
+// #955 regression: the empty-diff bug routed reviewers over a 0-byte patch and
+// silently returned "No findings." This guard turns "roster non-empty but diff
+// empty" into a loud failure. Routing over a non-empty diff (or a genuinely
+// empty roster) must NOT trip it.
+describe("diffEmptyDespiteRoster", () => {
+  it("trips when the roster has files but the diff is empty", () => {
+    expect(diffEmptyDespiteRoster(12, "")).toBe(true);
+  });
+
+  it("does not trip when the diff has content", () => {
+    expect(diffEmptyDespiteRoster(12, "diff --git a/x b/x\n+added\n")).toBe(false);
+  });
+
+  it("does not trip on a genuinely empty roster (no files changed)", () => {
+    expect(diffEmptyDespiteRoster(0, "")).toBe(false);
+  });
+
+  it("counts bytes, not characters — whitespace-only diff still counts as content", () => {
+    expect(diffEmptyDespiteRoster(1, "\n")).toBe(false);
   });
 });
 
