@@ -95,17 +95,23 @@ export const selectReviewModel = (iteration: number, diffBytes: number): AgentMo
  * *secondary* guard: they stop a single hung phase from silently eating the
  * whole budget. `implementation` carries by far the largest cap — implementation is
  * the heavy phase and a hard issue can legitimately run for hours — while the
- * plan/review/evaluate/fix/qa loop stays tight. Their sum (330) deliberately
+ * plan/review/evaluate/fix/qa loop stays tight. Their sum (345) deliberately
  * exceeds the budget, so a healthy run never reaches every cap.
  *
- * `plan` carries 15: the plan gate is a cheap approach-vetting pass (a
- * lightweight plan plus one in-session reviewer subagent), not a coding phase.
+ * `plan` carries 30: the gate is still a cheap approach-vetting pass (a
+ * lightweight plan plus one in-session reviewer subagent), not a coding phase —
+ * but a *diagnostic* issue whose brief asks the planner to confirm a root cause
+ * before planning (e.g. #755) burns the whole budget on serial codebase
+ * exploration and times out before it ever writes the plan or spawns the
+ * reviewer. 15 left no margin (observed plan sessions landed at ~13-15 min);
+ * 30 absorbs that class. This is a stopgap — the deeper fix is to keep
+ * mechanism-confirmation out of the gate (it is implementation's job).
  *
  * `fix` carries 45 (not 30): a multi-file fix on a large diff routinely runs
  * past 30 min, and a hard kill there discards the whole review+fix pass (#42).
  */
 export const PHASE_CAP_MINUTES: Record<Phase, number> = {
-  plan: 15,
+  plan: 30,
   implementation: 180,
   review: 35,
   evaluate: 30,
