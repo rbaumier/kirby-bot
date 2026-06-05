@@ -46,13 +46,17 @@ export const capDiffPayload = (raw: string): string => {
 };
 
 /**
- * Run `git diff $defaultBranch...HEAD -- <files>` and write the output to
- * `outPath` atomically (via `.tmp` + rename). When `cap === true`, the output
+ * Run `git -C <worktree> diff $defaultBranch...HEAD -- <files>` and write the
+ * output to `outPath` atomically (via `.tmp` + rename). The `-C <worktree>` is
+ * load-bearing: the orchestrator process runs outside the issue worktree (it
+ * juggles several worktrees at once), so without it the diff is taken against
+ * the wrong repo and silently comes back empty. When `cap === true`, the output
  * is truncated to {@link MAX_DIFF_SLICE_BYTES} so a runaway per-agent slice
  * cannot blow up the reviewer's prompt cost.
  */
 const writeGitDiff = (
   agent: AgentNameOrFull,
+  worktree: string,
   defaultBranch: string,
   outPath: string,
   files: readonly string[],
@@ -62,7 +66,9 @@ const writeGitDiff = (
     const range = `${defaultBranch}...HEAD`;
     const tmpPath = `${outPath}.tmp`;
     const result = yield* runShell(() =>
-      files.length === 0 ? $`git diff ${range}` : $`git diff ${range} -- ${files}`,
+      files.length === 0
+        ? $`git -C ${worktree} diff ${range}`
+        : $`git -C ${worktree} diff ${range} -- ${files}`,
     ).pipe(
       Effect.mapError(
         (error) =>
@@ -98,18 +104,22 @@ const writeGitDiff = (
  * fan-out, not silent truncation.
  */
 type WriteFullDiffInput = {
+  /** Issue worktree the diff is taken in (absolute path). */
+  readonly worktree: string;
   readonly defaultBranch: string;
   readonly outPath: string;
 };
 
 export const writeFullDiff = (input: WriteFullDiffInput): Effect.Effect<string, DiffSliceError> =>
-  writeGitDiff("full", input.defaultBranch, input.outPath, [], false);
+  writeGitDiff("full", input.worktree, input.defaultBranch, input.outPath, [], false);
 
 /** Input for {@link writeDiffSlices}. */
 export type WriteDiffSlicesInput = {
   readonly routes: readonly RoutedAgent[];
   /** Path to the already-written full diff — reused for full-diff agents. */
   readonly fullDiffPath: string;
+  /** Issue worktree each slice's diff is taken in (absolute path). */
+  readonly worktree: string;
   readonly defaultBranch: string;
   /** Directory where slices land — must exist. */
   readonly slicesDir: string;
@@ -151,7 +161,7 @@ export const writeDiffSlices = (
       agentsNeedingSlice,
       ({ agent, scope }) => {
         const slicePath = join(input.slicesDir, `${input.slug}-${agent}.patch`);
-        return writeGitDiff(agent, input.defaultBranch, slicePath, scope, true).pipe(
+        return writeGitDiff(agent, input.worktree, input.defaultBranch, slicePath, scope, true).pipe(
           Effect.map((path) => [agent, path] as const),
         );
       },

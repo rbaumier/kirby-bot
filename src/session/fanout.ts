@@ -372,7 +372,7 @@ export const runFanOutPhase = (
     // agent (as `{diff_file}`) read from this same path.
     const slug = `review-${input.issueIid}-${input.iteration}`;
     const fullDiffPath = join(artifacts.dir, `${slug}-full.patch`);
-    yield* writeFullDiff({ defaultBranch: input.defaultBranch, outPath: fullDiffPath }).pipe(
+    yield* writeFullDiff({ worktree: input.worktree, defaultBranch: input.defaultBranch, outPath: fullDiffPath }).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceError({
@@ -465,6 +465,7 @@ export const runFanOutPhase = (
     const slices = yield* writeDiffSlices({
       routes,
       fullDiffPath,
+      worktree: input.worktree,
       defaultBranch: input.defaultBranch,
       slicesDir: artifacts.dir,
       slug,
