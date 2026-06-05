@@ -83,7 +83,7 @@ export const reviewPhase = (
       );
     }
 
-    const review = yield* aggregateFindings(fanOut).pipe(
+    const review = yield* aggregateFindings(fanOut, { issueIid: issue.iid, iteration: fixCycles }).pipe(
       Effect.mapError(
         (error) =>
           new HandlerError({

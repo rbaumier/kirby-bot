@@ -120,6 +120,43 @@ const formatSuggestionNote = (findings: readonly LineAnchoredFinding[]): string 
   ].join("\n");
 };
 
+/**
+ * Collapse findings the line resolver could not anchor (their verbatim snippet
+ * matched no line in the diff) into one consolidated note. We don't drop them —
+ * a mispositioned finding is still a finding (*findings over > under*) — but we
+ * also can't post a resolvable thread on a line that isn't in the diff, so they
+ * land here as a non-anchored note. The line is omitted: it's the unreliable
+ * Agent-reported value the resolver rejected.
+ */
+const formatUnanchoredNote = (findings: readonly LineAnchoredFinding[]): string => {
+  const grouped = new Map<string, LineAnchoredFinding[]>();
+  for (const finding of findings) {
+    const list = grouped.get(finding.agent) ?? [];
+    list.push(finding);
+    grouped.set(finding.agent, list);
+  }
+  const sections = Array.from(grouped.entries(), ([agent, items]) =>
+    [
+      `### ${agent}`,
+      // The reported line is unreliable (it's what the resolver rejected), so we
+      // surface the verbatim snippet instead — it's the only locator a human can
+      // grep the file for.
+      ...items.flatMap((f) => {
+        const head = `- [${f.file}] **${f.title}** _(severity: ${f.severity}, confidence: ${f.confidence})_`;
+        const snippet = f.analysisChain[0];
+        return snippet === undefined ? [head] : [head, `  ${snippet}`];
+      }),
+    ].join("\n"),
+  );
+  return [
+    "## Unanchored findings (snippet not found in diff)",
+    "",
+    "These findings could not be positioned: their verbatim snippet matched no line in the diff (out-of-diff code, or a drifted line count). They are filed here rather than dropped — a human may still want to act on them.",
+    "",
+    ...sections,
+  ].join("\n");
+};
+
 /** Collapse prose findings into per-Agent counts for the `review_findings` event. */
 const countByAgent = (
   findings: readonly ProseFinding[],
@@ -177,13 +214,16 @@ export const postReviewToMr = (
       { concurrency: POST_CONCURRENCY },
     );
 
-    // 2. Split line-anchored findings: actionable severities become resolvable
-    //    discussions; suggestion findings go to a single consolidated note so
-    //    the evaluator never re-triages them.
-    const actionableFindings = input.review.lineAnchoredFindings.filter(isActionable);
-    const suggestionFindings = input.review.lineAnchoredFindings.filter(
-      (f) => !isActionable(f),
-    );
+    // 2. Split line-anchored findings. First peel off the findings the line
+    //    resolver could not anchor (snippet absent from the diff): posting them
+    //    as resolvable threads would anchor on the wrong line or fail entirely,
+    //    so they go to a consolidated note instead of being dropped. Of the
+    //    anchored remainder, actionable severities become resolvable discussions
+    //    and suggestions go to a single note the evaluator never re-triages.
+    const anchoredFindings = input.review.lineAnchoredFindings.filter((f) => f.anchored);
+    const unanchoredFindings = input.review.lineAnchoredFindings.filter((f) => !f.anchored);
+    const actionableFindings = anchoredFindings.filter(isActionable);
+    const suggestionFindings = anchoredFindings.filter((f) => !isActionable(f));
 
     // 3. Post each actionable finding as its own resolvable thread, keeping
     //    the finding object so the returned thread id stays attributed to its
@@ -203,6 +243,12 @@ export const postReviewToMr = (
     // 4. Consolidate suggestion findings into one non-resolvable note (if any).
     if (suggestionFindings.length > 0) {
       yield* provider.postMrNote(input.mrIid, formatSuggestionNote(suggestionFindings));
+    }
+
+    // 4b. File the unanchorable findings as their own consolidated note so the
+    //     resolver never silently swallows a finding it couldn't position.
+    if (unanchoredFindings.length > 0) {
+      yield* provider.postMrNote(input.mrIid, formatUnanchoredNote(unanchoredFindings));
     }
 
     // 5. Collapse prose findings into one summary thread (if any).
@@ -230,6 +276,7 @@ export const postReviewToMr = (
         ? {}
         : { prose: { discussionId: proseDiscussionId, byAgent: countByAgent(proseFindings) } }),
       ...(suggestionFindings.length === 0 ? {} : { suggestions: { count: suggestionFindings.length } }),
+      ...(unanchoredFindings.length === 0 ? {} : { unanchored: { count: unanchoredFindings.length } }),
     });
 
     const summaryPosted = proseDiscussionId !== undefined;
@@ -237,6 +284,7 @@ export const postReviewToMr = (
     yield* Console.log(
       `[review] !${input.mrIid}: posted ${posted} discussions (${postedLine.length} line-anchored + ${summaryPosted ? 1 : 0} prose summary)` +
         (suggestionFindings.length > 0 ? `, ${suggestionFindings.length} suggestions filed as note` : "") +
+        (unanchoredFindings.length > 0 ? `, ${unanchoredFindings.length} unanchored filed as note` : "") +
         `, resolved ${stale.length} stale`,
     );
 

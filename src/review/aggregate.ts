@@ -20,8 +20,10 @@
  */
 import { readFile } from "node:fs/promises";
 import { Console, Data, Effect } from "effect";
+import { RunArtifacts } from "../run-artifacts";
 import type { FanOutResult } from "../session/fanout";
 import type { AgentName } from "./detect-tables";
+import { applyResolutions } from "./resolve-line";
 
 /** Failure when an agent's findings file cannot be read AND we couldn't tolerate it. */
 export class AggregateError extends Data.TaggedError("AggregateError")<{
@@ -40,7 +42,21 @@ export type LineAnchoredFinding = {
   readonly title: string;
   readonly analysisChain: readonly string[];
   readonly fixPrompt: string;
+  /**
+   * Whether the finding should be posted as a line-anchored discussion. Set by
+   * {@link applyResolutions}: `true` when the snippet resolved (or no snippet was
+   * available to verify against), `false` when the snippet matched nothing in
+   * the diff — those are degraded to a consolidated note rather than dropped.
+   */
+  readonly anchored: boolean;
 };
+
+/**
+ * A line-anchored finding straight out of the parser, before line resolution.
+ * The `anchored` flag is the one thing the parser can't decide — only
+ * {@link applyResolutions}, which matches the snippet against the diff, can.
+ */
+export type ParsedLineFinding = Omit<LineAnchoredFinding, "anchored">;
 
 type Severity = "must" | "suggestion";
 
@@ -108,7 +124,7 @@ const asConfidence = (value: unknown): LineAnchoredFinding["confidence"] =>
 const parseAgentOutput = (
   agent: AgentName,
   content: string,
-): { readonly lineAnchored: readonly LineAnchoredFinding[]; readonly prose: readonly ProseFinding[] } => {
+): { readonly lineAnchored: readonly ParsedLineFinding[]; readonly prose: readonly ProseFinding[] } => {
   const trimmed = content.trim();
   if (trimmed === "" || trimmed === "No findings.") {
     return { lineAnchored: [], prose: [] };
@@ -121,7 +137,7 @@ const parseAgentOutput = (
       const raw = Array.isArray(parsed.findings) ? parsed.findings : [];
       const lineAnchored = raw
         .filter((f): f is Record<string, unknown> => typeof f === "object" && f !== null)
-        .map((f): LineAnchoredFinding => ({
+        .map((f): ParsedLineFinding => ({
           agent,
           file: typeof f.file === "string" ? f.file : "",
           line: typeof f.line === "number" ? f.line : Number(f.line ?? 0),
@@ -166,9 +182,11 @@ const parseAgentOutput = (
  */
 export const aggregateFindings = (
   fanOut: FanOutResult,
-): Effect.Effect<AggregatedReview, AggregateError> =>
+  ctx: { readonly issueIid: number; readonly iteration: number },
+): Effect.Effect<AggregatedReview, AggregateError, RunArtifacts> =>
   Effect.gen(function* () {
-    const lineAnchored: LineAnchoredFinding[] = [];
+    const artifacts = yield* RunArtifacts;
+    const lineAnchored: ParsedLineFinding[] = [];
     const prose: ProseFinding[] = [];
     const agents: AgentResult[] = [];
 
@@ -209,5 +227,71 @@ export const aggregateFindings = (
       });
     }
 
-    return { agents, lineAnchoredFindings: lineAnchored, proseFindings: prose };
+    // Deterministic line resolution — match each finding's verbatim snippet
+    // (`analysis_chain[0]`) against its Agent's diff slice and recompute the
+    // real line, so the `{ file, line }` posted to the MR is anchored to the
+    // diff rather than to the Agent's (often off) count. Findings whose snippet
+    // matches nothing in the diff are flagged `anchored: false` and degraded
+    // downstream to a consolidated note instead of being dropped.
+    const diffByAgent = yield* readDiffSlices(lineAnchored, fanOut.perAgentDiffPath);
+    const { findings: resolved, stats } = applyResolutions(lineAnchored, diffByAgent);
+
+    if (stats.total > 0) {
+      yield* Console.log(
+        `[resolve-line] ${stats.total} line-anchored: ${stats.resolved} resolved ` +
+          `(${stats.drifted} drifted), ${stats.unmatched} unmatched→note`,
+      );
+      yield* artifacts.logEvent({
+        event: "review_line_resolution",
+        issueIid: ctx.issueIid,
+        iteration: ctx.iteration,
+        total: stats.total,
+        resolved: stats.resolved,
+        drifted: stats.drifted,
+        unmatched: stats.unmatched,
+        drifts: stats.drifts.map((d) => ({
+          agent: d.agent,
+          file: d.file,
+          reported: d.reportedLine,
+          resolved: d.resolvedLine,
+        })),
+      });
+    }
+
+    return { agents, lineAnchoredFindings: resolved, proseFindings: prose };
+  });
+
+/**
+ * Read each emitting Agent's diff slice off disk into a content map for
+ * {@link applyResolutions}. Only Agents that produced findings are read, and
+ * each unique path is read once (full-diff Agents share `fullDiffPath`). A
+ * missing path or read error degrades to `""` — the resolver treats that as
+ * "file absent from the slice" and keeps the reported line, never degrading a
+ * finding just because its slice couldn't be loaded.
+ */
+const readDiffSlices = (
+  findings: readonly ParsedLineFinding[],
+  perAgentDiffPath: ReadonlyMap<AgentName, string>,
+): Effect.Effect<ReadonlyMap<AgentName, string>> =>
+  Effect.gen(function* () {
+    const diffByAgent = new Map<AgentName, string>();
+    const cache = new Map<string, string>();
+    for (const agent of new Set(findings.map((f) => f.agent))) {
+      const path = perAgentDiffPath.get(agent);
+      if (path === undefined) {
+        diffByAgent.set(agent, "");
+        continue;
+      }
+      if (!cache.has(path)) {
+        const read = yield* Effect.either(
+          Effect.tryPromise({
+            try: () => readFile(path, "utf8"),
+            catch: (cause) => String(cause),
+          }),
+        );
+        cache.set(path, read._tag === "Right" ? read.right : "");
+      }
+      diffByAgent.set(agent, cache.get(path) ?? "");
+    }
+    return diffByAgent;
   });

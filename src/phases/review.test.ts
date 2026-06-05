@@ -107,6 +107,7 @@ const makeFanOutResult = (okCount: number): FanOutResult => ({
   routes: [],
   routerTruncated: false,
   fullDiffPath: "/tmp/full.patch",
+  perAgentDiffPath: new Map(),
 });
 
 const testState: Extract<State, { kind: "review" }> = {

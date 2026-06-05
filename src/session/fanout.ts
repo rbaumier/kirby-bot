@@ -69,6 +69,12 @@ export type FanOutResult = {
   readonly outcomes: readonly AgentOutcome[];
   /** Path to the shared full-diff patch, reused by every full-diff agent. */
   readonly fullDiffPath: string;
+  /**
+   * Per-agent diff slice path — the same `{diff_file}` each agent reviewed.
+   * Fed to the line resolver so a finding's snippet is matched against the
+   * exact diff the emitting agent saw. Full-diff agents map to `fullDiffPath`.
+   */
+  readonly perAgentDiffPath: ReadonlyMap<AgentName, string>;
   /** Number of agents that successfully reached AGENT_DONE. */
   readonly okCount: number;
   /** Total number of agents that ran (includes errors and timeouts). */
@@ -557,6 +563,7 @@ export const runFanOutPhase = (
       routerTruncated: routerResult.truncated,
       outcomes,
       fullDiffPath: slices.fullDiffPath,
+      perAgentDiffPath: slices.perAgent,
       okCount,
       totalCount,
     };

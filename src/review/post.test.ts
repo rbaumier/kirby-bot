@@ -60,6 +60,7 @@ const makeArtifacts = (): Layer.Layer<RunArtifacts> =>
 const makeFinding = (
   severity: "bug" | "security" | "performance" | "error_handling" | "suggestion",
   index = 0,
+  anchored = true,
 ) => ({
   agent: "correctness" as const,
   file: `src/file-${index}.ts`,
@@ -70,6 +71,7 @@ const makeFinding = (
   title: `Finding ${index}`,
   analysisChain: ["step 1"],
   fixPrompt: "fix this",
+  anchored,
 });
 
 const runPost = (review: AggregatedReview, calls: ProviderCalls) =>
@@ -161,6 +163,46 @@ describe("postReviewToMr — severity routing", () => {
     await runPost(review, calls);
     expect(calls.discussions).toHaveLength(4);
     expect(calls.notes).toHaveLength(0);
+  });
+
+  test("an unanchored finding goes to a note, not a resolvable discussion", async () => {
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
+    const review: AggregatedReview = {
+      ...emptyReview(),
+      lineAnchoredFindings: [makeFinding("bug", 0, false)],
+    };
+    await runPost(review, calls);
+    expect(calls.discussions).toHaveLength(0);
+    expect(calls.notes).toHaveLength(1);
+    expect(calls.notes[0]).toContain("Unanchored findings");
+    expect(calls.notes[0]).toContain("Finding 0");
+  });
+
+  test("anchored bug discussed, unanchored bug filed as note", async () => {
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
+    const review: AggregatedReview = {
+      ...emptyReview(),
+      lineAnchoredFindings: [makeFinding("bug", 0, true), makeFinding("security", 1, false)],
+    };
+    await runPost(review, calls);
+    expect(calls.discussions).toHaveLength(1);
+    expect(calls.discussions[0]).toContain("severity: bug");
+    expect(calls.notes).toHaveLength(1);
+    expect(calls.notes[0]).toContain("Unanchored findings");
+    expect(calls.notes[0]).toContain("Finding 1");
+  });
+
+  test("unanchored suggestion and anchored suggestion produce two distinct notes", async () => {
+    const calls: ProviderCalls = { discussions: [], notes: [], positions: [] };
+    const review: AggregatedReview = {
+      ...emptyReview(),
+      lineAnchoredFindings: [makeFinding("suggestion", 0, true), makeFinding("suggestion", 1, false)],
+    };
+    await runPost(review, calls);
+    expect(calls.discussions).toHaveLength(0);
+    expect(calls.notes).toHaveLength(2);
+    expect(calls.notes.some((n) => n.includes("Suggestion findings"))).toBe(true);
+    expect(calls.notes.some((n) => n.includes("Unanchored findings"))).toBe(true);
   });
 
   test("multiple suggestions are consolidated into one note", async () => {
