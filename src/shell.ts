@@ -9,6 +9,7 @@
 import { $ } from "bun";
 import { Data, Effect } from "effect";
 import { COMMAND_TIMEOUT_MS } from "./config";
+import { transientSchedule } from "./retry";
 
 /** The streams of a successful command (exit 0). */
 export type ShellOutput = {
@@ -65,9 +66,13 @@ export const describeShellError = (error: ShellError): string => {
  * exit code for process failures — so the three tags are unambiguous.
  *
  * `build` is a thunk so the `$` template is constructed inside the Effect.
+ * `timeoutMs` defaults to {@link COMMAND_TIMEOUT_MS}; pass a shorter ceiling
+ * (e.g. {@link GIT_READ_TIMEOUT_MS}) for calls wrapped in {@link withShellRetry}
+ * so the retries ride a tight per-attempt budget.
  */
 export const runShell = (
   build: () => ReturnType<typeof $>,
+  timeoutMs: number = COMMAND_TIMEOUT_MS,
 ): Effect.Effect<ShellOutput, ShellError> =>
   Effect.tryPromise({
     try: async () => {
@@ -82,8 +87,8 @@ export const runShell = (
       new ShellSpawnFailed({ cause: String(cause) }),
   }).pipe(
     Effect.timeoutFail({
-      duration: `${COMMAND_TIMEOUT_MS} millis`,
-      onTimeout: (): ShellTimeout => new ShellTimeout({ timeoutMs: COMMAND_TIMEOUT_MS }),
+      duration: `${timeoutMs} millis`,
+      onTimeout: (): ShellTimeout => new ShellTimeout({ timeoutMs }),
     }),
     Effect.flatMap(
       (result): Effect.Effect<ShellOutput, ShellError> =>
@@ -104,4 +109,36 @@ export const runShellGit = (
   worktree: string,
   args: readonly string[],
 ): Effect.Effect<ShellOutput, ShellError> => runShell(() => $`git -C ${worktree} ${args}`);
+
+/**
+ * Retry schedule for *transient* shell failures. The 500ms base (vs the HTTP
+ * boundaries' 200ms) reflects that a contended `.git` — a sibling worktree
+ * mid-commit, a background repack — takes longer to clear than a network blip.
+ */
+const transientShellRetry = transientSchedule("500 millis");
+
+/**
+ * Retry a shell Effect on *transient* failures only — a {@link ShellTimeout}
+ * (the command stalled on a contended resource) or a {@link ShellSpawnFailed}
+ * (fork pressure under load). A {@link ShellNonZeroExit} is deterministic: the
+ * command ran and disagreed, so retrying just repeats the same answer — it
+ * surfaces at once.
+ *
+ * Opt-in, not baked into {@link runShell}: best-effort cleanups (`Effect.ignore`)
+ * and exit-code-as-signal callers (`merge-base --is-ancestor`) must not retry.
+ * Pair with a short per-attempt `timeoutMs` on {@link runShell} so three
+ * attempts stay under one {@link COMMAND_TIMEOUT_MS} instead of stacking three
+ * full ceilings. (#974: a single un-retried 120s `git diff` stall discarded a
+ * fully-implemented issue.)
+ */
+export const withShellRetry = <A>(
+  call: Effect.Effect<A, ShellError>,
+): Effect.Effect<A, ShellError> =>
+  call.pipe(
+    Effect.retry({
+      schedule: transientShellRetry,
+      while: (error: ShellError): boolean =>
+        error._tag === "ShellTimeout" || error._tag === "ShellSpawnFailed",
+    }),
+  );
 

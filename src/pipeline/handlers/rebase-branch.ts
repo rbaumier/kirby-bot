@@ -15,7 +15,7 @@
  * clean and carries the refinements along in the force-push.
  */
 import { Effect } from "effect";
-import { describeShellError, runShellGit } from "../../shell";
+import { describeShellError, runShellGit, withShellRetry } from "../../shell";
 import { HandlerError } from "../errors";
 
 export type RebaseBranchInput = {
@@ -76,7 +76,7 @@ export const rebaseBranchOntoDefault = (
   Effect.gen(function* () {
     const { worktree, branch, defaultBranch } = input;
 
-    yield* runShellGit(worktree, ["fetch", "origin", defaultBranch]).pipe(
+    yield* withShellRetry(runShellGit(worktree, ["fetch", "origin", defaultBranch])).pipe(
       Effect.mapError(
         (error): HandlerError =>
           new HandlerError({
@@ -109,7 +109,9 @@ export const rebaseBranchOntoDefault = (
       ),
     );
 
-    yield* runShellGit(worktree, ["push", "--force-with-lease", "origin", branch]).pipe(
+    yield* withShellRetry(
+      runShellGit(worktree, ["push", "--force-with-lease", "origin", branch]),
+    ).pipe(
       Effect.mapError(
         (error): HandlerError =>
           new HandlerError({

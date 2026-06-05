@@ -21,7 +21,7 @@ import { GitProvider } from "../../provider/provider";
 import type { Issue, ProviderCallError } from "../../provider/types";
 import { parseBlockers } from "../blockers";
 import { RunArtifacts } from "../../run-artifacts";
-import { describeShellError, runShell, runShellGit } from "../../shell";
+import { describeShellError, runShell, runShellGit, withShellRetry } from "../../shell";
 import { freshDeadline } from "../../deadline";
 import { clearCheckpoint, readCheckpoint } from "../../recovery/checkpoint";
 import { writeLock } from "../../recovery/lockfile";
@@ -344,7 +344,7 @@ export const onBranchPush = (
 ): Effect.Effect<State, HandlerError, RunArtifacts> =>
   Effect.gen(function* () {
     const { issue, branch, worktree } = state;
-    yield* runShellGit(worktree, ["push", "-u", "origin", branch]).pipe(
+    yield* withShellRetry(runShellGit(worktree, ["push", "-u", "origin", branch])).pipe(
       Effect.mapError(
         (error): HandlerError =>
           new HandlerError({

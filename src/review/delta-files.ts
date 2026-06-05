@@ -13,8 +13,9 @@
  */
 import { $ } from "bun";
 import { Effect } from "effect";
+import { GIT_READ_TIMEOUT_MS } from "../config";
 import type { ShellError } from "../shell";
-import { runShell } from "../shell";
+import { runShell, withShellRetry } from "../shell";
 
 /** Input for {@link getChangedFilesSince}. */
 export type GetChangedFilesSinceInput = {
@@ -38,8 +39,14 @@ export const getChangedFilesSince = (
 ): Effect.Effect<readonly string[] | null, ShellError> =>
   Effect.gen(function* () {
     const { worktree, lastSha } = input;
-    const isAncestor = yield* runShell(
-      () => $`git -C ${worktree} merge-base --is-ancestor ${lastSha} HEAD`,
+    // withShellRetry gates on ShellTimeout/ShellSpawnFailed only, so the exit-1
+    // not-an-ancestor signal (a ShellNonZeroExit) skips the retry and flows
+    // straight to the catchTag below — the retry can't swallow it.
+    const isAncestor = yield* withShellRetry(
+      runShell(
+        () => $`git -C ${worktree} merge-base --is-ancestor ${lastSha} HEAD`,
+        GIT_READ_TIMEOUT_MS,
+      ),
     ).pipe(
       Effect.map(() => true),
       Effect.catchTag("ShellNonZeroExit", (error) =>
@@ -50,8 +57,11 @@ export const getChangedFilesSince = (
       return null;
     }
 
-    const diff = yield* runShell(
-      () => $`git -C ${worktree} diff --name-only ${lastSha}...HEAD`,
+    const diff = yield* withShellRetry(
+      runShell(
+        () => $`git -C ${worktree} diff --name-only ${lastSha}...HEAD`,
+        GIT_READ_TIMEOUT_MS,
+      ),
     );
     const files = diff.stdout
       .split("\n")

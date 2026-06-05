@@ -20,8 +20,8 @@ import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { $ } from "bun";
 import { Data, Effect } from "effect";
-import { MAX_DIFF_SLICE_BYTES } from "../config";
-import { describeShellError, runShell } from "../shell";
+import { GIT_READ_TIMEOUT_MS, MAX_DIFF_SLICE_BYTES } from "../config";
+import { describeShellError, runShell, withShellRetry } from "../shell";
 import type { AgentName } from "./agents";
 import type { RoutedAgent } from "./router";
 
@@ -65,10 +65,14 @@ const writeGitDiff = (
   Effect.gen(function* () {
     const range = `${defaultBranch}...HEAD`;
     const tmpPath = `${outPath}.tmp`;
-    const result = yield* runShell(() =>
-      files.length === 0
-        ? $`git -C ${worktree} diff ${range}`
-        : $`git -C ${worktree} diff ${range} -- ${files}`,
+    const result = yield* withShellRetry(
+      runShell(
+        () =>
+          files.length === 0
+            ? $`git -C ${worktree} diff ${range}`
+            : $`git -C ${worktree} diff ${range} -- ${files}`,
+        GIT_READ_TIMEOUT_MS,
+      ),
     ).pipe(
       Effect.mapError(
         (error) =>

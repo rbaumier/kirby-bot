@@ -23,7 +23,7 @@
  * The retry policy and `decodeBody` are duplicated from `src/gitlab/http.ts` by
  * design — the two boundaries stay independent.
  */
-import { Effect, ParseResult, Schedule, Schema } from "effect";
+import { Effect, ParseResult, Schema } from "effect";
 import {
   ProviderConfigError,
   ProviderHttpError,
@@ -31,6 +31,7 @@ import {
   ProviderResponseError,
 } from "../provider/types";
 import type { ProviderError } from "../provider/types";
+import { transientSchedule } from "../retry";
 
 /** The resolved GitHub connection: REST + GraphQL base URLs, token, and repo ref. */
 type GitHubConfig = {
@@ -216,14 +217,8 @@ const callOnce = <A, I>(
     return yield* decodeBody(request, schema, parsed);
   });
 
-/**
- * Retry policy for transient failures: jittered exponential backoff, 3 attempts
- * total.
- */
-const transientRetryPolicy = Schedule.exponential("200 millis").pipe(
-  Schedule.jittered,
-  Schedule.intersect(Schedule.recurs(2)),
-);
+/** Retry policy for transient failures: jittered exponential backoff, 3 attempts total. */
+const transientRetryPolicy = transientSchedule("200 millis");
 
 /**
  * Retry only *transient* failures — a network blip, a 5xx, or a 429. A 4xx,

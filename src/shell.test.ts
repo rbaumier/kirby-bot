@@ -9,12 +9,14 @@
 import { describe, expect, it } from "bun:test";
 import { $ } from "bun";
 import { Effect } from "effect";
+import type { ShellError, ShellOutput } from "./shell";
 import {
   describeShellError,
   runShell,
   ShellNonZeroExit,
   ShellSpawnFailed,
   ShellTimeout,
+  withShellRetry,
 } from "./shell";
 
 describe("runShell (strict)", () => {
@@ -26,6 +28,47 @@ describe("runShell (strict)", () => {
   it("exit non-zero → ShellNonZeroExit with the exit code", async () => {
     const error = await Effect.runPromise(Effect.flip(runShell(() => $`false`)));
     expect(error).toMatchObject({ _tag: "ShellNonZeroExit", exitCode: 1 });
+  });
+});
+
+describe("withShellRetry", () => {
+  /** An Effect that fails `failTimes` with `error`, then succeeds, counting calls. */
+  const flaky = (failTimes: number, error: ShellError) => {
+    let attempts = 0;
+    const call = Effect.suspend((): Effect.Effect<ShellOutput, ShellError> => {
+      attempts += 1;
+      return attempts <= failTimes
+        ? Effect.fail(error)
+        : Effect.succeed({ stdout: "ok", stderr: "" });
+    });
+    return { call, attempts: () => attempts };
+  };
+
+  it("retries a transient ShellTimeout, then succeeds", async () => {
+    const { call, attempts } = flaky(1, new ShellTimeout({ timeoutMs: 1 }));
+    const out = await Effect.runPromise(withShellRetry(call));
+    expect(out.stdout).toBe("ok");
+    expect(attempts()).toBe(2);
+  });
+
+  it("does NOT retry a deterministic ShellNonZeroExit", async () => {
+    const { call, attempts } = flaky(
+      Number.POSITIVE_INFINITY,
+      new ShellNonZeroExit({ exitCode: 1, stdout: "", stderr: "" }),
+    );
+    const error = await Effect.runPromise(Effect.flip(withShellRetry(call)));
+    expect(error).toMatchObject({ _tag: "ShellNonZeroExit" });
+    expect(attempts()).toBe(1);
+  });
+
+  it("retries a transient ShellSpawnFailed up to the cap, then surfaces it", async () => {
+    const { call, attempts } = flaky(
+      Number.POSITIVE_INFINITY,
+      new ShellSpawnFailed({ cause: "EAGAIN" }),
+    );
+    const error = await Effect.runPromise(Effect.flip(withShellRetry(call)));
+    expect(error).toMatchObject({ _tag: "ShellSpawnFailed" });
+    expect(attempts()).toBe(3); // 1 initial + 2 retries (Schedule.recurs(2))
   });
 });
 

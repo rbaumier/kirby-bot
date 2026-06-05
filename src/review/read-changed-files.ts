@@ -18,7 +18,8 @@ import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { $ } from "bun";
 import { Data, Effect } from "effect";
-import { runShell } from "../shell";
+import { GIT_READ_TIMEOUT_MS } from "../config";
+import { runShell, withShellRetry } from "../shell";
 import type { ShellError } from "../shell";
 import type { ChangedFile } from "./detect";
 
@@ -89,8 +90,8 @@ export const readChangedFiles = (
     const { worktree, defaultBranch } = input;
     const range = `${defaultBranch}...HEAD`;
 
-    const numstat = yield* runShell(
-      () => $`git -C ${worktree} diff --numstat ${range}`,
+    const numstat = yield* withShellRetry(
+      runShell(() => $`git -C ${worktree} diff --numstat ${range}`, GIT_READ_TIMEOUT_MS),
     ).pipe(
       Effect.mapError(
         (error: ShellError) =>

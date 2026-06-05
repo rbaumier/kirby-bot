@@ -184,6 +184,18 @@ export const MAX_CONCURRENT_AGENTS = 20;
  */
 export const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
+/**
+ * Shorter per-attempt ceiling for *local* git reads (diff, numstat,
+ * merge-base) wrapped in {@link withShellRetry}. A healthy tree-to-tree git
+ * read returns in well under a second even on a large diff; a read still
+ * stalled at 30s is contending on the shared object store (a sibling worktree
+ * mid-commit, a background repack), and the retry — not a longer wait — is
+ * what clears it. Three attempts at this ceiling stay under the single
+ * {@link COMMAND_TIMEOUT_MS} they replace. (#974: a 120s `git diff` stall
+ * discarded a fully-implemented issue with no retry.)
+ */
+export const GIT_READ_TIMEOUT_MS = 30 * 1000;
+
 /** The most review→fix cycles allowed before the issue is failed for a human. */
 export const MAX_FIX_CYCLES = 2;
 
