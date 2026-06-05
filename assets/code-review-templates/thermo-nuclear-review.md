@@ -7,7 +7,7 @@ Read diff from {diff_file}. Read full files when needed.
 Focus exclusively on what TNQR uniquely catches: code-judo moves that delete complexity (not rearrange it), files pushed past 1k lines without strong reason, spaghetti growth (ad-hoc conditionals bolted onto unrelated flows), thin/identity abstractions, cast/optionality churn that obscures invariants, feature logic leaking into shared paths, sequential orchestration where parallel is obvious.
 
 ## What NOT to flag
-- Findings already covered by Correctness / Skill / Funnel / Subsystem — those agents own their domains; you cover what only the structural lens catches.
+- Findings already covered by Correctness / Skill / Subsystem — those agents own their domains; you cover what only the structural lens catches. A **missing** shared abstraction (the same structure/markup copy-pasted across N files) IS yours: Funnel only flags abstractions that already exist and don't pay rent, never a missing one, so don't defer that to it.
 - Linter/formatter-enforced style — machine-enforced, move on.
 - Pre-existing structural debt in unchanged code, unless this diff materially worsens it.
 - Low-value nits when larger structural issues exist (TNQR rule: "do not flood the review with low-value nits if there are larger structural issues").

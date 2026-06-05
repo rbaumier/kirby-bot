@@ -129,7 +129,7 @@ const AGENTS_DATA = {
   // },
   "thermo-nuclear": {
     model: "haiku",
-    description: "Aggressive structural pass: what would a skeptical senior tear apart. Spawn for non-trivial or high-stakes diffs.",
+    description: "Aggressive structural pass: what would a skeptical senior tear apart — missing shared abstractions, copy-pasted structure across files, sprawling files. Spawn on every diff.",
     prompt: { kind: "self-contained", templateFile: "thermo-nuclear-review.md" },
   },
   "security-defensive": {
