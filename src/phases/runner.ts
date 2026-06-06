@@ -79,6 +79,7 @@ export const phaseHandlerError =
     new HandlerError({
       reason: `${prefix}: ${describePhaseError(error)}`,
       fate: fateOfPhaseError(error),
+      errorType: error._tag,
       ...(error._tag === "UsageLimitHit" && error.resetText !== undefined
         ? { usageLimitResetText: error.resetText }
         : {}),

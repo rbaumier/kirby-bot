@@ -298,7 +298,7 @@ const dispatchHandler = (
  */
 export const endFieldsOf = (
   state: Exclude<State, { kind: "fetch_queue" | "end" | "failed" | "stalled" | "interrupted" }>,
-): Omit<EndStateFields, "reason"> => {
+): Omit<EndStateFields, "reason" | "errorType"> => {
   switch (state.kind) {
     case "claim_issue":
     case "branch_create": {
@@ -407,7 +407,7 @@ export const step = (
         // A deploy bug (missing prompt, bad auth): crash the run, do not park the issue.
         return Effect.die(`fatal: ${error.reason}`);
       }
-      const endFields = { ...endFieldsOf(current), reason: error.reason };
+      const endFields = { ...endFieldsOf(current), reason: error.reason, errorType: error.errorType ?? null };
       if (error.fate === "interruption") {
         // A usage-limit hit is an interruption carrying the reset substring; the
         // machine reads it off the `interrupted` state to back off (#78). Every

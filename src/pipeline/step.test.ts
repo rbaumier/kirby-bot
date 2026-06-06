@@ -169,6 +169,9 @@ describe("step seam", () => {
     expect(interrupted?.usageLimitResetText).toBeNull();
     expect(interrupted?.reason).toContain("claim_issue:");
     expect(interrupted?.reason).toContain("HTTP 500");
+    // The seam copies the typed cause off the HandlerError so run.jsonl can group
+    // interruptions by type (a 5xx here vs a TmuxError elsewhere) without prose.
+    expect(interrupted?.errorType).toBe("ProviderHttpError");
   });
 
   it("a 422 HandlerError from claim_issue becomes a `failed` state (the retry would only re-hit it)", async () => {
@@ -187,6 +190,8 @@ describe("step seam", () => {
       ),
     );
     expect(result.kind).toBe("failed");
+    const failed = result.kind === "failed" ? result : null;
+    expect(failed?.errorType).toBe("ProviderHttpError");
   });
 });
 
@@ -234,6 +239,7 @@ describe("onStalled (cold sidecar)", () => {
       pullRequestIid: null,
       fixCycles: null,
       reason: "implementation: timed out with no commits ahead of base",
+      errorType: null,
     } as const;
 
     const result = await Effect.runPromise(

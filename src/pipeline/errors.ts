@@ -38,11 +38,22 @@ export type Fate = "interruption" | "stall" | "failure" | "fatal";
  * substring, and the seam threads it onto the `interrupted` state so the
  * orchestrator can back off until the limit resets (#78). Unset (and ignored)
  * for every other failure.
+ *
+ * `errorType` is the typed `_tag` of the cause the fate was decided from
+ * (`ProviderHttpError`, `SessionTimedOut`, `TmuxError`, …). The reason string
+ * already describes the failure for a human; `errorType` preserves the machine
+ * tag so `run.jsonl` analytics can tell a 429 from a session timeout from a
+ * `tmux` crash without regexing prose. Only the two central mappers
+ * (`providerHandlerError`, `phaseHandlerError`) set it — the direct
+ * `new HandlerError` sites (git/shell/queue) leave it unset: their shell-level
+ * `_tag` is too generic to bucket on (every git step shares one) and their
+ * `reason` already names the operation. Unset → `null` past the seam.
  */
 export class HandlerError extends Data.TaggedError("HandlerError")<{
   readonly reason: string;
   readonly fate: Fate;
   readonly usageLimitResetText?: string;
+  readonly errorType?: string;
 }> {}
 
 /**
@@ -81,4 +92,5 @@ export const providerHandlerError =
     new HandlerError({
       reason: `${prefix}: ${describeProviderError(error)}`,
       fate: fateOfProviderError(error),
+      errorType: error._tag,
     });

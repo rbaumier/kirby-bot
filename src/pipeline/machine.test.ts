@@ -11,15 +11,18 @@
  *    that keeps a paused run from reading as crashed.
  */
 import { describe, expect, it } from "bun:test";
-import { Effect, Fiber, Option, TestClock, TestContext } from "effect";
+import { Effect, Fiber, Layer, Option, TestClock, TestContext } from "effect";
 import {
   USAGE_LIMIT_BACKOFF_FALLBACK_MS,
   USAGE_LIMIT_BACKOFF_MARGIN_MS,
   USAGE_LIMIT_BACKOFF_MIN_MS,
 } from "../config";
+import type { Environment } from "../preflight";
+import { GitProvider } from "../provider/provider";
+import { ProviderHttpError } from "../provider/types";
 import { RunArtifacts } from "../run-artifacts";
 import type { RunArtifactsShape } from "../run-artifacts";
-import { backOffForUsageLimit, usageLimitBackoffMs } from "./machine";
+import { advance, backOffForUsageLimit, usageLimitBackoffMs } from "./machine";
 
 const SONNET = "You've hit your Sonnet limit · resets Jun 1 at 2am (Europe/Paris)";
 
@@ -108,5 +111,50 @@ describe("backOffForUsageLimit (virtual clock)", () => {
       resetInstant: null,
       sleepMs: USAGE_LIMIT_BACKOFF_FALLBACK_MS,
     });
+  });
+});
+
+describe("advance — transition event carries the failure's typed cause", () => {
+  const issue = { iid: 42, title: "Test issue", body: "body" } as const;
+  const env: Environment = { repoName: "kirby-machinetest", defaultBranch: "main" };
+
+  // Every method is a defect except the two the `claim_issue` path touches:
+  // `viewIssue`'s 500 is swallowed to "not yet claimed"; `updateIssueLabels`'s
+  // 500 surfaces as a transient HandlerError → `interrupted`. The seam test pins
+  // that its `ProviderHttpError` tag reaches the logged `transition` event — the
+  // single seam where the projection's input is produced.
+  const claimFailingProvider = Layer.succeed(GitProvider, {
+    listIssuesByLabels: () => Effect.die("fake: listIssuesByLabels"),
+    viewIssue: () =>
+      Effect.fail(new ProviderHttpError({ method: "GET", path: "issues/42", status: 500, body: "boom" })),
+    updateIssueLabels: () =>
+      Effect.fail(new ProviderHttpError({ method: "PUT", path: "issues/42", status: 500, body: "boom" })),
+    addIssueNote: () => Effect.die("fake: addIssueNote"),
+    findOpenPullRequestBySource: () => Effect.die("fake: findOpenPullRequestBySource"),
+    createDraftPullRequest: () => Effect.die("fake: createDraftPullRequest"),
+    viewPullRequest: () => Effect.die("fake: viewPullRequest"),
+    markPullRequestReady: () => Effect.die("fake: markPullRequestReady"),
+    mergePullRequest: () => Effect.die("fake: mergePullRequest"),
+    listDiscussions: () => Effect.die("fake: listDiscussions"),
+    postDiscussion: () => Effect.die("fake: postDiscussion"),
+    postMrNote: () => Effect.die("fake: postMrNote"),
+    replyToDiscussion: () => Effect.die("fake: replyToDiscussion"),
+    resolveDiscussion: () => Effect.die("fake: resolveDiscussion"),
+  });
+
+  it("copies the HandlerError's errorType onto the logged transition", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const next = await Effect.runPromise(
+      advance({ kind: "claim_issue", issue }, env).pipe(
+        Effect.provide(claimFailingProvider),
+        Effect.provideService(RunArtifacts, recordingArtifacts(events)),
+      ),
+    );
+    expect(next.kind).toBe("interrupted");
+    const transition = events.find((event) => event.event === "transition");
+    expect(transition).toBeDefined();
+    expect(transition?.to).toBe("interrupted");
+    // The typed cause round-trips state → event; the projection reads it here.
+    expect(transition?.errorType).toBe("ProviderHttpError");
   });
 });

@@ -42,6 +42,8 @@ describe("projectRunStats", () => {
     expect(issue?.terminal).toBe("done");
     expect(issue?.pullRequestIid).toBe(99);
     expect(issue?.qa).toBe("pass");
+    // A clean run carries no failure cause.
+    expect(issue?.errorType).toBeUndefined();
   });
 
   it("sums phase durations by the originating (`from`) phase", () => {
@@ -96,5 +98,32 @@ describe("projectRunStats", () => {
     ]);
     const agent = stats2.issues[0]?.agents.find((a) => a.agent === "skill");
     expect(agent).toMatchObject({ findings: 1, untriaged: 1, accepted: 0, rejected: 0 });
+  });
+
+  it("captures the typed errorType for stalled / interrupted, not just failed", () => {
+    // An interruption re-queues the issue (terminal stays "incomplete"), but its
+    // typed cause is exactly what the analytics need — so it must be captured.
+    const interrupted = projectRunStats([
+      j({ event: "transition", from: "implementation", to: "interrupted", elapsedMs: 100, issue: { iid: 9, title: "Boom" }, note: "implementation: tmux create failed", errorType: "TmuxError" }),
+    ]).issues.find((e) => e.iid === 9);
+    expect(interrupted?.errorType).toBe("TmuxError");
+    expect(interrupted?.terminal).toBe("incomplete");
+
+    // A stall surfaces its cause too (here a session that produced no verdict).
+    const stalled = projectRunStats([
+      j({ event: "transition", from: "review", to: "stalled", elapsedMs: 50, issue: { iid: 10, title: "Spin" }, note: "review: stopped without a clean verdict", errorType: "NoVerdict" }),
+    ]).issues.find((e) => e.iid === 10);
+    expect(stalled?.errorType).toBe("NoVerdict");
+  });
+
+  it("clears a stale errorType when a re-picked issue later succeeds in the same run", () => {
+    // stalled (re-queues) → re-pick → done: the success must not inherit the
+    // earlier attempt's failure cause.
+    const recovered = projectRunStats([
+      j({ event: "transition", from: "implementation", to: "stalled", elapsedMs: 50, issue: { iid: 11, title: "Flaky" }, errorType: "SessionTimedOut" }),
+      j({ event: "transition", from: "merge", to: "done", elapsedMs: 60, issue: { iid: 11, title: "Flaky" }, pullRequestIid: 5 }),
+    ]).issues.find((e) => e.iid === 11);
+    expect(recovered?.terminal).toBe("done");
+    expect(recovered?.errorType).toBeUndefined();
   });
 });

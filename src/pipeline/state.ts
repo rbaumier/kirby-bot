@@ -45,6 +45,14 @@ export type EndStateFields = {
   readonly pullRequestIid: number | null;
   readonly fixCycles: number | null;
   readonly reason: string;
+  /**
+   * The typed `_tag` of the failure cause (`SessionTimedOut`, `ProviderHttpError`,
+   * `TmuxError`, …), or `null` when the failure carried no typed cause. The
+   * machine-readable companion to `reason`: the seam copies it off
+   * `HandlerError.errorType` and `machine.ts` logs it on the `transition` event
+   * so `run.jsonl` analytics can group failures by type without parsing prose.
+   */
+  readonly errorType: string | null;
 };
 
 /**

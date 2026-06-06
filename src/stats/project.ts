@@ -53,6 +53,14 @@ export type IssueStats = {
   fixCycles: number;
   terminal: TerminalStatus;
   failureReason?: string;
+  /**
+   * The typed `_tag` of the last end-of-attempt failure cause (`SessionTimedOut`,
+   * `ProviderHttpError`, `TmuxError`, …), captured for `failed` / `stalled` /
+   * `interrupted` alike. Absent when no attempt failed, or the failure carried
+   * no typed cause. Lets analytics group attempts by failure type without
+   * regexing `failureReason`.
+   */
+  errorType?: string;
   /** The PR/MR iid this issue's branch opened, once known. */
   pullRequestIid?: number;
   qa: QaStatus;
@@ -92,6 +100,7 @@ type IssueAcc = {
   fixCycles: number;
   terminal: TerminalStatus;
   failureReason: string | undefined;
+  errorType: string | undefined;
   pullRequestIid: number | undefined;
   qa: QaStatus;
   agents: Map<string, AgentStats>;
@@ -122,6 +131,7 @@ const issueAcc = (iid: number): IssueAcc => ({
   fixCycles: 0,
   terminal: "incomplete",
   failureReason: undefined,
+  errorType: undefined,
   pullRequestIid: undefined,
   qa: "none",
   agents: new Map(),
@@ -200,9 +210,24 @@ const applyEvent = (event: Record<string, unknown>, issues: Map<number, IssueAcc
     }
     if (to === "done") {
       acc.terminal = "done";
+      // A finished issue carries no failure cause: clear any errorType a prior
+      // stalled/interrupted attempt left on the accumulator. Those fates
+      // re-queue the issue, so `stalled → re-pick → done` is reachable in one
+      // run, and a stale errorType would mislabel a success.
+      acc.errorType = undefined;
     } else if (to === "failed") {
       acc.terminal = "failed";
       acc.failureReason = asStr(event.note);
+    }
+    // Capture the typed failure cause for every end-of-attempt fate, not just
+    // `failed`: a `stalled` / `interrupted` attempt re-queues the issue but its
+    // cause is exactly what these analytics need. Last writer wins across an
+    // issue's re-picks within one run; a later `done` clears it (above).
+    if (to === "failed" || to === "stalled" || to === "interrupted") {
+      const errorType = asStr(event.errorType);
+      if (errorType !== undefined) {
+        acc.errorType = errorType;
+      }
     }
     if (from === "qa") {
       acc.qa = to === "merge" ? "pass" : "fail";
@@ -289,6 +314,7 @@ const finalize = (acc: IssueAcc): IssueStats => ({
   fixCycles: acc.fixCycles,
   terminal: acc.terminal,
   ...(acc.failureReason === undefined ? {} : { failureReason: acc.failureReason }),
+  ...(acc.errorType === undefined ? {} : { errorType: acc.errorType }),
   ...(acc.pullRequestIid === undefined ? {} : { pullRequestIid: acc.pullRequestIid }),
   qa: acc.qa,
   agents: [...acc.agents.values()].toSorted((a, b) => b.findings - a.findings || a.agent.localeCompare(b.agent)),

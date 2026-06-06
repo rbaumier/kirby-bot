@@ -118,8 +118,15 @@ export const backOffForUsageLimit = (
     yield* artifacts.logEvent({ event: "usage_limit_resume", pausedMs: sleepMs });
   });
 
-/** Run one handler, then print and log the transition it produced. */
-const advance = (
+/**
+ * Run one handler, then print and log the transition it produced.
+ *
+ * Exported for the machine seam test: it pins that an end-of-attempt's typed
+ * `errorType` round-trips from the `step`-produced state onto the `transition`
+ * event (the projection's input). Not part of the public driver — use
+ * {@link runMachine}.
+ */
+export const advance = (
   state: State,
   env: Environment,
 ): Effect.Effect<State, ProviderCallError, MachineServices> =>
@@ -136,6 +143,9 @@ const advance = (
       next.kind === "failed" || next.kind === "stalled" || next.kind === "interrupted"
         ? next.reason
         : undefined;
+    // The typed cause of an end-of-attempt, machine-readable alongside `note`.
+    // `null` for a successful transition or a failure with no typed cause.
+    const errorType = "errorType" in next ? next.errorType : null;
 
     yield* Console.log(
       formatTransition({ issue, from: state.kind, to: next.kind, elapsedMs, note }),
@@ -148,6 +158,7 @@ const advance = (
       issue: issue ? { iid: issue.iid, title: issue.title } : null,
       pullRequestIid,
       note,
+      errorType,
     });
 
     // Persist where a resumed run should re-enter (#73). The decision is pure

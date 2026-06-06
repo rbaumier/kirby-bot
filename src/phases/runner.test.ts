@@ -21,6 +21,8 @@ describe("phaseHandlerError on UsageLimitHit", () => {
     expect(error.fate).toBe("interruption");
     expect(error.usageLimitResetText).toBe("resets Jun 1 at 2am (Europe/Paris)");
     expect(error.reason).toContain("Claude usage limit hit");
+    // The typed `_tag` is preserved for run.jsonl analytics alongside the reason.
+    expect(error.errorType).toBe("UsageLimitHit");
   });
 
   it("omits the reset substring when the header had scrolled out", () => {
@@ -33,6 +35,7 @@ describe("phaseHandlerError on UsageLimitHit", () => {
     const error = phaseHandlerError("review")(new SessionTimedOut({ phase: "review", elapsedMs: 1 }));
     expect(error.fate).toBe("stall");
     expect(error.usageLimitResetText).toBeUndefined();
+    expect(error.errorType).toBe("SessionTimedOut");
   });
 });
 
