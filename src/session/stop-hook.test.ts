@@ -6,7 +6,7 @@
  * then asserts what the sentinel contains and what (if anything) was
  * written to stdout.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -236,6 +236,42 @@ describe("stop-hook", () => {
     const { sentinelContent, stdout } = runHook({ hook_event_name: "Stop" }, transcript);
     expect(sentinelContent).toBe("Still going, no verdict yet.");
     expect(stdout).toBe("");
+  });
+
+  test("re-reads the transcript when the final entry is still streaming, capturing the late verdict", async () => {
+    // Real #980 case: Claude Code wrote the final assistant entry as an empty
+    // skeleton (end_turn, no content), then re-appended the SAME message.id with
+    // the verdict ~6ms later. The hook read inside that window, captured "", and
+    // the orchestrator reprompted — discarding the ROUTING_DONE it had emitted.
+    // The hook must re-read until content lands instead of writing an empty
+    // sentinel. We widen the retry window via env so the timing is deterministic.
+    const tmp = mkdtempSync(join(tmpdir(), "kirby-stop-hook-"));
+    const transcriptPath = join(tmp, "transcript.jsonl");
+    const sentinelPath = join(tmp, "sentinel.flag");
+    const skeleton = JSON.stringify({
+      type: "assistant",
+      message: { id: "m1", content: [{ type: "text", text: "" }], stop_reason: "end_turn" },
+    });
+    const full = JSON.stringify({
+      type: "assistant",
+      message: {
+        id: "m1",
+        content: [{ type: "text", text: "Routing complete.\nVERDICT: ROUTING_DONE" }],
+        stop_reason: "end_turn",
+      },
+    });
+    writeFileSync(transcriptPath, skeleton);
+    const stdin = JSON.stringify({ hook_event_name: "Stop", transcript_path: transcriptPath });
+    const child = spawn("bun", [SCRIPT, sentinelPath], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, KIRBY_STOP_HOOK_RETRY_ATTEMPTS: "40", KIRBY_STOP_HOOK_RETRY_MS: "25" },
+    });
+    child.stdin.end(stdin);
+    // After the hook has started retrying, the stream re-appends the full entry.
+    await Bun.sleep(80);
+    writeFileSync(transcriptPath, `${skeleton}\n${full}`);
+    await new Promise<void>((resolve) => child.on("exit", () => resolve()));
+    expect(readFileSync(sentinelPath, "utf8")).toBe("Routing complete.\nVERDICT: ROUTING_DONE");
   });
 
 });

@@ -8,7 +8,10 @@
  *  - `"end_turn"` → the model genuinely finished. Capture the most recent
  *    assistant entry that carries a `VERDICT:` line (joined across `text`
  *    blocks) and write it atomically to the sentinel; fall back to the last
- *    assistant entry when none carries a verdict.
+ *    assistant entry when none carries a verdict. If the captured text is still
+ *    empty, re-read a few times first — Claude Code streams the final entry as
+ *    an empty skeleton before re-appending it with content, and reading inside
+ *    that window would drop a verdict the model actually emitted.
  *
  *  - anything else (`"tool_use"`, `"max_tokens"`, missing, …) AND this is a
  *    `Stop` (not `StopFailure`) → the runtime is between turns but the model
@@ -117,35 +120,6 @@ if (payload === null || payload.transcript_path === undefined) {
 }
 
 const transcriptPath = payload.transcript_path;
-const rawTranscript = tryRead(`read transcript ${transcriptPath}`, () =>
-  readFileSync(transcriptPath, "utf8"),
-);
-if (rawTranscript === null) { process.exit(0); }
-
-const ENTRIES: TranscriptEntry[] = [];
-for (const line of rawTranscript.split("\n")) {
-  if (line.trim() === "") { continue; }
-  const entry = parseTranscriptEntry(line);
-  if (entry !== null) { ENTRIES.push(entry); }
-}
-
-const ASSISTANTS = ENTRIES.filter((entry) => entry.type === "assistant");
-const lastAssistant = ASSISTANTS.at(-1) ?? null;
-
-const isStopFailure = payload.hook_event_name === "StopFailure";
-const stopReason = lastAssistant?.message?.stop_reason;
-
-if (!isStopFailure && stopReason !== "end_turn") {
-  // The model hasn't completed its work — runtime is between turns, or
-  // truncated, or otherwise interrupted. Ask Claude Code to resume; do
-  // not write the sentinel.
-  const decision = {
-    decision: "block",
-    reason: `last assistant stop_reason is ${stopReason ?? "(missing)"}, not end_turn — main agent is not done`,
-  };
-  process.stdout.write(JSON.stringify(decision));
-  process.exit(0);
-}
 
 // Join the `text` blocks of one assistant entry; non-array content (a plain
 // string, or none) yields "".
@@ -153,6 +127,22 @@ const assistantText = (entry: TranscriptEntry): string => {
   const content = entry.message?.content;
   const blocks: readonly unknown[] = Array.isArray(content) ? content : [];
   return blocks.filter(isTextBlock).map((block) => block.text).join("\n");
+};
+
+// Read the transcript and keep its assistant entries in document order. Returns
+// null only when the file itself can't be read — the caller exits cleanly then.
+const readAssistants = (): TranscriptEntry[] | null => {
+  const raw = tryRead(`read transcript ${transcriptPath}`, () =>
+    readFileSync(transcriptPath, "utf8"),
+  );
+  if (raw === null) { return null; }
+  const assistants: TranscriptEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") { continue; }
+    const entry = parseTranscriptEntry(line);
+    if (entry !== null && entry.type === "assistant") { assistants.push(entry); }
+  }
+  return assistants;
 };
 
 // Capture the MOST RECENT assistant entry that carries a verdict line, not
@@ -167,12 +157,62 @@ const assistantText = (entry: TranscriptEntry): string => {
 // and the right reversal is to emit the opposing VERDICT line, which this scan
 // then honours as the newest. We accept the prose-only-reversal corner rather
 // than reason about which trailing prose negates a prior verdict.
-const verdictBearing = ASSISTANTS.findLast((entry) => containsVerdictLine(assistantText(entry)));
-const captured = verdictBearing ?? lastAssistant;
+const capturedText = (assistants: readonly TranscriptEntry[]): string => {
+  const captured =
+    assistants.findLast((entry) => containsVerdictLine(assistantText(entry))) ??
+    assistants.at(-1);
+  return captured === undefined ? "" : assistantText(captured);
+};
+
+// Bounded re-read budget for the streaming-skeleton race below. Overridable via
+// env so the test can widen the window deterministically. A non-finite or
+// non-positive override falls back to the default rather than disabling the
+// re-read — a mistyped knob must NOT silently re-open the #980 race.
+const positiveEnv = (name: string, fallback: number): number => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+const CAPTURE_RETRY_ATTEMPTS = positiveEnv("KIRBY_STOP_HOOK_RETRY_ATTEMPTS", 4);
+const CAPTURE_RETRY_MS = positiveEnv("KIRBY_STOP_HOOK_RETRY_MS", 50);
+
+const assistants = readAssistants();
+if (assistants === null) { process.exit(0); }
+
+const isStopFailure = payload.hook_event_name === "StopFailure";
+const stopReason = (assistants.at(-1) ?? null)?.message?.stop_reason;
+
+if (!isStopFailure && stopReason !== "end_turn") {
+  // The model hasn't completed its work — runtime is between turns, or
+  // truncated, or otherwise interrupted. Ask Claude Code to resume; do
+  // not write the sentinel.
+  const decision = {
+    decision: "block",
+    reason: `last assistant stop_reason is ${stopReason ?? "(missing)"}, not end_turn — main agent is not done`,
+  };
+  process.stdout.write(JSON.stringify(decision));
+  process.exit(0);
+}
+
+// The turn ended, so we WILL write the sentinel. But Claude Code streams the
+// final assistant message into the transcript in two steps: an empty skeleton
+// line first, then the SAME message.id re-appended with the streamed text
+// (verdict included). A Stop hook that reads inside that window captures the
+// empty skeleton, writes an empty sentinel, and the orchestrator reads it as
+// NoVerdict — reprompting and discarding a verdict the model actually emitted.
+// Re-read until the captured entry has content, the way loadAndPastePrompt
+// waits for an async paste to land (#30). A genuinely empty final turn just
+// exhausts the bounded budget and still writes "" — that case is rare and the
+// 200ms default is negligible against the 5s sentinel-poll cadence.
+let text = capturedText(assistants);
+for (let attempt = 0; text === "" && attempt < CAPTURE_RETRY_ATTEMPTS; attempt++) {
+  Bun.sleepSync(CAPTURE_RETRY_MS);
+  const next = readAssistants();
+  if (next !== null) { text = capturedText(next); }
+}
 
 // PID-suffixed tmp path — two overlapping Stop hook invocations (possible if
 // Claude Code ever issues a Stop and a StopFailure back-to-back) won't race
 // on the same tmp file. Final rename remains atomic on POSIX.
 const tmp = `${sentinel}.${process.pid}.tmp`;
-writeFileSync(tmp, captured === null ? "" : assistantText(captured));
+writeFileSync(tmp, text);
 renameSync(tmp, sentinel);
