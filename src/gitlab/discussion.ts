@@ -8,7 +8,7 @@
  * findings, `evaluate` replies and resolves, `fix` resolves what it fixed. The
  * CLI in `scripts/mr-discussion.ts` exposes these to the phase prompts.
  */
-import { Effect, Schema } from "effect";
+import { Console, Effect, Schema } from "effect";
 import { ProviderResponseError } from "../provider/types";
 import type { ProviderError } from "../provider/types";
 import { runGitLabIdempotentWrite, runGitLabRead, runGitLabWrite } from "./http";
@@ -80,6 +80,26 @@ const DiscussionListSchema = Schema.Array(Schema.Object);
 
 /** A single discussion comes back as an opaque object (validated by the model). */
 const DiscussionSchema = Schema.Object;
+
+/**
+ * A positioned-discussion POST response: the created `id` plus its `notes`. We
+ * read `notes[0].type` to detect GitLab's silent position-downgrade (below).
+ */
+const PositionedDiscussionSchema = Schema.Struct({
+  id: Schema.Union(Schema.NonEmptyString, Schema.Number),
+  notes: Schema.optional(Schema.Array(Schema.Object)),
+});
+
+/**
+ * Read `notes[0].type` from a positioned POST response. GitLab tags a
+ * successfully anchored note `"DiffNote"`; any other value — `"DiscussionNote"`,
+ * null, or no notes — means it accepted the POST (201) but *discarded* the
+ * position, silently downgrading to a general note. A bare id check misses this.
+ */
+const firstNoteType = (notes: readonly unknown[] | undefined): string => {
+  const first = notes?.[0];
+  return isRecord(first) && typeof first.type === "string" ? first.type : "";
+};
 
 /** List every discussion on a merge request. */
 export const listDiscussions = (
@@ -162,15 +182,23 @@ export const postDiscussion = (
         },
       },
     },
-    HasIdSchema,
+    PositionedDiscussionSchema,
   ).pipe(
+    Effect.tap((res) => {
+      const noteType = firstNoteType(res.notes);
+      return noteType === "DiffNote"
+        ? Effect.void
+        : Console.error(
+            `[gitlab] discussion on ${anchor.file}:${anchor.line} was silently downgraded to a general note (type=${noteType || "none"}) — finding is visible but not line-anchored`,
+          );
+    }),
     Effect.map((res) => String(res.id)),
     Effect.catchIf(isLineNotAnchorable, () => postGeneralDiscussion(mergeRequestIid, body)),
   );
 };
 
 /** Exposed for tests — never used in production code. */
-export const __test = { isLineNotAnchorable };
+export const __test = { isLineNotAnchorable, firstNoteType };
 
 /**
  * Add a note (a reply) to an existing discussion thread. The response is

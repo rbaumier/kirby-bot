@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { ProviderHttpError, ProviderNetworkError } from "../provider/types";
 import { __test, toDiscussionSummary } from "./discussion";
 
-const { isLineNotAnchorable } = __test;
+const { isLineNotAnchorable, firstNoteType } = __test;
 
 const httpError = (status: number, body: string) =>
   new ProviderHttpError({ method: "POST", path: "discussions", status, body });
@@ -25,6 +25,23 @@ describe("isLineNotAnchorable", () => {
     expect(
       isLineNotAnchorable(new ProviderNetworkError({ method: "POST", path: "d", cause: "line" })),
     ).toBe(false);
+  });
+});
+
+describe("firstNoteType — silent-downgrade detection", () => {
+  it("returns 'DiffNote' when GitLab honored the position", () => {
+    expect(firstNoteType([{ type: "DiffNote" }])).toBe("DiffNote");
+  });
+
+  it("returns the real type when GitLab silently discarded the position", () => {
+    expect(firstNoteType([{ type: "DiscussionNote" }])).toBe("DiscussionNote");
+  });
+
+  it("returns '' for null type / no notes / missing array — never a false 'DiffNote'", () => {
+    expect(firstNoteType([{ type: null }])).toBe("");
+    expect(firstNoteType([])).toBe("");
+    expect(firstNoteType(undefined)).toBe("");
+    expect(firstNoteType([{ body: "no type field" }])).toBe("");
   });
 });
 
