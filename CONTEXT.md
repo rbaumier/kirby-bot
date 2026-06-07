@@ -15,6 +15,16 @@ A unit of work the orchestrator drives through one state transition. Phases divi
 
 A Phase Module's interface is `Effect<State, HandlerError, R>` — it runs the Phase Session, narrows the Verdict to the expected set, and resolves the next `State` itself. Post-verdict policy that depends on Phase-internal data (the `MAX_FIX_CYCLES` cap in `evaluate`, the `fixCycles` increment in `fix`) stays cohesive with the Phase that owns it; the state machine's dispatcher only routes on `state.kind`.
 
+### Review Engine
+
+The Provider-free, pipeline-free core the `review` Phase wraps: `readChangedFiles → runFanOutPhase → aggregateFindings`. Its only inputs are a **worktree** (a real git checkout, positioned on the head of what's reviewed — the Agents read file content off the working tree) and a **base ref** (it computes `git diff base...HEAD` itself; the diff is never passed in). Its output is an `AggregatedReview` (line-anchored + prose Findings + the Agent roster). It knows nothing about Issues, State, Verdicts, or the Provider — `issueIid` only seasons artifact slugs and log events, never a Provider lookup.
+_Avoid_: review pipeline, review service.
+
+### Standalone Review
+
+Invoking the Review Engine **outside the orchestrator**, via `scripts/review.ts` on a `(worktree, base)` pair (precedent: `scripts/mr-discussion.ts`). Output is **local only** — the `AggregatedReview` is written as JSON, never posted; there is no State, no Verdict, no Provider config required. The skill (`kirby-review`) owns all the git: it resolves a PR (`git fetch origin refs/merge-requests/<iid>/head` on GitLab, `refs/pull/<n>/head` on GitHub, then pins `FETCH_HEAD` to a SHA) or a commit into a **dedicated throwaway worktree** detached on the head, picks the base (`origin/<defaultBranch>` for a PR, `<sha>^` for a commit), runs the script, presents the Findings, and removes the worktree. Always a dedicated worktree — never the live checkout — so the fan-out's `.claude/` Stop-hook write stays isolated. The Engine runs byte-identical to its in-Phase use: a synthetic `issueIid` (the script's PID, so concurrent runs don't collide on tmux session names), `iteration: 0`, a fresh `deadline`, and a `RunArtifacts` built from `buildRunArtifacts` + `mkdir` (the same seam the tests use — `buildRunArtifacts` computes the dir but does not create it).
+_Avoid_: ad-hoc review, manual review, detached review.
+
 ### Verdict
 
 A typed token emitted by an Interactive Phase to signal what happened. Captured by a Claude Code Stop hook, written to a per-phase sentinel file, read by the orchestrator as the last non-empty line matching `^VERDICT: TOKEN$`.
