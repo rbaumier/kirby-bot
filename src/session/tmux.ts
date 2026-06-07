@@ -162,6 +162,12 @@ const PASTE_MAX_ATTEMPTS = 3;
 /** Per-attempt cap polling for the paste to land before we re-check + retry. */
 const PASTE_LAND_MAX_TICKS = 10;
 
+/** Bounded Enter re-sends before we proceed regardless. */
+const SUBMIT_MAX_ATTEMPTS = 3;
+
+/** Per-attempt cap polling for the submit to take effect before re-sending. */
+const SUBMIT_LAND_MAX_TICKS = 10;
+
 /**
  * Load the prompt into the session's named buffer, paste it into the pane, and
  * verify the paste actually landed before returning. Retries up to
@@ -205,6 +211,50 @@ const loadAndPastePrompt = (
       yield* Console.log(
         `[tmux ${session}] paste not delivered (attempt ${attempt}/${PASTE_MAX_ATTEMPTS})` +
           (attempt < PASTE_MAX_ATTEMPTS ? " — re-pasting" : " — sending Enter anyway"),
+      );
+    }
+  });
+
+/**
+ * Send Enter to submit the already-pasted prompt, verifying the submit actually
+ * took before returning. Retries up to {@link SUBMIT_MAX_ATTEMPTS} times.
+ *
+ * The same tmux-server backlog that delays paste delivery (#30) can also drop
+ * the trailing Enter: `send-keys Enter` is enqueued but the application never
+ * processes it, leaving the collapsed paste sitting in the input box at 🧠 0%
+ * forever — the session then idles to its full timeout and surfaces NoVerdict
+ * even though the prompt was right there, unsubmitted. (Observed live: six
+ * review agents plus a router frozen exactly this way.)
+ *
+ * {@link loadAndPastePrompt} polls for the collapsed-paste marker to APPEAR;
+ * this is the mirror — we poll until it DISAPPEARS, which empirically only
+ * happens once a real submit consumes the input (a frozen pane keeps showing
+ * the marker). On the cap we re-send Enter; if every attempt fails we fall
+ * through and the sentinel poll degrades to the pre-fix timeout, never worse.
+ *
+ * If the paste never landed (loadAndPastePrompt exhausted its retries), the
+ * marker is already absent: the first predicate holds, we send a single Enter
+ * and return — identical to the pre-fix single-Enter path. Note the budget here
+ * (3 × {@link SUBMIT_LAND_MAX_TICKS}) stacks on loadAndPastePrompt's own, so a
+ * doubly-backlogged boot can spend that much longer in setup — still bounded
+ * and far below the phase cap.
+ *
+ * Re-sending Enter is safe, the same way loadAndPastePrompt's double-paste is:
+ * we only re-send while the marker is STILL present (the prompt is unsubmitted,
+ * so the input box is non-empty and the new Enter submits it). A late Enter
+ * that races a just-landed submit lands on an empty input box, which the TUI
+ * ignores — it never injects a stray turn into the now-active session.
+ */
+const submitPastedPrompt = (session: string): Effect.Effect<void, TmuxError> =>
+  Effect.gen(function* () {
+    for (let attempt = 1; attempt <= SUBMIT_MAX_ATTEMPTS; attempt++) {
+      yield* tmuxStep("send-enter", () => $`tmux send-keys -t ${session} Enter`);
+      yield* pollPaneUntil(capturePane(session), (pane) => !paneShowsPaste(pane), SUBMIT_LAND_MAX_TICKS);
+      const pane = yield* capturePane(session);
+      if (!paneShowsPaste(pane)) { return; }
+      yield* Console.log(
+        `[tmux ${session}] submit not delivered (attempt ${attempt}/${SUBMIT_MAX_ATTEMPTS})` +
+          (attempt < SUBMIT_MAX_ATTEMPTS ? " — re-sending Enter" : " — proceeding anyway"),
       );
     }
   });
@@ -328,5 +378,7 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
     // send Enter. See {@link loadAndPastePrompt} for the two races this guards
     // against (global-buffer cross-paste, async delivery under backlog — #30).
     yield* loadAndPastePrompt(input.session, input.promptFile);
-    yield* tmuxStep("send-enter", () => $`tmux send-keys -t ${input.session} Enter`);
+    // Submit it, verifying the Enter actually took — the trailing keystroke is
+    // droppable under the same backlog (see {@link submitPastedPrompt}).
+    yield* submitPastedPrompt(input.session);
   });
