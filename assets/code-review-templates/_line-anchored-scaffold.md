@@ -39,7 +39,7 @@ Else: ONLY the JSON object. First char `{`, last char `}`. No preamble, no narra
       "signature": "src/auth/session.rs:42:unwrap-on-user-header",
       "title": "unwrap() on user-supplied header",
       "analysis_chain": [
-        "`req.headers.get(\"X-Token\").unwrap()` — verbatim line 42; .unwrap() panics on None",
+        "`    let token = req.headers.get(\"X-Token\").unwrap();` — verbatim line 42; .unwrap() panics on None",
         "X-Token attacker-controlled",
         "no caller-site guard"
       ],
@@ -49,7 +49,7 @@ Else: ONLY the JSON object. First char `{`, last char `}`. No preamble, no narra
 }
 ```
 
-- `analysis_chain` — ≤3 bullets, ≤25 words each. Only reasoning channel. **First bullet: verbatim quoted snippet of the offending code** (copy-paste from the file you read this session, not paraphrase). Doesn't survive re-read → hallucination, drop.
+- `analysis_chain` — ≤3 bullets, ≤25 words each. Only reasoning channel. **First bullet: a single source line copied verbatim** — never paraphrased, flattened, or joined across lines; for a multi-line expression quote only its most distinctive line. Use exactly one backtick span (the line), then prose — no second span. A resolver matches that line against the diff to anchor the thread, so a collapsed or reformatted quote anchors nowhere. Doesn't survive re-read → hallucination, drop.
 - `fix_prompt` — concrete line + concrete replacement. `bug`/`security`/`performance`/`error_handling` → append `Add a test: …`.
 - `signature` — `<file>:<line>:<failure-mode-slug>`. Controlled-vocabulary slug when applicable (see `reference/output-format.md`).
 - `confidence` — `high`/`medium`/`low`, independent of severity.
@@ -59,7 +59,7 @@ Else: ONLY the JSON object. First char `{`, last char `}`. No preamble, no narra
 
 - Before emitting `bug`/`security`/`performance`/`error_handling`, grep tests. Already covered → drop.
 - Only flag a file you've read in full this session. Inferred from diff slice → hallucination, don't emit.
-- **Evidence gate** — before posting any finding: copy-paste the exact offending line(s) verbatim from the file you read this session into `analysis_chain[0]`. If you cannot quote the literal code, drop the finding.
+- **Evidence gate** — before posting any finding: copy-paste ONE exact offending line verbatim — a single source line, never flattened or joined — from the file you read this session into `analysis_chain[0]`. If the finding spans several lines, quote only the single most distinctive one. If you cannot quote the literal line, drop the finding.
 
 {previous_findings_block}
 ```
