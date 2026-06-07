@@ -89,6 +89,7 @@ const PositionedDiscussionSchema = Schema.Struct({
   id: Schema.Union(Schema.NonEmptyString, Schema.Number),
   notes: Schema.optional(Schema.Array(Schema.Object)),
 });
+type PositionedDiscussion = Schema.Schema.Type<typeof PositionedDiscussionSchema>;
 
 /**
  * Read `notes[0].type` from a positioned POST response. GitLab tags a
@@ -96,7 +97,7 @@ const PositionedDiscussionSchema = Schema.Struct({
  * null, or no notes — means it accepted the POST (201) but *discarded* the
  * position, silently downgrading to a general note. A bare id check misses this.
  */
-const firstNoteType = (notes: readonly unknown[] | undefined): string => {
+const firstNoteType = (notes: readonly object[] | undefined): string => {
   const first = notes?.[0];
   return isRecord(first) && typeof first.type === "string" ? first.type : "";
 };
@@ -152,6 +153,24 @@ const isLineNotAnchorable = (error: ProviderError): boolean =>
   /line|position/i.test(error.body);
 
 /**
+ * Surface GitLab's silent position-downgrade: a positioned POST can return 201
+ * while discarding the position, so the created note comes back as a general
+ * `Note` instead of a `DiffNote`. A bare id check would treat that as an
+ * anchored success — this logs it so the lost anchor is observable.
+ */
+const warnOnSilentDowngrade = (
+  anchor: DiscussionAnchor,
+  res: PositionedDiscussion,
+): Effect.Effect<void> => {
+  const noteType = firstNoteType(res.notes);
+  return noteType === "DiffNote"
+    ? Effect.void
+    : Console.error(
+        `[gitlab] discussion on ${anchor.file}:${anchor.line} was silently downgraded to a general note (type=${noteType || "none"}) — finding is visible but not line-anchored`,
+      );
+};
+
+/**
  * Post `body` as a discussion. With an `anchor`, POST it as a discussion
  * positioned on the new side of the diff; if GitLab won't anchor that line
  * (HTTP 400), fall back to a general discussion with `file:line` kept in the
@@ -184,14 +203,7 @@ export const postDiscussion = (
     },
     PositionedDiscussionSchema,
   ).pipe(
-    Effect.tap((res) => {
-      const noteType = firstNoteType(res.notes);
-      return noteType === "DiffNote"
-        ? Effect.void
-        : Console.error(
-            `[gitlab] discussion on ${anchor.file}:${anchor.line} was silently downgraded to a general note (type=${noteType || "none"}) — finding is visible but not line-anchored`,
-          );
-    }),
+    Effect.tap((res) => warnOnSilentDowngrade(anchor, res)),
     Effect.map((res) => String(res.id)),
     Effect.catchIf(isLineNotAnchorable, () => postGeneralDiscussion(mergeRequestIid, body)),
   );
