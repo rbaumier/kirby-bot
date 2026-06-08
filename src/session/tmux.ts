@@ -64,6 +64,16 @@ export const VERDICT_REMINDER =
 export const repromptForVerdict = (session: string): Effect.Effect<void, TmuxError> =>
   tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER} Enter`);
 
+/**
+ * Send a bare Enter to submit whatever is sitting in a session's input box. The
+ * recovery keystroke {@link submitPastedPrompt} sends after a paste, and the one
+ * {@link pollSentinel} re-sends when it catches a frozen pane still showing the
+ * collapsed-paste marker — the stuck-at-0% case where the trailing Enter was
+ * dropped under tmux-server backlog (#30) and the prompt was left unsubmitted.
+ */
+export const sendEnter = (session: string): Effect.Effect<void, TmuxError> =>
+  tmuxStep("send-enter", () => $`tmux send-keys -t ${session} Enter`);
+
 /** Capture the visible content of a session's pane. Empty string on any failure. */
 export const capturePane = (session: string): Effect.Effect<string> =>
   runShell(() => $`tmux capture-pane -p -t ${session}`).pipe(
@@ -248,7 +258,7 @@ const loadAndPastePrompt = (
 const submitPastedPrompt = (session: string): Effect.Effect<void, TmuxError> =>
   Effect.gen(function* () {
     for (let attempt = 1; attempt <= SUBMIT_MAX_ATTEMPTS; attempt++) {
-      yield* tmuxStep("send-enter", () => $`tmux send-keys -t ${session} Enter`);
+      yield* sendEnter(session);
       yield* pollPaneUntil(capturePane(session), (pane) => !paneShowsPaste(pane), SUBMIT_LAND_MAX_TICKS);
       const pane = yield* capturePane(session);
       if (!paneShowsPaste(pane)) { return; }

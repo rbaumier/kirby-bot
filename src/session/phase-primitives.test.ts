@@ -16,6 +16,7 @@ import { runPhaseSession } from "./phase";
 import {
   pollSentinel,
   recoverNoVerdictOnce,
+  STUCK_RESUBMIT_MAX_SENDS,
   USAGE_LIMIT_SCAN_EVERY_TICKS,
   writeStopHookConfig,
 } from "./phase-primitives";
@@ -104,6 +105,75 @@ describe("pollSentinel under a virtual clock", () => {
 
     const scanCount = await Effect.runPromise(program);
     expect(scanCount).toBe(0);
+  });
+
+  // Issue #30: a session frozen with its prompt pasted-but-unsubmitted (dropped
+  // Enter under tmux backlog) is reclaimed by re-sending Enter from inside the
+  // poll — bounded, so it never spams a session that has actually recovered.
+  it("re-sends Enter, bounded, when the pane is frozen showing the unsubmitted paste", async () => {
+    const timeoutMs = SENTINEL_POLL_MS * 1000; // huge: a timeout cannot win the race
+    // Same frame on every capture → byte-identical across scans → "frozen".
+    const frozen = "[Pasted text #1 +200 lines]\n ❯ ";
+    const program = Effect.gen(function* () {
+      const resends = yield* Ref.make(0);
+      const fiber = yield* Effect.fork(
+        pollSentinel({
+          phase: "review",
+          session: "kirby-test-stuck",
+          sentinel: ABSENT_SENTINEL,
+          startedAt: 0,
+          timeoutMs,
+          capture: Effect.succeed(frozen),
+          onStuck: Ref.update(resends, (n) => n + 1),
+        }),
+      );
+      // Well past the re-send cap: the first throttled scan only seeds the
+      // baseline pane, so detection starts on the second — advancing many scans
+      // proves the cap holds rather than re-sending every scan forever.
+      yield* TestClock.adjust(
+        `${SENTINEL_POLL_MS * USAGE_LIMIT_SCAN_EVERY_TICKS * (STUCK_RESUBMIT_MAX_SENDS + 4)} millis`,
+      );
+      const count = yield* Ref.get(resends);
+      yield* Fiber.interrupt(fiber);
+      return count;
+    }).pipe(Effect.provide(TestContext.TestContext));
+
+    const count = await Effect.runPromise(program);
+    expect(count).toBe(STUCK_RESUBMIT_MAX_SENDS);
+  });
+
+  it("does not re-send when the pane keeps changing (healthy session, lingering marker)", async () => {
+    const timeoutMs = SENTINEL_POLL_MS * 1000;
+    const program = Effect.gen(function* () {
+      const resends = yield* Ref.make(0);
+      const ticks = yield* Ref.make(0);
+      // Marker present on every scan, but the frame differs each capture — a
+      // live session whose conversation still shows the pasted block while it
+      // streams. The frozen-pane guard must keep this from tripping a re-send.
+      const capture = Ref.updateAndGet(ticks, (n) => n + 1).pipe(
+        Effect.map((n) => `[Pasted text #1 +200 lines] streaming ${n}`),
+      );
+      const fiber = yield* Effect.fork(
+        pollSentinel({
+          phase: "review",
+          session: "kirby-test-healthy",
+          sentinel: ABSENT_SENTINEL,
+          startedAt: 0,
+          timeoutMs,
+          capture,
+          onStuck: Ref.update(resends, (n) => n + 1),
+        }),
+      );
+      yield* TestClock.adjust(
+        `${SENTINEL_POLL_MS * USAGE_LIMIT_SCAN_EVERY_TICKS * (STUCK_RESUBMIT_MAX_SENDS + 4)} millis`,
+      );
+      const count = yield* Ref.get(resends);
+      yield* Fiber.interrupt(fiber);
+      return count;
+    }).pipe(Effect.provide(TestContext.TestContext));
+
+    const count = await Effect.runPromise(program);
+    expect(count).toBe(0);
   });
 });
 

@@ -35,8 +35,10 @@ import {
   capturePane,
   createSession,
   killSession,
+  paneShowsPaste,
   paneShowsUsageLimit,
   repromptForVerdict,
+  sendEnter,
 } from "./tmux";
 import { extractUsageLimitResetText } from "./usage-limit";
 import type { VerdictToken } from "./verdict";
@@ -124,6 +126,17 @@ export const writeStopHookConfig = (
  */
 export const USAGE_LIMIT_SCAN_EVERY_TICKS = 5;
 
+/**
+ * Bounded Enter re-sends from inside {@link pollSentinel} when a session is
+ * caught frozen with its prompt pasted-but-unsubmitted (the stuck-at-0% bug,
+ * #30). Each re-send is one throttled scan apart (see
+ * {@link USAGE_LIMIT_SCAN_EVERY_TICKS}), so this spans a few scans for the
+ * tmux-server backlog to drain before the session is allowed to time out as
+ * before — far below {@link PHASE_CAP_MINUTES}, and a stray Enter on a session
+ * that did recover lands on an empty input box the TUI ignores.
+ */
+export const STUCK_RESUBMIT_MAX_SENDS = 3;
+
 /** Input for {@link pollSentinel}. */
 export type PollSentinelInput = {
   readonly phase: Phase;
@@ -138,6 +151,13 @@ export type PollSentinelInput = {
    * frames without a live tmux server (mirrors {@link pollPaneUntil}).
    */
   readonly capture?: Effect.Effect<string>;
+  /**
+   * Action to run when a throttled scan catches the session frozen with its
+   * prompt pasted-but-unsubmitted (#30): re-send Enter + log it. Fully
+   * pre-provided (no requirements, never fails) so the poll's signature stays
+   * clean and tests can inject a spy. Omit → no recovery (legacy behaviour).
+   */
+  readonly onStuck?: Effect.Effect<void>;
 };
 
 /**
@@ -150,6 +170,17 @@ export type PollSentinelInput = {
  * fast with {@link UsageLimitHit} (an `interruption`) instead of idling to the
  * cap and surfacing {@link SessionTimedOut} hours later (issue #77).
  *
+ * The same throttled scan also reclaims a session frozen at 🧠 0% with its
+ * prompt pasted-but-unsubmitted (#30): a dropped Enter that outlasted
+ * {@link bootClaudeSession}'s bounded {@link submitPastedPrompt} retries leaves
+ * the collapsed-paste marker sitting in the input box with no Stop hook ever
+ * firing — so the session would otherwise burn the full cap as a
+ * {@link SessionTimedOut}, not a {@link NoVerdict}, and `recoverNoVerdictOnce`
+ * never sees it. When the pane still shows the marker AND is byte-identical to
+ * the previous scan (genuinely frozen, not a live session whose history merely
+ * still shows it), `onStuck` re-sends Enter — bounded by
+ * {@link STUCK_RESUBMIT_MAX_SENDS}.
+ *
  * Killing the tmux session is not this function's job. The bracket
  * in {@link runOneClaudeSession} owns the session and kills it on every exit.
  */
@@ -159,33 +190,54 @@ export const pollSentinel = (
   Effect.gen(function* () {
     const { phase, session, sentinel, startedAt, timeoutMs } = input;
     const capture = input.capture ?? capturePane(session);
+    const onStuck = input.onStuck ?? Effect.void;
 
     // Stack-safe poll loop: sleep one interval per tick until the
     // sentinel appears or the timeout elapses. The interruptible
     // sleep also lets a Ctrl-C unwind the wait promptly. The loop
-    // carries the current time and a tick counter as its state — time is
-    // read from `Clock`, not `Date.now()`, so a virtual clock controls the
-    // sleep, the elapsed-time predicate, and the throttled scan together.
+    // carries the current time, a tick counter, and the throttled-scan state
+    // (the last captured pane + the re-send count) — time is read from `Clock`,
+    // not `Date.now()`, so a virtual clock controls the sleep, the elapsed-time
+    // predicate, and the throttled scan together.
     const last = yield* Effect.iterate(
-      { now: yield* Clock.currentTimeMillis, tick: 0 },
+      { now: yield* Clock.currentTimeMillis, tick: 0, lastScanPane: "", resends: 0 },
       {
         while: (state) => !existsSync(sentinel) && state.now - startedAt <= timeoutMs,
         body: (state) =>
           Effect.gen(function* () {
             yield* Effect.sleep(`${SENTINEL_POLL_MS} millis`);
             const tick = state.tick + 1;
-            // Throttled scan for the usage-limit dialog. A match fails the
-            // whole poll — the bracket then kills the session immediately.
-            if (tick % USAGE_LIMIT_SCAN_EVERY_TICKS === 0) {
-              const pane = yield* capture;
-              if (paneShowsUsageLimit(pane)) {
-                const resetText = extractUsageLimitResetText(pane);
-                return yield* Effect.fail(
-                  new UsageLimitHit({ phase, ...(resetText === undefined ? {} : { resetText }) }),
-                );
-              }
+            // The pane is captured only on the throttled cadence so 20 concurrent
+            // sessions don't re-create the #30 backlog; off-cadence ticks carry
+            // the scan state forward untouched.
+            if (tick % USAGE_LIMIT_SCAN_EVERY_TICKS !== 0) {
+              return { ...state, now: yield* Clock.currentTimeMillis, tick };
             }
-            return { now: yield* Clock.currentTimeMillis, tick };
+            const pane = yield* capture;
+            // Usage-limit dialog (#77): a match fails the whole poll — the
+            // bracket then kills the session immediately.
+            if (paneShowsUsageLimit(pane)) {
+              const resetText = extractUsageLimitResetText(pane);
+              return yield* Effect.fail(
+                new UsageLimitHit({ phase, ...(resetText === undefined ? {} : { resetText }) }),
+              );
+            }
+            // Stuck-at-0% (#30): the prompt landed (collapsed-paste marker still
+            // showing) but the pane is byte-identical to the previous scan — a
+            // dropped Enter left it unsubmitted. Re-send Enter, bounded, rather
+            // than idle the full cap. The frozen-pane conjunction excludes a
+            // healthy session whose conversation merely still shows the marker
+            // (its pane keeps changing between scans).
+            let resends = state.resends;
+            if (
+              paneShowsPaste(pane) &&
+              pane === state.lastScanPane &&
+              resends < STUCK_RESUBMIT_MAX_SENDS
+            ) {
+              yield* onStuck;
+              resends += 1;
+            }
+            return { now: yield* Clock.currentTimeMillis, tick, lastScanPane: pane, resends };
           }),
       },
     );
@@ -373,8 +425,21 @@ export const runOneClaudeSession = (
             });
             yield* repromptForVerdict(session);
           });
+          // Stuck-at-0% recovery: when pollSentinel catches the pane frozen with
+          // the prompt pasted-but-unsubmitted (a dropped Enter that outlasted
+          // submitPastedPrompt's bounded retries, #30), re-send Enter from inside
+          // the poll instead of idling the full cap. Best-effort + logged so the
+          // otherwise-invisible incident lands in run.jsonl — it never surfaces
+          // in tmux-*.log, only live in the pane.
+          const onStuck = Effect.gen(function* () {
+            yield* artifacts.logEvent({ event: "session_stuck_resubmit", ...baseEvent, session });
+            yield* Console.log(
+              `${prefix} prompt pasted but never submitted (frozen pane) — re-sending Enter`,
+            );
+            yield* sendEnter(session).pipe(Effect.ignore);
+          });
           const verdict = yield* recoverNoVerdictOnce(
-            pollSentinel({ phase, session, sentinel, startedAt, timeoutMs }),
+            pollSentinel({ phase, session, sentinel, startedAt, timeoutMs, onStuck }),
             reprompt,
           );
           const totalMs = (yield* Clock.currentTimeMillis) - startedAt;
