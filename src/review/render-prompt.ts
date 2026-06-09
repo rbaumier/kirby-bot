@@ -58,6 +58,14 @@ export type RenderAgentPromptInput = {
    */
   readonly previousFindingsBlock: string;
   /**
+   * The author's intent (issue + approved plan) prepended ahead of the review
+   * task so a deliberate decision is not re-flagged as a bug (#84). Built by
+   * {@link buildIntentBlock}; empty string → no usable intent, nothing
+   * prepended. Inserted once, ahead of both template kinds, so it does not
+   * depend on any per-template placeholder.
+   */
+  readonly intentBlock: string;
+  /**
    * Where the agent should write its final findings — JSON envelope for
    * line-anchored, prose for self-contained. The orchestrator polls this
    * path (via the sentinel mechanism, in parallel with the verdict).
@@ -143,9 +151,14 @@ export const renderAgentPrompt = (
       previous_findings_block: input.previousFindingsBlock,
     };
 
+    // Author intent prepended ahead of the role body (when present), so every
+    // agent sees the deliberate decisions before reviewing — independent of the
+    // template kind and of any per-template placeholder.
+    const intentSection = input.intentBlock === "" ? "" : `${input.intentBlock}\n\n---\n\n`;
+
     if (prompt.kind === "self-contained") {
       const body = yield* readTemplate(input.templatesDir, prompt.templateFile, input.agent);
-      return kirbyPreamble(input.findingsFile) + substitute(body, baseSubs);
+      return kirbyPreamble(input.findingsFile) + intentSection + substitute(body, baseSubs);
     }
 
     // Line-anchored: read scaffold + role body in parallel, swap, substitute.
@@ -173,5 +186,5 @@ export const renderAgentPrompt = (
     const wrapped = scaffold.replaceAll("{role_specific}", roleBodyFilled);
     const scaffoldFilled = substitute(wrapped, baseSubs);
 
-    return kirbyPreamble(input.findingsFile) + scaffoldFilled;
+    return kirbyPreamble(input.findingsFile) + intentSection + scaffoldFilled;
   });

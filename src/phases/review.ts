@@ -18,7 +18,9 @@
  * and `evaluate` reads from the MR itself anyway (so it'll naturally see
  * whatever was posted).
  */
+import { readFile } from "node:fs/promises";
 import { Console, Effect } from "effect";
+import { buildIntentBlock, planFilePath } from "../intent";
 import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import type { Environment } from "../preflight";
@@ -51,6 +53,16 @@ export const reviewPhase = (
       ),
     );
 
+    // Author intent (issue + approved plan) so reviewers don't re-flag the
+    // author's deliberate decisions as bugs (#84). Best-effort: the plan is
+    // read back from where the `plan` phase persisted it; a missing file (e.g.
+    // a resume into a fresh run dir) degrades to the issue-only intent, and an
+    // empty issue body with no plan degrades to no intent block at all.
+    const plan = yield* Effect.tryPromise(() =>
+      readFile(planFilePath(artifacts.dir, issue.iid), "utf8"),
+    ).pipe(Effect.catchAll(() => Effect.succeed("")));
+    const intentBlock = buildIntentBlock(issue, plan);
+
     const fanOut = yield* runFanOutPhase({
       phase: "review",
       issueIid: issue.iid,
@@ -61,6 +73,7 @@ export const reviewPhase = (
       files,
       templatesDir: DEFAULT_TEMPLATES_DIR,
       mcpConfigPath: DEFAULT_MCP_CONFIG_PATH,
+      intentBlock,
     }).pipe(Effect.mapError(phaseHandlerError(tag)));
 
     // When every fan-out agent failed (timed out / verdict-reprompt loop / error),

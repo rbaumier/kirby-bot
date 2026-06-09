@@ -12,6 +12,7 @@ const baseInput = {
   fileList: ["src/auth/login.ts", "src/auth/session.ts"],
   trustBoundaries: ["auth", "user-input"] as const,
   previousFindingsBlock: "",
+  intentBlock: "",
   findingsFile: "/tmp/findings-agent.json",
   templatesDir: TEMPLATES_DIR,
 };
@@ -97,6 +98,23 @@ describe("renderAgentPrompt — line-anchored", () => {
     expect(prompt).toContain("Trust boundaries: none");
   });
 
+  test("intent block prepended ahead of the scaffold when present", async () => {
+    if (plainLineAnchored === undefined) { return; }
+    const intent = "## Author intent — deliberate decisions, NOT a review checklist\nsome plan";
+    const prompt = await run(
+      renderAgentPrompt({ ...baseInput, intentBlock: intent, agent: plainLineAnchored }),
+    );
+    expect(prompt).toContain(intent);
+    // Comes before the review task (the scaffold's diff instruction).
+    expect(prompt.indexOf(intent)).toBeLessThan(prompt.indexOf("Read diff from"));
+  });
+
+  test("empty intent block prepends nothing", async () => {
+    if (plainLineAnchored === undefined) { return; }
+    const prompt = await run(renderAgentPrompt({ ...baseInput, intentBlock: "", agent: plainLineAnchored }));
+    expect(prompt).not.toContain("Author intent");
+  });
+
   test("previous_findings_block substituted on re-review", async () => {
     if (plainLineAnchored === undefined) { return; }
     const prevBlock = "## Previous-pass findings — verify resolution\n- src/foo.ts:42 …";
@@ -117,6 +135,15 @@ describe("renderAgentPrompt — self-contained", () => {
     // The line-anchored scaffold's "Context verification" section MUST NOT leak in.
     expect(prompt).not.toContain("Context verification — drop the finding silently");
     expect(prompt).not.toContain("{diff_file}");
+  });
+
+  test("intent block prepended for self-contained agents too", async () => {
+    if (selfContainedAgent === undefined) { return; }
+    const intent = "## Author intent — deliberate decisions, NOT a review checklist\nplan body";
+    const prompt = await run(
+      renderAgentPrompt({ ...baseInput, intentBlock: intent, agent: selfContainedAgent }),
+    );
+    expect(prompt).toContain(intent);
   });
 });
 

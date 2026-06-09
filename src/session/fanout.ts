@@ -110,6 +110,13 @@ export type RunFanOutPhaseInput = {
    */
   readonly previousFindingsBlock?: string;
   /**
+   * The author's intent (issue + approved plan) prepended to every agent's
+   * prompt so a deliberate decision is not re-flagged as a bug (#84). Empty
+   * string (the default) → no usable intent, nothing prepended. Built upstream
+   * by {@link buildIntentBlock} in the review phase.
+   */
+  readonly intentBlock?: string;
+  /**
    * HEAD commit at the end of the previous review iteration, if any. When
    * defined and still an ancestor of the current HEAD, scoped agents whose
    * scope doesn't intersect the delta `<lastReviewedSha>...HEAD` are skipped
@@ -177,6 +184,7 @@ type RunOneAgentParams = {
   readonly diffFile: string;
   readonly perAgentTimeoutMs: number;
   readonly previousFindingsBlock: string;
+  readonly intentBlock: string;
   /**
    * Review escalation floor for this fan-out — composed with the agent's own
    * tier via {@link maxModel} so a sonnet/opus agent is never downgraded.
@@ -231,6 +239,7 @@ const runOneAgent = (
       diffFile,
       perAgentTimeoutMs,
       previousFindingsBlock,
+      intentBlock,
       reviewModel,
     } = params;
     const artifacts = yield* RunArtifacts;
@@ -258,6 +267,7 @@ const runOneAgent = (
       fileList,
       trustBoundaries: analysis.trustBoundaries,
       previousFindingsBlock,
+      intentBlock,
       findingsFile,
       templatesDir: input.templatesDir,
     })
@@ -520,6 +530,7 @@ export const runFanOutPhase = (
     );
 
     const previousFindingsBlock = input.previousFindingsBlock ?? "";
+    const intentBlock = input.intentBlock ?? "";
     const outcomes = yield* Effect.forEach(
       routes,
       (route) =>
@@ -531,6 +542,7 @@ export const runFanOutPhase = (
           diffFile: slices.perAgent.get(route.name) ?? fullDiffPath,
           perAgentTimeoutMs,
           previousFindingsBlock,
+          intentBlock,
           reviewModel,
         }),
       { concurrency: MAX_CONCURRENT_AGENTS },

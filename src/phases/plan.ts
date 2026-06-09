@@ -16,9 +16,9 @@
  * session produces a plan file, not commits, so there is nothing to salvage.
  */
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { Effect } from "effect";
 import { freshDeadline } from "../deadline";
+import { planFilePath } from "../intent";
 import { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import { RunArtifacts } from "../run-artifacts";
@@ -49,8 +49,9 @@ export const planPhase = (
     const deadline = yield* freshDeadline;
     const artifacts = yield* RunArtifacts;
     // The session writes the approved plan here — in the run dir, NOT the
-    // worktree, so the implementer's `git add -A` never commits it.
-    const planFile = join(artifacts.dir, `plan-${issue.iid}.md`);
+    // worktree, so the implementer's `git add -A` never commits it. Same path
+    // helper the `review` phase reads back from, so the two never diverge.
+    const planFile = planFilePath(artifacts.dir, issue.iid);
 
     const verdict = yield* runPhaseSession(
       {
