@@ -17,7 +17,18 @@
  *    `Stop` (not `StopFailure`) → the runtime is between turns but the model
  *    hasn't completed. Emit `{"decision":"block","reason":"…"}` on stdout to
  *    ask Claude Code to resume the agent loop, and leave the sentinel
- *    untouched so the orchestrator keeps polling.
+ *    untouched so the orchestrator keeps polling — EXCEPT for a degenerate
+ *    loop. `tool_use` is genuine multi-step work and resumes every time (the
+ *    runtime's own block cap is the backstop). But a *non*-`tool_use` reason
+ *    that persists after we already blocked once — Claude Code re-fires Stop
+ *    with `stop_hook_active: true` — will not progress by resuming again: it
+ *    just spins to the block cap and the cap override ends the turn having
+ *    written NO sentinel (the router "No response" loop, #1079 → silent
+ *    `SessionTimedOut`). On that second non-`tool_use` fire we stop blocking
+ *    and fall through to capture instead — recovering whatever verdict an
+ *    earlier turn carried (e.g. `ROUTING_DONE`), or writing the last text so
+ *    the orchestrator's single reprompt fires. Either is strictly better than
+ *    looping to the cap and timing out. See the `shouldResume` guard.
  *
  *  - `StopFailure` → write the captured text anyway. Blocking a failure makes
  *    no sense.
@@ -41,7 +52,8 @@
  *
  * Usage: `bun stop-hook.ts <sentinel-path>`
  * stdin: Claude Code Stop payload JSON. Required keys: `transcript_path`,
- *        `hook_event_name`.
+ *        `hook_event_name`. Optional: `stop_hook_active` (true once Claude Code
+ *        is already resuming because of a prior block — breaks the loop above).
  */
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { containsVerdictLine } from "./verdict";
@@ -55,6 +67,9 @@ if (sentinel === undefined) {
 type StopPayload = {
   readonly transcript_path: string | undefined;
   readonly hook_event_name: string | undefined;
+  // True when Claude Code is already resuming because a previous Stop hook
+  // blocked — the signal that lets us break a degenerate non-tool_use loop.
+  readonly stop_hook_active: boolean;
 };
 
 type TranscriptEntry = {
@@ -72,6 +87,7 @@ const parseStopPayload = (raw: string): StopPayload | null => {
     return {
       transcript_path: typeof parsed.transcript_path === "string" ? parsed.transcript_path : undefined,
       hook_event_name: typeof parsed.hook_event_name === "string" ? parsed.hook_event_name : undefined,
+      stop_hook_active: parsed.stop_hook_active === true,
     };
   } catch {
     return null;
@@ -181,7 +197,24 @@ if (assistants === null) { process.exit(0); }
 const isStopFailure = payload.hook_event_name === "StopFailure";
 const stopReason = (assistants.at(-1) ?? null)?.message?.stop_reason;
 
-if (!isStopFailure && stopReason !== "end_turn") {
+// Resume the agent loop (emit a block decision) only when doing so can actually
+// progress the model toward end_turn:
+//
+//  - tool_use → genuine in-progress work (the canonical #29 signal). Resume
+//    every time, however many continuations it takes; the runtime's block cap
+//    is the backstop against a pathological tool_use spin.
+//
+//  - missing / max_tokens / other → resume ONCE to absorb a transient
+//    (between-turns, truncated stream). But if we already blocked once for this
+//    and Claude Code re-fired with stop_hook_active set, the model is stuck off
+//    end_turn without being mid-tool — resuming again only spins to the cap and
+//    writes no sentinel (#1079). Fall through to capture instead.
+const shouldResume =
+  !isStopFailure &&
+  stopReason !== "end_turn" &&
+  (stopReason === "tool_use" || !payload.stop_hook_active);
+
+if (shouldResume) {
   // The model hasn't completed its work — runtime is between turns, or
   // truncated, or otherwise interrupted. Ask Claude Code to resume; do
   // not write the sentinel.

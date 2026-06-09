@@ -157,6 +157,65 @@ describe("stop-hook", () => {
     expect(decision.reason).toContain("(missing)");
   });
 
+  test("stop_hook_active + missing stop_reason stops looping and captures the earlier verdict", () => {
+    // Real #1079 case: the router emitted ROUTING_DONE, then produced an empty
+    // "No response" turn with a missing stop_reason. The first Stop blocked
+    // (resume once); on the SECOND fire Claude Code sets stop_hook_active.
+    // Without this guard the hook keeps blocking to the runtime's cap, the cap
+    // override ends the turn having written no sentinel, and the session times
+    // out. It must instead stop blocking and recover the earlier verdict.
+    const transcript = [
+      assistantText("Routing complete.\nVERDICT: ROUTING_DONE"),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "" }] },
+      }),
+    ];
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", stop_hook_active: true },
+      transcript,
+    );
+    expect(sentinelContent).toBe("Routing complete.\nVERDICT: ROUTING_DONE");
+    expect(stdout).toBe("");
+  });
+
+  test("stop_hook_active + missing stop_reason with no verdict writes the last text (reprompt, not timeout)", () => {
+    // No verdict anywhere and the loop has already fired once. Falling through
+    // writes the last text so the orchestrator's single reprompt fires —
+    // strictly better than spinning to the cap and timing out.
+    const transcript = [
+      assistantText("Working.", "tool_use"),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "No response." }] },
+      }),
+    ];
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", stop_hook_active: true },
+      transcript,
+    );
+    expect(sentinelContent).toBe("No response.");
+    expect(stdout).toBe("");
+  });
+
+  test("tool_use keeps blocking even when stop_hook_active is set (legit multi-step work)", () => {
+    // stop_hook_active breaks a degenerate non-tool_use loop, NOT a genuine
+    // tool_use continuation — the agent may need many tool turns and must not
+    // be cut short. Only the runtime's block cap bounds a pathological spin.
+    const transcript = [
+      assistantTool("t1"),
+      userToolResult("t1"),
+      assistantTool("t2"),
+    ];
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", stop_hook_active: true },
+      transcript,
+    );
+    expect(sentinelContent).toBeNull();
+    const decision = JSON.parse(stdout) as { decision: string };
+    expect(decision.decision).toBe("block");
+  });
+
   test("empty transcript + Stop blocks; empty transcript + StopFailure writes empty sentinel", () => {
     const blocked = runHook({ hook_event_name: "Stop" }, []);
     expect(blocked.sentinelContent).toBeNull();
