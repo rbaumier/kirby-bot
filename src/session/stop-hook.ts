@@ -209,10 +209,12 @@ const stopReason = (assistants.at(-1) ?? null)?.message?.stop_reason;
 //    and Claude Code re-fired with stop_hook_active set, the model is stuck off
 //    end_turn without being mid-tool — resuming again only spins to the cap and
 //    writes no sentinel (#1079). Fall through to capture instead.
-const shouldResume =
-  !isStopFailure &&
-  stopReason !== "end_turn" &&
-  (stopReason === "tool_use" || !payload.stop_hook_active);
+// tool_use can always reach end_turn by continuing; a non-tool_use reason can
+// too, but only on its FIRST fire — once we've already blocked for it (Claude
+// Code re-fires with stop_hook_active set) resuming again only spins to the
+// cap. Named so the grouping isn't silently load-bearing precedence.
+const canProgressByResuming = stopReason === "tool_use" || !payload.stop_hook_active;
+const shouldResume = !isStopFailure && stopReason !== "end_turn" && canProgressByResuming;
 
 if (shouldResume) {
   // The model hasn't completed its work — runtime is between turns, or

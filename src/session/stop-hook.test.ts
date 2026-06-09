@@ -157,6 +157,27 @@ describe("stop-hook", () => {
     expect(decision.reason).toContain("(missing)");
   });
 
+  test("first fire (stop_hook_active false) + missing stop_reason still blocks once", () => {
+    // The give-up only triggers on the SECOND fire. On the first — before any
+    // block — a missing stop_reason must still resume once to absorb a
+    // transient. Pinned explicitly: the line-146 test passes only because it
+    // omits stop_hook_active, so without this case a future default of `true`
+    // would silently flip resume-once off and still go green there.
+    const transcript = [
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "no stop reason here" }] },
+      }),
+    ];
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", stop_hook_active: false },
+      transcript,
+    );
+    expect(sentinelContent).toBeNull();
+    const decision = JSON.parse(stdout) as { decision: string };
+    expect(decision.decision).toBe("block");
+  });
+
   test("stop_hook_active + missing stop_reason stops looping and captures the earlier verdict", () => {
     // Real #1079 case: the router emitted ROUTING_DONE, then produced an empty
     // "No response" turn with a missing stop_reason. The first Stop blocked
