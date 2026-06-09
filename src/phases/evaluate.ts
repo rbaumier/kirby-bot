@@ -12,6 +12,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
+import { buildIntentBlock, planFilePath } from "../intent";
 import type { HandlerError } from "../pipeline/errors";
 import type { State } from "../pipeline/state";
 import { RunArtifacts } from "../run-artifacts";
@@ -40,9 +41,21 @@ export const evaluatePhase = (
       iteration: fixCycles,
     });
 
+    // Author intent (issue + approved plan), so an evaluator subagent can tell a
+    // real bug from a finding whose only fix would defeat a deliberate decision
+    // (verdict `intent`, #85). Best-effort, same contract as the review phase:
+    // a missing plan file degrades to the issue-only intent, or to no block.
+    const plan = yield* Effect.tryPromise(() =>
+      readFile(planFilePath(artifacts.dir, state.issue.iid), "utf8"),
+    ).pipe(Effect.catchAll(() => Effect.succeed("")));
+    const intentBlock = buildIntentBlock(state.issue, plan);
+
     const options = mrPhaseOptions(state, "evaluate", fixCycles);
     const verdict = yield* runPhaseSession(
-      { ...options, replacements: { ...options.replacements, triage_file: triageFile } },
+      {
+        ...options,
+        replacements: { ...options.replacements, triage_file: triageFile, intent_block: intentBlock },
+      },
       ["CONVERGED", "NEEDS_FIX"],
     ).pipe(Effect.mapError(phaseHandlerError(`evaluate[${fixCycles}]`)));
 

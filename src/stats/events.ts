@@ -19,14 +19,17 @@
 /**
  * The evaluator's per-Finding judgment (CONTEXT.md: Triage). `real` /
  * `real-but-bloated-remedy` are accepted (left for `fix`); `imagined` is
- * rejected; `punt` is a `severity: suggestion` finding left for a human.
- * `unknown` is the tolerant fallback for an unparseable value.
+ * rejected; `punt` is a `severity: suggestion` finding left for a human;
+ * `intent` is a real finding whose only correct fix would defeat a deliberate
+ * author decision or change product behavior — left for a human, never auto-fixed
+ * (#85). `unknown` is the tolerant fallback for an unparseable value.
  */
 export type TriageValue =
   | "real"
   | "real-but-bloated-remedy"
   | "imagined"
   | "punt"
+  | "intent"
   | "unknown";
 
 const KNOWN_TRIAGE: ReadonlySet<string> = new Set([
@@ -34,6 +37,7 @@ const KNOWN_TRIAGE: ReadonlySet<string> = new Set([
   "real-but-bloated-remedy",
   "imagined",
   "punt",
+  "intent",
 ]);
 
 /** One review Finding mapped to the discussion thread it was posted as. */

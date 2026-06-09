@@ -88,6 +88,7 @@ const TRIAGE_BUCKET: Record<TriageValue, TriageBucket> = {
   "real-but-bloated-remedy": "accepted",
   imagined: "rejected",
   punt: "punted",
+  intent: "punted",
   unknown: "untriaged",
 };
 

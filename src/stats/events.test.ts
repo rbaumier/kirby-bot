@@ -19,6 +19,11 @@ describe("parseTriageFile", () => {
     expect(rows[0]).toEqual({ discussionId: "a", triage: "real" });
   });
 
+  it("keeps the intent verdict (not downgraded to unknown)", () => {
+    const rows = parseTriageFile(JSON.stringify([{ discussionId: "a", triage: "intent" }]));
+    expect(rows[0]).toEqual({ discussionId: "a", triage: "intent" });
+  });
+
   it("downgrades an unrecognized triage value to unknown", () => {
     const rows = parseTriageFile(JSON.stringify([{ discussionId: "a", triage: "maybe" }]));
     expect(rows[0]).toEqual({ discussionId: "a", triage: "unknown" });
