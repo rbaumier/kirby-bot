@@ -19,12 +19,15 @@ import { writeStopHookConfig } from "./phase-primitives";
 import {
   AGENT_READY_VAR,
   AGENT_SENTINEL_VAR,
+  AGENT_SUBMITTED_VAR,
   sessionStartHookCommand,
   sessionStartHookSettings,
   STOP_HOOK_EVENTS,
   STOP_HOOK_SCRIPT,
   stopHookCommand,
   stopHookSettings,
+  userPromptSubmitHookCommand,
+  userPromptSubmitHookSettings,
 } from "./sentinel-contract";
 
 describe("stopHookSettings / stopHookCommand", () => {
@@ -52,6 +55,40 @@ describe("sessionStartHookSettings / sessionStartHookCommand", () => {
 
   it("references the env-var name (no drift between wires)", () => {
     expect(sessionStartHookCommand()).toContain(`"$${AGENT_READY_VAR}"`);
+  });
+});
+
+describe("userPromptSubmitHookSettings / userPromptSubmitHookCommand", () => {
+  it("registers a single UserPromptSubmit event running the submitted-marker command", () => {
+    const settings = userPromptSubmitHookSettings();
+    expect(Object.keys(settings)).toEqual(["UserPromptSubmit"]);
+    expect(settings.UserPromptSubmit?.[0]?.hooks?.[0]?.command).toBe(userPromptSubmitHookCommand());
+  });
+
+  it("references the env-var name (no drift between wires)", () => {
+    expect(userPromptSubmitHookCommand()).toContain(`"$${AGENT_SUBMITTED_VAR}"`);
+  });
+});
+
+describe("round-trip: UserPromptSubmit command writes the submitted marker at $AGENT_SUBMITTED", () => {
+  test("executing the command with AGENT_SUBMITTED set writes the marker at that path", () => {
+    const run = mkdtempSync(join(tmpdir(), "kirby-submitted-roundtrip-"));
+    try {
+      const submittedPath = join(run, "sentinel.flag.submitted");
+      // Run the command verbatim through a shell with only AGENT_SUBMITTED
+      // exported — exactly how Claude Code invokes the UserPromptSubmit hook. If
+      // the command's `$AGENT_SUBMITTED` reference drifted from the env-var name
+      // we export, the marker stays absent and deliverPrompt's submit-confirmation
+      // (#30) would mis-fire — this fails first.
+      const result = spawnSync("sh", ["-c", userPromptSubmitHookCommand()], {
+        encoding: "utf8",
+        env: { ...process.env, [AGENT_SUBMITTED_VAR]: submittedPath },
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(submittedPath, "utf8")).toBe("submitted");
+    } finally {
+      rmSync(run, { recursive: true, force: true });
+    }
   });
 });
 
@@ -126,6 +163,23 @@ describe("round-trip: config written ⇒ values read by the hook", () => {
     } finally {
       await rm(worktree, { recursive: true, force: true });
       await rm(run, { recursive: true, force: true });
+    }
+  });
+
+  test("also registers the UserPromptSubmit submitted-marker hook (3 events merged, none clobbered)", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "kirby-roundtrip-ups-"));
+    try {
+      await Effect.runPromise(writeStopHookConfig("implementation", worktree));
+      const raw = await readFile(join(worktree, ".claude", "settings.local.json"), "utf8");
+      const settings = JSON.parse(raw) as Settings;
+      expect(settings.hooks.UserPromptSubmit?.[0]?.hooks?.[0]?.command).toBe(
+        userPromptSubmitHookCommand(),
+      );
+      // The pre-existing Stop / SessionStart events must survive the merge.
+      expect(settings.hooks.Stop?.[0]?.hooks?.[0]?.command).toBe(stopHookCommand());
+      expect(settings.hooks.SessionStart?.[0]?.hooks?.[0]?.command).toBe(sessionStartHookCommand());
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
     }
   });
 });

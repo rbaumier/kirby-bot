@@ -65,11 +65,11 @@ export const repromptForVerdict = (session: string): Effect.Effect<void, TmuxErr
   tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER} Enter`);
 
 /**
- * Send a bare Enter to submit whatever is sitting in a session's input box. The
- * recovery keystroke {@link submitPastedPrompt} sends after a paste, and the one
- * {@link pollSentinel} re-sends when it catches a frozen pane still showing the
- * collapsed-paste marker — the stuck-at-0% case where the trailing Enter was
- * dropped under tmux-server backlog (#30) and the prompt was left unsubmitted.
+ * Send a bare Enter to submit whatever is sitting in a session's input box — the
+ * recovery keystroke {@link submitPastedPrompt} sends after a paste. When that
+ * trailing Enter is dropped under tmux-server backlog (#30) and the prompt is
+ * left unsubmitted, {@link deliverPrompt} catches it via the absent
+ * `UserPromptSubmit` marker and re-drives the whole paste+Enter.
  */
 export const sendEnter = (session: string): Effect.Effect<void, TmuxError> =>
   tmuxStep("send-enter", () => $`tmux send-keys -t ${session} Enter`);
@@ -269,6 +269,83 @@ const submitPastedPrompt = (session: string): Effect.Effect<void, TmuxError> =>
     }
   });
 
+/** Bounded paste+submit attempts confirmed by the submitted-marker before failing fast. */
+const DELIVER_MAX_ATTEMPTS = 2;
+
+/** Per-attempt cap polling for the submitted-marker before re-driving the paste. */
+const SUBMITTED_LAND_MAX_TICKS = 10;
+
+/** Input for {@link deliverPrompt}. */
+type DeliverPromptInput = {
+  readonly session: string;
+  readonly promptFile: string;
+  readonly submittedPath: string;
+  /**
+   * The paste-then-submit side effect, injected only by tests. Defaults to the
+   * live-tmux {@link loadAndPastePrompt} followed by {@link submitPastedPrompt}.
+   */
+  readonly drive?: Effect.Effect<void, TmuxError>;
+  /**
+   * The submitted-marker probe polled after each drive, injected only by tests.
+   * Defaults to an `existsSync` of `submittedPath` (yields "1" once the
+   * `UserPromptSubmit` hook has written it).
+   */
+  readonly submittedMarker?: Effect.Effect<string>;
+  /** Poll interval for the marker; tests pass a tiny value to avoid real sleeps. */
+  readonly interval?: Duration.DurationInput;
+};
+
+/**
+ * Drive the prompt into the session and confirm it was *actually submitted*,
+ * re-driving the whole paste+Enter sequence if not — then fail fast.
+ *
+ * {@link loadAndPastePrompt} and {@link submitPastedPrompt} each retry against
+ * the collapsed-paste marker, which is blind whenever a paste lands expanded and
+ * cannot tell a never-delivered paste (a dead / "Not connected" pane, issue #43)
+ * from a delivered one. The `UserPromptSubmit` marker is the deterministic
+ * ground truth: it appears iff a prompt was submitted, in any presentation. We
+ * poll it after each full paste+submit; while it stays absent the bytes never
+ * reached the application, so we re-load + re-paste + re-Enter. If it never
+ * appears we fail with a {@link TmuxError} in seconds — instead of letting the
+ * caller idle the entire phase budget on a boot we already know is dead (the
+ * 15-min silent SessionTimedOut of #43). A successful first attempt returns
+ * before any re-drive, so the healthy path never double-pastes.
+ */
+export const deliverPrompt = (input: DeliverPromptInput): Effect.Effect<void, TmuxError> =>
+  Effect.gen(function* () {
+    const { session, promptFile, submittedPath } = input;
+    const drive =
+      input.drive ??
+      loadAndPastePrompt(session, promptFile).pipe(
+        Effect.flatMap(() => submitPastedPrompt(session)),
+      );
+    const submittedMarker =
+      input.submittedMarker ?? Effect.sync(() => (existsSync(submittedPath) ? "1" : ""));
+    const interval = input.interval ?? "1 second";
+    for (let attempt = 1; attempt <= DELIVER_MAX_ATTEMPTS; attempt++) {
+      yield* drive;
+      const submitted = yield* pollPaneUntil(
+        submittedMarker,
+        (s) => s === "1",
+        SUBMITTED_LAND_MAX_TICKS,
+        interval,
+      );
+      if (submitted) {
+        return;
+      }
+      yield* Console.log(
+        `[tmux ${session}] prompt not submitted (attempt ${attempt}/${DELIVER_MAX_ATTEMPTS})` +
+          (attempt < DELIVER_MAX_ATTEMPTS ? " — re-driving paste" : " — boot dead, failing fast"),
+      );
+    }
+    return yield* Effect.fail(
+      new TmuxError({
+        step: "deliver-prompt",
+        stderr: `prompt never submitted after ${DELIVER_MAX_ATTEMPTS} paste attempts — the bytes never reached the TUI (dead or disconnected pane, #43)`,
+      }),
+    );
+  });
+
 /** Input for {@link bootClaudeSession}. */
 type BootClaudeSessionInput = {
   readonly session: string;
@@ -281,6 +358,15 @@ type BootClaudeSessionInput = {
    * replacement for the old pane-scrape readiness heuristic (issue #76).
    */
   readonly readyPath: string;
+  /**
+   * Per-session submitted-marker path. Exported into the tmux shell as
+   * `AGENT_SUBMITTED` so the `UserPromptSubmit` hook writes it the instant a
+   * prompt is actually submitted, and polled by {@link deliverPrompt} to confirm
+   * the paste reached the TUI — the deterministic delivery signal that re-drives
+   * a lost paste and fails fast on a dead pane (issue #43) instead of idling the
+   * whole phase budget.
+   */
+  readonly submittedPath: string;
   /**
    * Env vars to export into the tmux shell *before* `claude` launches. Read by
    * the Stop-hook subprocess via standard inheritance — used to dispatch to a
@@ -384,11 +470,13 @@ export const bootClaudeSession = (input: BootClaudeSessionInput): Effect.Effect<
       () => $`tmux send-keys -t ${input.session} ${claudeCmd} Enter`,
     );
     yield* waitForReadyMarker(input.readyPath);
-    // Load + paste the prompt, verifying the paste actually landed before we
-    // send Enter. See {@link loadAndPastePrompt} for the two races this guards
-    // against (global-buffer cross-paste, async delivery under backlog — #30).
-    yield* loadAndPastePrompt(input.session, input.promptFile);
-    // Submit it, verifying the Enter actually took — the trailing keystroke is
-    // droppable under the same backlog (see {@link submitPastedPrompt}).
-    yield* submitPastedPrompt(input.session);
+    // Load + paste the prompt and submit it, then CONFIRM via the deterministic
+    // UserPromptSubmit marker that it was actually submitted — re-driving the
+    // paste on a lost delivery and failing fast on a dead pane (#43) instead of
+    // idling the whole phase budget. See {@link deliverPrompt}.
+    yield* deliverPrompt({
+      session: input.session,
+      promptFile: input.promptFile,
+      submittedPath: input.submittedPath,
+    });
   });

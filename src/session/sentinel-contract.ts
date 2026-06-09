@@ -11,6 +11,13 @@
  *  2. the **path** to the Stop-hook handler script ({@link STOP_HOOK_SCRIPT});
  *  3. the **hook events** we register the handler for ({@link STOP_HOOK_EVENTS}).
  *
+ * Two more per-session markers ride the same env-var/command/event contract,
+ * each written by a hook that reads its own path from a dedicated env var: the
+ * `SessionStart` ready-marker ({@link AGENT_READY_VAR}) and the
+ * `UserPromptSubmit` submitted-marker ({@link AGENT_SUBMITTED_VAR}). They carry
+ * no Verdict, but they live here for the same reason — one place owns the
+ * literals so no consumer can drift a name out of sync.
+ *
  * Both ends consume this module instead of redeclaring the literals:
  * `phase-primitives.ts` *writes* the hook command (via {@link stopHookSettings})
  * and *exports* the env var; the round-trip test executes that very command and
@@ -36,6 +43,19 @@ export const AGENT_SENTINEL_VAR = "AGENT_SENTINEL";
  * sessions in the same worktree (per-agent fan-out).
  */
 export const AGENT_READY_VAR = "AGENT_READY";
+
+/**
+ * Env-var name the UserPromptSubmit hook's submitted-marker path is passed
+ * through. Mirrors {@link AGENT_READY_VAR}: the hook command references it as
+ * `"$AGENT_SUBMITTED"` and each session exports its own value before launching
+ * `claude`, so one shared `settings.local.json` is correct for N parallel
+ * sessions in the same worktree (per-agent fan-out). The marker's *absence*
+ * after boot is the deterministic signal that the prompt's submitting Enter was
+ * dropped under tmux-server backlog (issue #30): the TUI never fired
+ * `UserPromptSubmit`, so `deliverPrompt` re-drives the paste and, if it still
+ * never lands, fails fast instead of idling the whole phase budget.
+ */
+export const AGENT_SUBMITTED_VAR = "AGENT_SUBMITTED";
 
 /** Absolute path to the Stop-hook handler script — sibling of this module. */
 export const STOP_HOOK_SCRIPT = join(import.meta.dirname, "stop-hook.ts");
@@ -92,4 +112,30 @@ export const sessionStartHookCommand = (): string => `printf ready > "$${AGENT_R
  */
 export const sessionStartHookSettings = (): Record<string, readonly HookEntry[]> => ({
   SessionStart: [{ matcher: "", hooks: [{ type: "command", command: sessionStartHookCommand() }] }],
+});
+
+/**
+ * The shell command Claude Code runs on `UserPromptSubmit` — every time a
+ * prompt is actually submitted inside the TUI. Writes `submitted` into the
+ * per-session marker path from `$AGENT_SUBMITTED`. Its presence is the
+ * deterministic proof the submitting Enter landed; its absence after boot means
+ * the Enter was dropped under tmux-server backlog (issue #30) and
+ * {@link deliverPrompt} must re-drive the paste. Inline shell (like
+ * {@link sessionStartHookCommand}) — no payload parsing needed. The path is
+ * double-quoted — the command runs through a shell and the marker path may
+ * contain spaces.
+ */
+export const userPromptSubmitHookCommand = (): string =>
+  `printf submitted > "$${AGENT_SUBMITTED_VAR}"`;
+
+/**
+ * The `hooks` fragment to merge into a worktree's `settings.local.json`: our
+ * submitted-marker hook registered for `UserPromptSubmit`, writing the marker
+ * {@link deliverPrompt} polls for. Kept separate from {@link stopHookSettings} and
+ * {@link sessionStartHookSettings} so each contract test stays stable.
+ */
+export const userPromptSubmitHookSettings = (): Record<string, readonly HookEntry[]> => ({
+  UserPromptSubmit: [
+    { matcher: "", hooks: [{ type: "command", command: userPromptSubmitHookCommand() }] },
+  ],
 });

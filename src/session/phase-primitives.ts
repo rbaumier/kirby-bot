@@ -29,16 +29,20 @@ import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
 import type { TmuxError } from "./errors";
 import { NoVerdict, SessionTimedOut, UsageLimitHit, WorkspaceError } from "./errors";
-import { AGENT_SENTINEL_VAR, sessionStartHookSettings, stopHookSettings } from "./sentinel-contract";
+import {
+  AGENT_SENTINEL_VAR,
+  AGENT_SUBMITTED_VAR,
+  sessionStartHookSettings,
+  stopHookSettings,
+  userPromptSubmitHookSettings,
+} from "./sentinel-contract";
 import {
   bootClaudeSession,
   capturePane,
   createSession,
   killSession,
-  paneShowsPaste,
   paneShowsUsageLimit,
   repromptForVerdict,
-  sendEnter,
 } from "./tmux";
 import { extractUsageLimitResetText } from "./usage-limit";
 import type { VerdictToken } from "./verdict";
@@ -108,7 +112,12 @@ export const writeStopHookConfig = (
         typeof existing.hooks === "object" && existing.hooks !== null ? existing.hooks : {};
       const merged = {
         ...existing,
-        hooks: { ...existingHooks, ...stopHookSettings(), ...sessionStartHookSettings() },
+        hooks: {
+          ...existingHooks,
+          ...stopHookSettings(),
+          ...sessionStartHookSettings(),
+          ...userPromptSubmitHookSettings(),
+        },
       };
       await writeFile(settingsPath, JSON.stringify(merged, null, 2));
     },
@@ -126,17 +135,6 @@ export const writeStopHookConfig = (
  */
 export const USAGE_LIMIT_SCAN_EVERY_TICKS = 5;
 
-/**
- * Bounded Enter re-sends from inside {@link pollSentinel} when a session is
- * caught frozen with its prompt pasted-but-unsubmitted (the stuck-at-0% bug,
- * #30). Each re-send is one throttled scan apart (see
- * {@link USAGE_LIMIT_SCAN_EVERY_TICKS}), so this spans a few scans for the
- * tmux-server backlog to drain before the session is allowed to time out as
- * before — far below {@link PHASE_CAP_MINUTES}, and a stray Enter on a session
- * that did recover lands on an empty input box the TUI ignores.
- */
-export const STUCK_RESUBMIT_MAX_SENDS = 3;
-
 /** Input for {@link pollSentinel}. */
 export type PollSentinelInput = {
   readonly phase: Phase;
@@ -151,13 +149,6 @@ export type PollSentinelInput = {
    * frames without a live tmux server (mirrors {@link pollPaneUntil}).
    */
   readonly capture?: Effect.Effect<string>;
-  /**
-   * Action to run when a throttled scan catches the session frozen with its
-   * prompt pasted-but-unsubmitted (#30): re-send Enter + log it. Fully
-   * pre-provided (no requirements, never fails) so the poll's signature stays
-   * clean and tests can inject a spy. Omit → no recovery (legacy behaviour).
-   */
-  readonly onStuck?: Effect.Effect<void>;
 };
 
 /**
@@ -170,17 +161,6 @@ export type PollSentinelInput = {
  * fast with {@link UsageLimitHit} (an `interruption`) instead of idling to the
  * cap and surfacing {@link SessionTimedOut} hours later (issue #77).
  *
- * The same throttled scan also reclaims a session frozen at 🧠 0% with its
- * prompt pasted-but-unsubmitted (#30): a dropped Enter that outlasted
- * {@link bootClaudeSession}'s bounded {@link submitPastedPrompt} retries leaves
- * the collapsed-paste marker sitting in the input box with no Stop hook ever
- * firing — so the session would otherwise burn the full cap as a
- * {@link SessionTimedOut}, not a {@link NoVerdict}, and `recoverNoVerdictOnce`
- * never sees it. When the pane still shows the marker AND is byte-identical to
- * the previous scan (genuinely frozen, not a live session whose history merely
- * still shows it), `onStuck` re-sends Enter — bounded by
- * {@link STUCK_RESUBMIT_MAX_SENDS}.
- *
  * Killing the tmux session is not this function's job. The bracket
  * in {@link runOneClaudeSession} owns the session and kills it on every exit.
  */
@@ -190,17 +170,15 @@ export const pollSentinel = (
   Effect.gen(function* () {
     const { phase, session, sentinel, startedAt, timeoutMs } = input;
     const capture = input.capture ?? capturePane(session);
-    const onStuck = input.onStuck ?? Effect.void;
 
     // Stack-safe poll loop: sleep one interval per tick until the
     // sentinel appears or the timeout elapses. The interruptible
     // sleep also lets a Ctrl-C unwind the wait promptly. The loop
-    // carries the current time, a tick counter, and the throttled-scan state
-    // (the last captured pane + the re-send count) — time is read from `Clock`,
+    // carries the current time and a tick counter — time is read from `Clock`,
     // not `Date.now()`, so a virtual clock controls the sleep, the elapsed-time
     // predicate, and the throttled scan together.
     const last = yield* Effect.iterate(
-      { now: yield* Clock.currentTimeMillis, tick: 0, lastScanPane: "", resends: 0 },
+      { now: yield* Clock.currentTimeMillis, tick: 0 },
       {
         while: (state) => !existsSync(sentinel) && state.now - startedAt <= timeoutMs,
         body: (state) =>
@@ -208,10 +186,10 @@ export const pollSentinel = (
             yield* Effect.sleep(`${SENTINEL_POLL_MS} millis`);
             const tick = state.tick + 1;
             // The pane is captured only on the throttled cadence so 20 concurrent
-            // sessions don't re-create the #30 backlog; off-cadence ticks carry
-            // the scan state forward untouched.
+            // sessions don't re-create the #30 backlog; off-cadence ticks just
+            // advance the clock and tick counter.
             if (tick % USAGE_LIMIT_SCAN_EVERY_TICKS !== 0) {
-              return { ...state, now: yield* Clock.currentTimeMillis, tick };
+              return { now: yield* Clock.currentTimeMillis, tick };
             }
             const pane = yield* capture;
             // Usage-limit dialog (#77): a match fails the whole poll — the
@@ -222,22 +200,7 @@ export const pollSentinel = (
                 new UsageLimitHit({ phase, ...(resetText === undefined ? {} : { resetText }) }),
               );
             }
-            // Stuck-at-0% (#30): the prompt landed (collapsed-paste marker still
-            // showing) but the pane is byte-identical to the previous scan — a
-            // dropped Enter left it unsubmitted. Re-send Enter, bounded, rather
-            // than idle the full cap. The frozen-pane conjunction excludes a
-            // healthy session whose conversation merely still shows the marker
-            // (its pane keeps changing between scans).
-            let resends = state.resends;
-            if (
-              paneShowsPaste(pane) &&
-              pane === state.lastScanPane &&
-              resends < STUCK_RESUBMIT_MAX_SENDS
-            ) {
-              yield* onStuck;
-              resends += 1;
-            }
-            return { now: yield* Clock.currentTimeMillis, tick, lastScanPane: pane, resends };
+            return { now: yield* Clock.currentTimeMillis, tick };
           }),
       },
     );
@@ -365,6 +328,10 @@ export const runOneClaudeSession = (
     // (already per-session unique) sentinel path, so no new public input field
     // is needed and fan-out stays collision-free.
     const readyPath = `${sentinel}.ready`;
+    // Per-session submitted-marker the UserPromptSubmit hook writes — derived
+    // from the same per-session-unique sentinel path, so no new public input
+    // field is needed and fan-out stays collision-free.
+    const submittedPath = `${sentinel}.submitted`;
     const prefix = logPrefix(phase, logContext);
     const baseEvent = baseEventFields(phase, logContext);
 
@@ -372,10 +339,13 @@ export const runOneClaudeSession = (
     yield* Console.log(`${prefix} session starting (budget ${formatDuration(timeoutMs)})`);
 
     // Clear any stale session of the same name from a crashed prior run, plus
-    // any stale ready-marker — otherwise the SessionStart poll would resolve
-    // instantly on a leftover marker and paste before this boot's TUI is up.
+    // any stale ready / submitted markers. A leftover ready-marker would resolve
+    // the SessionStart poll instantly and paste before this boot's TUI is up; a
+    // leftover submitted-marker would disarm deliverPrompt's submit-confirmation
+    // (#30) by reading as "already submitted", skipping its re-drive.
     yield* killSession(session);
     yield* Effect.tryPromise(() => rm(readyPath, { force: true })).pipe(Effect.ignore);
+    yield* Effect.tryPromise(() => rm(submittedPath, { force: true })).pipe(Effect.ignore);
 
     let startedAt = 0;
 
@@ -394,9 +364,13 @@ export const runOneClaudeSession = (
             // bootClaudeSession folds readyPath into the exported env as
             // AGENT_READY (for the SessionStart hook) and polls it for readiness.
             readyPath,
+            // deliverPrompt polls submittedPath (the UserPromptSubmit marker) to
+            // confirm the paste reached the TUI, re-driving a lost paste and
+            // failing fast on a dead pane (#43) rather than idling the budget.
+            submittedPath,
             // The Stop hook reads AGENT_SENTINEL — single-session phases get
             // the same env var as fan-out, each with one value.
-            env: { [AGENT_SENTINEL_VAR]: sentinel },
+            env: { [AGENT_SENTINEL_VAR]: sentinel, [AGENT_SUBMITTED_VAR]: submittedPath },
             ...(input.model === undefined ? {} : { model: input.model }),
             ...(input.mcpConfigPath === undefined ? {} : { mcpConfigPath: input.mcpConfigPath }),
           });
@@ -425,21 +399,8 @@ export const runOneClaudeSession = (
             });
             yield* repromptForVerdict(session);
           });
-          // Stuck-at-0% recovery: when pollSentinel catches the pane frozen with
-          // the prompt pasted-but-unsubmitted (a dropped Enter that outlasted
-          // submitPastedPrompt's bounded retries, #30), re-send Enter from inside
-          // the poll instead of idling the full cap. Best-effort + logged so the
-          // otherwise-invisible incident lands in run.jsonl — it never surfaces
-          // in tmux-*.log, only live in the pane.
-          const onStuck = Effect.gen(function* () {
-            yield* artifacts.logEvent({ event: "session_stuck_resubmit", ...baseEvent, session });
-            yield* Console.log(
-              `${prefix} prompt pasted but never submitted (frozen pane) — re-sending Enter`,
-            );
-            yield* sendEnter(session).pipe(Effect.ignore);
-          });
           const verdict = yield* recoverNoVerdictOnce(
-            pollSentinel({ phase, session, sentinel, startedAt, timeoutMs, onStuck }),
+            pollSentinel({ phase, session, sentinel, startedAt, timeoutMs }),
             reprompt,
           );
           const totalMs = (yield* Clock.currentTimeMillis) - startedAt;

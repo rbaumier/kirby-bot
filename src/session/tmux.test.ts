@@ -5,6 +5,7 @@ import { describe, expect, it } from "bun:test";
 import { Effect, Fiber, Option, Ref, TestClock, TestContext } from "effect";
 import {
   buildClaudeCmd,
+  deliverPrompt,
   ENV_KEY_RE,
   MODEL_ALIAS_RE,
   paneShowsPaste,
@@ -307,5 +308,62 @@ describe("waitForReadyMarker under a virtual clock", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("deliverPrompt", () => {
+  /**
+   * Inject a drive spy that counts paste+submit invocations and a marker probe
+   * that yields "1" (submitted) only once the paste has been driven `landsOn`
+   * times — modelling a lost paste that the Nth re-drive finally lands.
+   */
+  const spied = (landsOn: number) =>
+    Ref.make(0).pipe(
+      Effect.map((drives) => ({
+        drives,
+        drive: Ref.update(drives, (n) => n + 1),
+        submittedMarker: Ref.get(drives).pipe(Effect.map((n) => (n >= landsOn ? "1" : ""))),
+      })),
+    );
+
+  const run = (landsOn: number) =>
+    spied(landsOn).pipe(
+      Effect.flatMap((spy) =>
+        deliverPrompt({
+          session: "s",
+          promptFile: "/tmp/p",
+          submittedPath: "/tmp/p.submitted",
+          drive: spy.drive,
+          submittedMarker: spy.submittedMarker,
+          interval: "1 millis",
+        }).pipe(
+          Effect.either,
+          Effect.flatMap((result) =>
+            Ref.get(spy.drives).pipe(Effect.map((drives) => ({ result, drives }))),
+          ),
+        ),
+      ),
+    );
+
+  it("returns without re-driving when the marker appears on the first attempt", async () => {
+    const { result, drives } = await Effect.runPromise(run(1));
+    expect(result._tag).toBe("Right");
+    expect(drives).toBe(1);
+  });
+
+  it("re-drives the paste and succeeds once the marker then appears", async () => {
+    const { result, drives } = await Effect.runPromise(run(2));
+    expect(result._tag).toBe("Right");
+    expect(drives).toBe(2);
+  });
+
+  it("fails fast with a deliver-prompt TmuxError when the marker never appears", async () => {
+    // landsOn is unreachable (> DELIVER_MAX_ATTEMPTS), so every poll caps out absent.
+    const { result, drives } = await Effect.runPromise(run(99));
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left.step).toBe("deliver-prompt");
+    }
+    expect(drives).toBe(2); // DELIVER_MAX_ATTEMPTS — bounded, no infinite re-drive
   });
 });
