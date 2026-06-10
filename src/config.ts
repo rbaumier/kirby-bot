@@ -27,16 +27,19 @@ export type Phase = (typeof PHASES)[number];
 /**
  * Claude tier each single-session phase runs on.
  *
- * Plan, implementation, evaluate and fix are creative or judgment-heavy and
- * stay on Sonnet. The qa phase orchestrates dogfood-persona subagents that do
- * the real work in their own sessions, so the qa orchestrator runs on Haiku.
+ * Plan, implementation and fix are creative or judgment-heavy and stay on
+ * Sonnet. Evaluate runs on Opus: it is the sole convergence authority, judging
+ * the findings the fable review agent produced — the judge must not be weaker
+ * than the reviewer (capability inversion gates everything it triages). The qa
+ * phase orchestrates dogfood-persona subagents that do the real work in their
+ * own sessions, so the qa orchestrator runs on Haiku.
  *
- * `review` is deliberately absent: it has no single orchestrator session. The
- * review phase fans out one `claude` session per agent (see
- * {@link runFanOutPhase}), each picking its own tier from {@link AGENTS_DATA}
- * and escalated via {@link selectReviewModel} — there is nothing here to set.
- * The key type is `PromptablePhase` ({@link Phase} minus `review`) so the
- * absence is compiler-enforced, not a stray dead entry.
+ * `review` is deliberately absent: it has no orchestrator session. The review
+ * phase runs the single fable agent in its own `claude` session (see
+ * {@link runFanOutPhase}), which takes its tier straight from
+ * {@link AGENTS_DATA} — there is nothing here to set. The key type is
+ * `PromptablePhase` ({@link Phase} minus `review`) so the absence is
+ * compiler-enforced, not a stray dead entry.
  *
  * Changing a value here propagates to every phase session without touching
  * `runPhaseSession` — the model is no longer hard-coded.
@@ -44,7 +47,7 @@ export type Phase = (typeof PHASES)[number];
 export const PHASE_MODELS: Record<Exclude<Phase, "review">, AgentModel> = {
   plan: "sonnet",
   implementation: "sonnet",
-  evaluate: "sonnet",
+  evaluate: "opus",
   fix: "sonnet",
   qa: "haiku",
 };
@@ -54,7 +57,7 @@ export const PHASE_MODELS: Record<Exclude<Phase, "review">, AgentModel> = {
  * with each agent's own tier through {@link maxModel} — escalation may raise a
  * cheaper agent up to the floor, never lower one already above it.
  */
-const MODEL_TIER: Record<AgentModel, number> = { haiku: 0, sonnet: 1, opus: 2 };
+const MODEL_TIER: Record<AgentModel, number> = { haiku: 0, sonnet: 1, opus: 2, fable: 3 };
 
 /** The more capable of two model tiers (ties return `a`). */
 export const maxModel = (a: AgentModel, b: AgentModel): AgentModel =>

@@ -27,7 +27,7 @@
  */
 
 /** The three Claude model aliases the CLI accepts as `--model <alias>`. */
-export type AgentModel = "haiku" | "sonnet" | "opus";
+export type AgentModel = "haiku" | "sonnet" | "opus" | "fable";
 
 /** Prompt spec — drives `renderAgentPrompt`. */
 export type PromptSpec =
@@ -81,6 +81,17 @@ export type AgentEntry = {
 // ──────────────────────────────────────────────────────────────────────────
 
 const AGENTS_DATA = {
+  // ─── Single-agent review (replaces the fleet) ──────────────────────────
+  // ONE fable agent carrying every compressed skill + role-body. The fan-out
+  // spawns this alone — no router, no per-agent scoping (see runFanOutPhase).
+  // Line-anchored so its JSON envelope is parsed by `aggregateFindings`; the
+  // role body is the whole multi-pass review prompt, wrapped by the scaffold.
+  "single-fable": {
+    model: "fable",
+    description:
+      "Single-agent full review: every fleet skill + role-body compressed inline, run in one shot over the full diff.",
+    prompt: { kind: "line-anchored", roleFile: "single-agent-review-fable.md" },
+  },
   // ─── Funnel & generalists ──────────────────────────────────────────────
   funnel: {
     model: "haiku",
@@ -359,6 +370,14 @@ export const getAgentModel = (agent: AgentName): AgentModel => AGENTS[agent].mod
 
 /** All agent names, stable insertion order. */
 export const ALL_AGENT_NAMES = Object.keys(AGENTS_DATA) as readonly AgentName[];
+
+/**
+ * The single review agent the fan-out spawns now that the fleet is replaced
+ * (feat/single-fable-review). One fable session carrying every compressed
+ * skill + role-body; the other registry entries are dormant (kept for
+ * reference and the router, which the review path no longer invokes).
+ */
+export const SINGLE_FABLE_AGENT: AgentName = "single-fable";
 
 /** Type guard: is the string a known agent name? */
 export const isAgentName = (value: string): value is AgentName => value in AGENTS_DATA;

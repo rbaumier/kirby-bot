@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENTS, ALL_AGENT_NAMES, getAgentModel, isAgentName } from "./agents";
 
-const VALID_MODELS = new Set(["haiku", "sonnet", "opus"]);
+const VALID_MODELS = new Set(["haiku", "sonnet", "opus", "fable"]);
 
 // These tests assert invariants over WHATEVER subset of agents is active in
 // AGENTS_DATA — they never name a specific agent. Commenting a row out (the
@@ -12,7 +12,7 @@ describe("AGENTS — registry invariants", () => {
     expect(ALL_AGENT_NAMES.length).toBeGreaterThan(0);
   });
 
-  test("every agent's model is one of haiku/sonnet/opus", () => {
+  test("every agent's model is one of haiku/sonnet/opus/fable", () => {
     for (const name of ALL_AGENT_NAMES) {
       expect(VALID_MODELS.has(AGENTS[name].model)).toBe(true);
     }
