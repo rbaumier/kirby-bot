@@ -37,6 +37,7 @@ Implementation vs intent: bugs, missed edges, races, incomplete error handling, 
 - Useless: trivial type guards, language-semantic tests, no real behavior.
 - Improvable: tests implementation not behavior, breaks on refactor.
 - Untested code on a crossed trust boundary > untested pure logic — prioritize.
+- Flaky: test depends on `sleep`/timing, wall-clock, network, randomness, or shared mutable state across tests (order-dependent) — non-deterministic, will flake; mock the boundary (time/rand/net) and isolate per-test state.
 - Don't: tests for trivial accessors/passthrough wrappers/pure type re-exports; "add a test for X" without naming behavior X; 100% coverage as a goal; E2E for pure-logic change; tests for deleted code.
 
 ### Simplify — accidental complexity
@@ -54,6 +55,8 @@ What only the structural lens catches: code-judo moves that DELETE complexity (n
 - Flag: `catch` block that neither handles nor propagates — swallowed error
 - Flag: `Result` used where value absence is normal (e.g. `findUser`) — use `Option<T>` instead; `Option` used where operation can fail — use `Result<T,E>` instead
 - Flag: `await fetch(...)` / `await db.query(...)` with no timeout — wrap with `AbortSignal.timeout(ms)` or `withTimeout`; defaults: 5s DB, 10s external API, 30s file ops
+- Flag: resource acquired (file handle, connection, lock, listener, subscription) with no release on every exit path incl. error/early-return — leaks on the unhappy path; release via `finally`/`defer`/`using`/RAII guard
+- Flag: multi-step state mutation with no atomicity or rollback — a failure mid-sequence leaves half-applied state; make it transactional, or order steps so a crash is recoverable/idempotent
 - Flag: error type `UNKNOWN_ERROR` / `INTERNAL_ERROR` / `SOMETHING_WENT_WRONG` without a tracking ticket — classify or create ticket
 - Flag: error object missing any of: operation name, cause, what-to-do, blast radius — all four required (e.g. `err({ type, operation, detail, remediation, impact })`)
 - Flag: original cause/stack dropped when wrapping an error — preserve via `cause:` field
