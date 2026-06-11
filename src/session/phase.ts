@@ -83,6 +83,7 @@ export const runPhaseSession = <const V extends VerdictToken>(
       timeoutMs,
       logContext: { issueIid, iteration },
       model: PHASE_MODELS[phase],
+      expectedVerdicts: expected,
     });
 
     const narrowed = expected.find((candidate) => candidate === verdict);

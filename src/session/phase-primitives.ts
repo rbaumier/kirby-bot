@@ -267,6 +267,14 @@ export type RunOneClaudeSessionInput = {
   readonly timeoutMs: number;
   readonly logContext: SessionLogContext;
   /**
+   * Verdict tokens this session is expected to emit. Only used to make the
+   * no-verdict reprompt (#26) spell out the accepted tokens — an agent that
+   * drifted to an invalid one (`VERDICT: SUCCESS`) repeats it verbatim when
+   * the nudge only says `VERDICT: TOKEN`. Narrowing the returned verdict
+   * remains the caller's job.
+   */
+  readonly expectedVerdicts?: readonly VerdictToken[];
+  /**
    * `claude --model <alias>` for this session. Required for fan-out so each
    * agent runs on its assigned tier; omit on single-prompt phases (the CLI
    * then inherits the orchestrator's model).
@@ -397,7 +405,11 @@ export const runOneClaudeSession = (
               catch: (cause) =>
                 new WorkspaceError({ phase, operation: "clear the sentinel", reason: String(cause) }),
             });
-            yield* repromptForVerdict({ session, submittedPath });
+            yield* repromptForVerdict({
+              session,
+              submittedPath,
+              ...(input.expectedVerdicts === undefined ? {} : { expected: input.expectedVerdicts }),
+            });
           });
           const verdict = yield* recoverNoVerdictOnce(
             pollSentinel({ phase, session, sentinel, startedAt, timeoutMs }),

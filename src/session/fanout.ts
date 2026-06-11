@@ -271,6 +271,7 @@ const runOneAgent = (
               agent,
             },
             model: getAgentModel(agent),
+            expectedVerdicts: ["AGENT_DONE"],
             ...(input.mcpConfigPath === undefined ? {} : { mcpConfigPath: input.mcpConfigPath }),
           }),
         ),

@@ -461,6 +461,7 @@ export const routeAgents = (
             agent: refAgent,
           },
           model: input.model,
+          expectedVerdicts: ["ROUTING_DONE"],
         });
         if (verdict !== "ROUTING_DONE") {
           return yield* Effect.fail(

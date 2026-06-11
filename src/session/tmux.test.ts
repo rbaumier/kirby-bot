@@ -13,6 +13,7 @@ import {
   pollPaneUntil,
   repromptForVerdict,
   sqEscape,
+  verdictReminder,
   TUI_PASTE_MARKER,
   USAGE_LIMIT_CONFIRM_MARKER,
   USAGE_LIMIT_STOP_MARKER,
@@ -366,6 +367,21 @@ describe("deliverPrompt", () => {
       expect(result.left.step).toBe("deliver-prompt");
     }
     expect(drives).toBe(2); // DELIVER_MAX_ATTEMPTS — bounded, no infinite re-drive
+  });
+});
+
+describe("verdictReminder", () => {
+  it("spells out every expected token as a full verdict line", () => {
+    // A live implementation session re-emitted `VERDICT: SUCCESS` after the
+    // generic nudge — the reminder must name the accepted tokens explicitly.
+    const reminder = verdictReminder(["READY_FOR_REVIEW", "BLOCKER_SUSPECTED"]);
+    expect(reminder).toContain("`VERDICT: READY_FOR_REVIEW`");
+    expect(reminder).toContain("`VERDICT: BLOCKER_SUSPECTED`");
+    expect(reminder).not.toContain("\n"); // single keystroke string, no newline
+  });
+
+  it("falls back to the generic wording when no expected set is known", () => {
+    expect(verdictReminder([])).toContain("`VERDICT: TOKEN`");
   });
 });
 

@@ -50,9 +50,18 @@ export const killSession = (session: string): Effect.Effect<void> =>
  * Single line, no newline — delivered as one keystroke string then Enter, so
  * the idle TUI receives it the same way the boot prompt's trailing Enter is
  * sent (no buffer paste needed for a short reminder).
+ *
+ * With `expected` known, the reminder spells out the exact accepted tokens:
+ * the generic `VERDICT: TOKEN` wording let an agent that had drifted to an
+ * invalid token (a live `implementation` session re-emitted `VERDICT: SUCCESS`
+ * after the nudge) repeat the same mistake and stall the issue.
  */
-export const VERDICT_REMINDER =
-  "You stopped without a verdict. Emit it now as `VERDICT: TOKEN` on its own line, with nothing else on that line.";
+export const verdictReminder = (expected: readonly string[]): string =>
+  expected.length === 0
+    ? "You stopped without a verdict. Emit it now as `VERDICT: TOKEN` on its own line, with nothing else on that line."
+    : `You stopped without a valid verdict. Emit one now, alone on the final line, exactly one of: ${expected
+        .map((token) => `\`VERDICT: ${token}\``)
+        .join(" or ")}. No other token is accepted (SUCCESS, DONE, COMPLETE all fail the parser).`;
 
 /** Bounded Enter re-sends confirmed by the submitted-marker before giving up. */
 const REPROMPT_MAX_ATTEMPTS = 3;
@@ -64,6 +73,8 @@ const REPROMPT_LAND_MAX_TICKS = 10;
 type RepromptForVerdictInput = {
   readonly session: string;
   readonly submittedPath: string;
+  /** Verdict tokens the phase accepts — spelled out in the reminder. */
+  readonly expected?: readonly string[];
   /** The reminder-typing side effect, injected only by tests. */
   readonly typeReminder?: Effect.Effect<void, TmuxError>;
   /** The Enter-press side effect, injected only by tests. */
@@ -97,9 +108,10 @@ export const repromptForVerdict = (
   Effect.gen(function* () {
     const { session, submittedPath } = input;
     yield* Effect.try(() => rmSync(submittedPath, { force: true })).pipe(Effect.ignore);
+    const reminder = verdictReminder(input.expected ?? []);
     const typeReminder =
       input.typeReminder ??
-      tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER}`);
+      tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${reminder}`);
     const pressEnter = input.pressEnter ?? sendEnter(session);
     const submittedMarker =
       input.submittedMarker ?? Effect.sync(() => (existsSync(submittedPath) ? "1" : ""));
