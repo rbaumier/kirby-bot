@@ -11,6 +11,7 @@ import {
   paneShowsPaste,
   paneShowsUsageLimit,
   pollPaneUntil,
+  repromptForVerdict,
   sqEscape,
   TUI_PASTE_MARKER,
   USAGE_LIMIT_CONFIRM_MARKER,
@@ -365,5 +366,68 @@ describe("deliverPrompt", () => {
       expect(result.left.step).toBe("deliver-prompt");
     }
     expect(drives).toBe(2); // DELIVER_MAX_ATTEMPTS — bounded, no infinite re-drive
+  });
+});
+
+describe("repromptForVerdict", () => {
+  /**
+   * Count Enter presses and yield the submitted-marker only once `landsOn`
+   * presses have been sent — modelling the dropped-Enter race (#30) that left
+   * three Planners' reminders sitting unsubmitted for their whole budget.
+   */
+  const run = (landsOn: number) =>
+    Ref.make(0).pipe(
+      Effect.flatMap((enters) =>
+        repromptForVerdict({
+          session: "s",
+          submittedPath: "/tmp/never.submitted",
+          typeReminder: Effect.void,
+          pressEnter: Ref.update(enters, (n) => n + 1),
+          submittedMarker: Ref.get(enters).pipe(Effect.map((n) => (n >= landsOn ? "1" : ""))),
+          interval: "1 millis",
+        }).pipe(Effect.flatMap(() => Ref.get(enters))),
+      ),
+    );
+
+  it("returns after a single Enter when the marker appears", async () => {
+    expect(await Effect.runPromise(run(1))).toBe(1);
+  });
+
+  it("re-sends Enter until the marker confirms the submit", async () => {
+    expect(await Effect.runPromise(run(2))).toBe(2);
+  });
+
+  it("gives up best-effort after the bounded attempts when the marker never appears", async () => {
+    // landsOn is unreachable; the caller's sentinel re-poll handles the rest.
+    expect(await Effect.runPromise(run(99))).toBe(3); // REPROMPT_MAX_ATTEMPTS
+  });
+
+  it("clears the initial prompt's stale marker instead of reading it as submitted", async () => {
+    // The marker on disk was written when the INITIAL prompt was submitted. If
+    // the reprompt trusted it, the confirmation would pass instantly on a
+    // dropped Enter — the exact freeze this function exists to prevent. With
+    // the stale file cleared and no hook to rewrite it, all bounded attempts
+    // must run (default existsSync probe, real fs).
+    const dir = mkdtempSync(join(tmpdir(), "kirby-reprompt-"));
+    const submittedPath = join(dir, "sentinel.flag.submitted");
+    writeFileSync(submittedPath, "submitted");
+    try {
+      const enters = await Effect.runPromise(
+        Ref.make(0).pipe(
+          Effect.flatMap((count) =>
+            repromptForVerdict({
+              session: "s",
+              submittedPath,
+              typeReminder: Effect.void,
+              pressEnter: Ref.update(count, (n) => n + 1),
+              interval: "1 millis",
+            }).pipe(Effect.flatMap(() => Ref.get(count))),
+          ),
+        ),
+      );
+      expect(enters).toBe(3); // stale marker ignored — every attempt ran
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

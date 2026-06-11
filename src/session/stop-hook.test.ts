@@ -318,6 +318,71 @@ describe("stop-hook", () => {
     expect(stdout).toBe("");
   });
 
+  test("empty transcript + payload verdict writes the sentinel without blocking (2.1.173)", () => {
+    // Claude Code 2.1.173 leaves the interactive transcript as an "ai-title"
+    // skeleton — zero assistant entries — while carrying the final text on the
+    // payload. Three Planners froze exactly here: blocked once on a missing
+    // stop_reason, fell through to an empty capture, and timed out with their
+    // PLAN_DONE invisible.
+    const { sentinelContent, stdout } = runHook(
+      {
+        hook_event_name: "Stop",
+        last_assistant_message: "Plan written and reviewed.\nVERDICT: PLAN_DONE",
+      },
+      [JSON.stringify({ type: "ai-title", aiTitle: "Some issue title" })],
+    );
+    expect(sentinelContent).toBe("Plan written and reviewed.\nVERDICT: PLAN_DONE");
+    expect(stdout).toBe("");
+  });
+
+  test("empty transcript + verdict-less payload message still blocks once", () => {
+    // Without a verdict line the payload text proves nothing about completion —
+    // the resume-once dance applies as if the transcript were readable.
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "Working on it." },
+      [],
+    );
+    expect(sentinelContent).toBeNull();
+    const decision = JSON.parse(stdout) as { decision: string };
+    expect(decision.decision).toBe("block");
+  });
+
+  test("empty transcript + verdict-less payload + stop_hook_active writes the payload text", () => {
+    // Second fire of the loop above: stop blocking and write the payload text
+    // so the orchestrator's single reprompt fires instead of timing out.
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", stop_hook_active: true, last_assistant_message: "No verdict, sorry." },
+      [],
+    );
+    expect(sentinelContent).toBe("No verdict, sorry.");
+    expect(stdout).toBe("");
+  });
+
+  test("StopFailure + empty transcript writes the payload text, not an empty sentinel", () => {
+    // A failure can't be blocked; on 2.1.173 the payload text is the only
+    // triage material left, so it must reach the sentinel.
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "StopFailure", last_assistant_message: "Crashed mid-way." },
+      [],
+    );
+    expect(sentinelContent).toBe("Crashed mid-way.");
+    expect(stdout).toBe("");
+  });
+
+  test("payload verdict is ignored when the transcript has assistant entries", () => {
+    // The transcript is the richer signal (it carries stop_reason); the payload
+    // fallback exists only for the empty-transcript case. A mid-tool Stop must
+    // keep resuming even if an earlier verdict leaked into the payload field.
+    const transcript = [assistantTool("t1"), userToolResult("t1"), assistantTool("t2")];
+    const { sentinelContent, stdout } = runHook(
+      { hook_event_name: "Stop", last_assistant_message: "VERDICT: PLAN_DONE" },
+      transcript,
+    );
+    expect(sentinelContent).toBeNull();
+    const decision = JSON.parse(stdout) as { decision: string };
+    expect(decision.decision).toBe("block");
+  });
+
   test("re-reads the transcript when the final entry is still streaming, capturing the late verdict", async () => {
     // Real #980 case: Claude Code wrote the final assistant entry as an empty
     // skeleton (end_turn, no content), then re-appended the SAME message.id with

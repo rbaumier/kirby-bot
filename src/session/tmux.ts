@@ -7,7 +7,7 @@
  * so the lifecycle composes cleanly into the `acquireUseRelease`
  * bracket in phase.ts.
  */
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { $ } from "bun";
 import { Console, Duration, Effect } from "effect";
 import { describeShellError, runShell } from "../shell";
@@ -54,15 +54,74 @@ export const killSession = (session: string): Effect.Effect<void> =>
 export const VERDICT_REMINDER =
   "You stopped without a verdict. Emit it now as `VERDICT: TOKEN` on its own line, with nothing else on that line.";
 
+/** Bounded Enter re-sends confirmed by the submitted-marker before giving up. */
+const REPROMPT_MAX_ATTEMPTS = 3;
+
+/** Per-attempt cap polling for the submitted-marker before re-sending Enter. */
+const REPROMPT_LAND_MAX_TICKS = 10;
+
+/** Input for {@link repromptForVerdict}. */
+type RepromptForVerdictInput = {
+  readonly session: string;
+  readonly submittedPath: string;
+  /** The reminder-typing side effect, injected only by tests. */
+  readonly typeReminder?: Effect.Effect<void, TmuxError>;
+  /** The Enter-press side effect, injected only by tests. */
+  readonly pressEnter?: Effect.Effect<void, TmuxError>;
+  /**
+   * The submitted-marker probe polled after each Enter, injected only by tests.
+   * Defaults to an `existsSync` of `submittedPath` (yields "1" once the
+   * `UserPromptSubmit` hook has written it).
+   */
+  readonly submittedMarker?: Effect.Effect<string>;
+  /** Poll interval for the marker; tests pass a tiny value to avoid real sleeps. */
+  readonly interval?: Duration.DurationInput;
+};
+
 /**
  * Re-prompt an idle session to emit its verdict (issue #26). The session must
- * already be sitting at the `claude` prompt after an `end_turn`; this types the
- * reminder and submits it, kicking off one more turn whose Stop hook rewrites
- * the sentinel. Best-effort delivery: if the keys don't land, the caller's
- * re-poll simply times out into the same terminal NoVerdict, never worse.
+ * already be sitting at the `claude` prompt; this types the reminder, submits
+ * it, and confirms the submit actually took against the same `UserPromptSubmit`
+ * marker ground truth as {@link deliverPrompt}, re-sending Enter while it stays
+ * absent. The fire-and-forget `send-keys <text> Enter` this replaces lost its
+ * Enter to the same TUI race as the boot paste (#30): the reminder sat
+ * unsubmitted in the input box and three frozen Planners idled their full
+ * budget to SessionTimedOut. The marker on disk was written by the INITIAL
+ * prompt's submit and would read as instantly submitted, so it is cleared
+ * here before anything is typed. Still best-effort on exhaustion: the
+ * caller's re-poll times out into the same terminal NoVerdict, never worse.
  */
-export const repromptForVerdict = (session: string): Effect.Effect<void, TmuxError> =>
-  tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER} Enter`);
+export const repromptForVerdict = (
+  input: RepromptForVerdictInput,
+): Effect.Effect<void, TmuxError> =>
+  Effect.gen(function* () {
+    const { session, submittedPath } = input;
+    yield* Effect.try(() => rmSync(submittedPath, { force: true })).pipe(Effect.ignore);
+    const typeReminder =
+      input.typeReminder ??
+      tmuxStep("reprompt-verdict", () => $`tmux send-keys -t ${session} ${VERDICT_REMINDER}`);
+    const pressEnter = input.pressEnter ?? sendEnter(session);
+    const submittedMarker =
+      input.submittedMarker ?? Effect.sync(() => (existsSync(submittedPath) ? "1" : ""));
+    const interval = input.interval ?? "1 second";
+    yield* typeReminder;
+    for (let attempt = 1; attempt <= REPROMPT_MAX_ATTEMPTS; attempt++) {
+      yield* pressEnter;
+      const submitted = yield* pollPaneUntil(
+        submittedMarker,
+        (marker) => marker === "1",
+        REPROMPT_LAND_MAX_TICKS,
+        interval,
+      );
+      if (submitted) {
+        return;
+      }
+      yield* Console.log(
+        `[tmux ${session}] reprompt not submitted (attempt ${attempt}/${REPROMPT_MAX_ATTEMPTS})` +
+          (attempt < REPROMPT_MAX_ATTEMPTS ? " — re-sending Enter" : " — proceeding anyway"),
+      );
+    }
+  });
 
 /**
  * Send a bare Enter to submit whatever is sitting in a session's input box — the

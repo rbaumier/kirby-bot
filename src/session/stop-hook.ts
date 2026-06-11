@@ -44,6 +44,18 @@
  * field that doesn't exist on Claude Code 2.1.150's Stop payload, so the
  * sentinel was always empty and every phase failed with NoVerdict. See #29.
  *
+ * Claude Code 2.1.173 inverted that failure: interactive sessions no longer
+ * persist the conversation into `transcript_path` AT ALL (the file stays an
+ * "ai-title" skeleton with zero assistant entries), so the routing above reads
+ * `stop_reason` as missing on every Stop and the capture scan comes back
+ * empty — three Planners finished with PLAN_DONE, blocked once each, fell
+ * through to an empty sentinel, and idled to SessionTimedOut. On that version
+ * the payload carries `last_assistant_message` again, so whenever the
+ * transcript has NO assistant entries that field stands in: a verdict line in
+ * it writes the sentinel directly (the verdict is the agent's terminal line by
+ * contract), and without one the resume/capture routing applies with the
+ * payload text as the capture.
+ *
  * Why `stop_reason` and not a pending-subagent count? Inspection of the #29
  * repro transcript showed all 7 `Agent` subagents had returned by the time
  * Stop fired — a pending-count gate would not have caught the bug. The
@@ -53,7 +65,8 @@
  * Usage: `bun stop-hook.ts <sentinel-path>`
  * stdin: Claude Code Stop payload JSON. Required keys: `transcript_path`,
  *        `hook_event_name`. Optional: `stop_hook_active` (true once Claude Code
- *        is already resuming because of a prior block — breaks the loop above).
+ *        is already resuming because of a prior block — breaks the loop above)
+ *        and `last_assistant_message` (the empty-transcript fallback above).
  */
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { containsVerdictLine } from "./verdict";
@@ -70,6 +83,10 @@ type StopPayload = {
   // True when Claude Code is already resuming because a previous Stop hook
   // blocked — the signal that lets us break a degenerate non-tool_use loop.
   readonly stop_hook_active: boolean;
+  // Final assistant text carried directly on the payload — absent on 2.1.150
+  // (see the header), back since 2.1.173. The fallback signal when the
+  // transcript has no assistant entries to scan.
+  readonly last_assistant_message: string | undefined;
 };
 
 type TranscriptEntry = {
@@ -88,6 +105,8 @@ const parseStopPayload = (raw: string): StopPayload | null => {
       transcript_path: typeof parsed.transcript_path === "string" ? parsed.transcript_path : undefined,
       hook_event_name: typeof parsed.hook_event_name === "string" ? parsed.hook_event_name : undefined,
       stop_hook_active: parsed.stop_hook_active === true,
+      last_assistant_message:
+        typeof parsed.last_assistant_message === "string" ? parsed.last_assistant_message : undefined,
     };
   } catch {
     return null;
@@ -197,6 +216,14 @@ if (assistants === null) { process.exit(0); }
 const isStopFailure = payload.hook_event_name === "StopFailure";
 const stopReason = (assistants.at(-1) ?? null)?.message?.stop_reason;
 
+// 2.1.173 empty-transcript fallback (see the header): with zero assistant
+// entries the transcript routing is blind, so the payload's
+// `last_assistant_message` stands in. A verdict line in it means the model
+// finished by contract; without one the resume logic below applies unchanged,
+// with this text as the capture so the fall-through writes something useful.
+const payloadText = assistants.length === 0 ? payload.last_assistant_message : undefined;
+const payloadHasVerdict = payloadText !== undefined && containsVerdictLine(payloadText);
+
 // Resume the agent loop (emit a block decision) only when doing so can actually
 // progress the model toward end_turn:
 //
@@ -214,7 +241,8 @@ const stopReason = (assistants.at(-1) ?? null)?.message?.stop_reason;
 // Code re-fires with stop_hook_active set) resuming again only spins to the
 // cap. Named so the grouping isn't silently load-bearing precedence.
 const canProgressByResuming = stopReason === "tool_use" || !payload.stop_hook_active;
-const shouldResume = !isStopFailure && stopReason !== "end_turn" && canProgressByResuming;
+const shouldResume =
+  !isStopFailure && stopReason !== "end_turn" && !payloadHasVerdict && canProgressByResuming;
 
 if (shouldResume) {
   // The model hasn't completed its work — runtime is between turns, or
@@ -238,7 +266,7 @@ if (shouldResume) {
 // waits for an async paste to land (#30). A genuinely empty final turn just
 // exhausts the bounded budget and still writes "" — that case is rare and the
 // 200ms default is negligible against the 5s sentinel-poll cadence.
-let text = capturedText(assistants);
+let text = payloadText ?? capturedText(assistants);
 for (let attempt = 0; text === "" && attempt < CAPTURE_RETRY_ATTEMPTS; attempt++) {
   Bun.sleepSync(CAPTURE_RETRY_MS);
   const next = readAssistants();

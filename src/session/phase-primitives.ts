@@ -397,7 +397,7 @@ export const runOneClaudeSession = (
               catch: (cause) =>
                 new WorkspaceError({ phase, operation: "clear the sentinel", reason: String(cause) }),
             });
-            yield* repromptForVerdict(session);
+            yield* repromptForVerdict({ session, submittedPath });
           });
           const verdict = yield* recoverNoVerdictOnce(
             pollSentinel({ phase, session, sentinel, startedAt, timeoutMs }),
