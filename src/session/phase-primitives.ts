@@ -27,8 +27,10 @@ import type { Phase } from "../config";
 import { SENTINEL_POLL_MS } from "../config";
 import { formatDuration } from "../duration";
 import { RunArtifacts } from "../run-artifacts";
+import { selectDriver } from "./driver";
 import type { TmuxError } from "./errors";
 import { NoVerdict, SessionTimedOut, UsageLimitHit, WorkspaceError } from "./errors";
+import { runOneHeadlessSession } from "./headless";
 import {
   AGENT_SENTINEL_VAR,
   AGENT_SUBMITTED_VAR,
@@ -36,6 +38,7 @@ import {
   stopHookSettings,
   userPromptSubmitHookSettings,
 } from "./sentinel-contract";
+import { baseEventFields, logPrefix, type SessionLogContext } from "./session-log";
 import {
   bootClaudeSession,
   capturePane,
@@ -243,19 +246,6 @@ export const recoverNoVerdictOnce = <R, RP>(
 > =>
   poll.pipe(Effect.catchTag("NoVerdict", () => reprompt.pipe(Effect.zipRight(poll))));
 
-/**
- * Caller-supplied context for log enrichment. Lets the JSONL log and stdout
- * lines emitted by {@link runOneClaudeSession} carry the issue / iteration /
- * agent the session is part of, without coupling primitives to the pipeline's
- * state shape. `agent` is populated only in fan-out — single-prompt phases
- * leave it undefined and the prefix omits the `/agent` tag.
- */
-export type SessionLogContext = {
-  readonly issueIid: number;
-  readonly iteration: number;
-  readonly agent?: string;
-};
-
 /** Input for {@link runOneClaudeSession}. */
 export type RunOneClaudeSessionInput = {
   readonly phase: Phase;
@@ -288,23 +278,6 @@ export type RunOneClaudeSessionInput = {
   readonly mcpConfigPath?: string;
 };
 
-/** `[#42 review/correctness[2]]` — concise prefix for stdout session events. */
-const logPrefix = (phase: Phase, ctx: SessionLogContext): string => {
-  const agentTag = ctx.agent === undefined ? "" : `/${ctx.agent}`;
-  return `[#${ctx.issueIid} ${phase}${agentTag}[${ctx.iteration}]]`;
-};
-
-/** Common fields stamped into every JSONL session event for grep/jq replay. */
-const baseEventFields = (
-  phase: Phase,
-  ctx: SessionLogContext,
-): Record<string, string | number> => ({
-  phase,
-  iteration: ctx.iteration,
-  issueIid: ctx.issueIid,
-  ...(ctx.agent === undefined ? {} : { agent: ctx.agent }),
-});
-
 /**
  * Run one `claude` tmux session end-to-end: kill any stale session of the same
  * name, create the session, boot `claude`, paste the prompt, poll the sentinel
@@ -321,7 +294,7 @@ const baseEventFields = (
  * The caller is responsible for everything upstream of the session: writing
  * the prompt file, writing the Stop-hook config, choosing the timeout.
  */
-export const runOneClaudeSession = (
+export const runOneTmuxSession = (
   input: RunOneClaudeSessionInput,
 ): Effect.Effect<
   VerdictToken,
@@ -443,3 +416,22 @@ export const runOneClaudeSession = (
       () => killSession(session),
     );
   });
+
+/**
+ * Run one `claude` phase session and return its verdict, dispatching to the
+ * backend selected by `$KIRBY_DRIVER` ({@link selectDriver}): the default
+ * `claude -p` headless subprocess ({@link runOneHeadlessSession}) or the legacy
+ * tmux session ({@link runOneTmuxSession}). Both honour the same input and emit
+ * the same JSONL events, so the call sites (phase / fan-out / router) are
+ * driver-agnostic. `Effect.suspend` defers the env read to execution time.
+ */
+export const runOneClaudeSession = (
+  input: RunOneClaudeSessionInput,
+): Effect.Effect<
+  VerdictToken,
+  TmuxError | SessionTimedOut | NoVerdict | WorkspaceError | UsageLimitHit,
+  RunArtifacts
+> =>
+  Effect.suspend(() =>
+    selectDriver() === "tmux" ? runOneTmuxSession(input) : runOneHeadlessSession(input),
+  );

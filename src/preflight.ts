@@ -9,7 +9,9 @@ import { mkdir } from "node:fs/promises";
 import { basename } from "node:path";
 import { $ } from "bun";
 import { Data, Effect } from "effect";
+import { ProviderConfigError } from "./provider/types";
 import { RunArtifacts } from "./run-artifacts";
+import { selectDriver } from "./session/driver";
 import { runShell } from "./shell";
 
 /**
@@ -27,8 +29,12 @@ export type Environment = {
   readonly defaultBranch: string;
 };
 
-/** External tools the orchestrator shells out to. */
-const REQUIRED_TOOLS = ["jq", "tmux", "claude", "git"] as const;
+/**
+ * External tools every run needs, regardless of session driver. `tmux` is
+ * required conditionally — only the legacy tmux driver shells out to it — so it
+ * is checked in {@link preflight} after the driver is resolved.
+ */
+const REQUIRED_TOOLS = ["jq", "claude", "git"] as const;
 
 const ORIGIN_PREFIX_RE = /^origin\//;
 
@@ -55,8 +61,22 @@ export const preflight: Effect.Effect<Environment, PreflightError, RunArtifacts>
         new PreflightError({ reason: `could not create the run directory: ${String(cause)}` }),
     });
 
+    // Resolve the session driver up front: an invalid $KIRBY_DRIVER fails fast
+    // here (like an unknown $KIRBY_PROVIDER), and it decides whether tmux is
+    // required — the default headless `claude -p` driver does not need it.
+    const driver = yield* Effect.try({
+      try: () => selectDriver(),
+      catch: (cause): PreflightError =>
+        new PreflightError({
+          reason: cause instanceof ProviderConfigError ? cause.detail : String(cause),
+        }),
+    });
+
     for (const tool of REQUIRED_TOOLS) {
       yield* assertToolInPath(tool);
+    }
+    if (driver === "tmux") {
+      yield* assertToolInPath("tmux");
     }
 
     const topLevel = yield* runShell(() => $`git rev-parse --show-toplevel`).pipe(

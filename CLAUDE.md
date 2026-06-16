@@ -95,6 +95,31 @@ With `KIRBY_PROVIDER=github`, the connection is resolved from these env vars
 - `GITHUB_HOST` — optional; defaults to `https://api.github.com`. Set it to a
   GitHub Enterprise base (e.g. `https://gh.corp.example/api/v3`) when needed.
 
+## Session driver: `KIRBY_DRIVER`
+
+`KIRBY_DRIVER` chooses how each phase drives its `claude` session. Resolved at
+startup with the same fail-fast contract as `KIRBY_PROVIDER` (an unknown value
+crashes preflight with a clear error).
+
+- `headless` (the default when unset) — one `claude -p --output-format
+  stream-json` subprocess per phase. The rendered prompt is piped on stdin and
+  the verdict is parsed from the final `result` event's text, so none of the
+  tmux paste/submit/ready-marker machinery (and its #30/#43 races) applies. A
+  dropped keystroke is impossible. The per-phase log (`tmux-*.log` under the run
+  dir) is the raw stream-json — still `tail -f`-able live. `tmux` is **not**
+  required in PATH under this driver.
+- `tmux` — the legacy interactive driver: a detached tmux session per phase, the
+  prompt pasted in, the verdict captured via the Stop-hook sentinel. Kept as a
+  fallback while subscription-billed `claude -p` settles (Anthropic postponed
+  rather than committed). `KIRBY_DRIVER=tmux` restores the prior behaviour
+  verbatim and re-requires `tmux` in PATH.
+
+Both honour the same `claude --dangerously-skip-permissions [--model …]
+[--mcp-config …]` contract and run on the operator's subscription (headless
+`-p` bills the subscription unless `ANTHROPIC_API_KEY` is set). Note the Stop
+hook's `{"decision":"block"}` resume does **not** fire under headless `-p`, which
+is why the headless verdict comes from stdout, not the sentinel.
+
 ## Diagnosing slow phases via Claude session transcripts
 
 `run.jsonl` shows phase-level transitions but no per-tool / per-subagent
