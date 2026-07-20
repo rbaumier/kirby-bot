@@ -10,8 +10,14 @@
 
 ---
 
-> [!WARNING]
-> **Alpha — expect breaking changes.** kirby-bot is in early development and its API, configuration, and behavior will evolve significantly. **GitLab** and **GitHub** are both supported; other providers are not yet implemented.
+> [!CAUTION]
+> **No longer maintained — kirby-bot is obsolete.** The job it was built for — deterministically driving Claude Code through an issue queue, one issue at a time — is now done better by primitives that didn't exist when this project started:
+>
+> - **`/loop`** runs a prompt or slash command on a self-paced recurring interval, so the "pick next issue, drive it, repeat" outer loop no longer needs a bespoke state machine.
+> - **Subagents can now spawn their own subagents**, so a single Claude Code session can fan out the whole implement → review → fix → QA pipeline internally — no tmux sessions, no `claude -p` subprocess-per-phase, none of the paste/submit/sentinel plumbing.
+> - **Fable** — fast and cheap — makes that inline implement/review fan-out affordable enough to run for real.
+>
+> Together these collapse kirby-bot's entire orchestrator into the **`loop-issues`** skill: it picks `ready-for-agent` issues one at a time, spawns a Fable implementer in a worktree behind a comply gate, runs an adversarial review/fix loop and an issue-scoped QA gate, then pushes and merges — the same pipeline, driven from one session instead of an external process. The code below stays up as a reference and a write-up; expect no further development.
 
 ---
 
